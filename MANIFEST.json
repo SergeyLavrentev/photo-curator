@@ -1,0 +1,139 @@
+{
+  "package": "photo-curator-docs",
+  "version": "1.0",
+  "language": "ru",
+  "source_of_truth": "CODEX_PROJECT_SPEC.md",
+  "file_count_excluding_manifest": 26,
+  "files": [
+    {
+      "path": "CODEX_PROJECT_SPEC.md",
+      "size_bytes": 34306,
+      "sha256": "df589b2c29bee05ab754285566040efaefb1eb9cca06e7394434b0f4fc30da07"
+    },
+    {
+      "path": "CONTENTS.md",
+      "size_bytes": 741,
+      "sha256": "2b14a3549920e787e2dab9e2a010092d525046b78b78534b4d6617bcf6371d0a"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 5189,
+      "sha256": "f255471a8d6cf0e0104278d993639a4db24f3457d9613e344118ce71071f868f"
+    },
+    {
+      "path": "REFERENCES.md",
+      "size_bytes": 763,
+      "sha256": "937096009802eb83f632c35293c916e95c2cfc09d01c6f29b06e156b5bd7c94d"
+    },
+    {
+      "path": "decisions/ADR-0001-local-web-ui.md",
+      "size_bytes": 720,
+      "sha256": "3bec7148d49481c6c376926fc30fe680958fde639263bc1665c97e713fd4ca56"
+    },
+    {
+      "path": "decisions/ADR-0002-regular-albums-only.md",
+      "size_bytes": 990,
+      "sha256": "a5166c00b650eb1cb70b58880e9dee5e988545adc777c276655f3ee9d34f6318"
+    },
+    {
+      "path": "decisions/ADR-0003-lightweight-analysis.md",
+      "size_bytes": 872,
+      "sha256": "4dd6bdf6936eb73117a941d33585e5ac5b91d71eb895d44c36ef822ff71afe04"
+    },
+    {
+      "path": "decisions/ADR-0004-reject-album-publishing.md",
+      "size_bytes": 972,
+      "sha256": "3f040d05f5d8cdb420685bfece76233d9e4ff8cd2d6c077e40a075669bc0a280"
+    },
+    {
+      "path": "decisions/ADR-0005-conservative-decisions.md",
+      "size_bytes": 864,
+      "sha256": "374eda3a739c326878049181677075b999228dbd03ff9ab736b79dc85a5d96b0"
+    },
+    {
+      "path": "docs/01-product-requirements.md",
+      "size_bytes": 3882,
+      "sha256": "b24f53f318ba5cb466d2c7310487fb1b853c4afc283b3c29e1757717c6ef92f4"
+    },
+    {
+      "path": "docs/02-architecture.md",
+      "size_bytes": 2743,
+      "sha256": "95aa90623c8352c9bee5cba6361d91bfc10727c2878f09ee1295ed06fc4a1aa5"
+    },
+    {
+      "path": "docs/03-shared-album-intake.md",
+      "size_bytes": 2584,
+      "sha256": "0c8d632a2ffff3ba931c2707d4744b8ad456e9c90ae285517acb7a1d82cacd3b"
+    },
+    {
+      "path": "docs/04-safety-and-data-integrity.md",
+      "size_bytes": 2421,
+      "sha256": "c264a3a9ceb8c6ad483433bf44f859a5cdbf3d8d14de5cf44b058b0daa22298a"
+    },
+    {
+      "path": "docs/05-photos-integration.md",
+      "size_bytes": 2393,
+      "sha256": "3d5226ce729b427362919b90278b6c18e102c9c3eaa52412fa81791a5f91f291"
+    },
+    {
+      "path": "docs/06-analysis-pipeline.md",
+      "size_bytes": 2899,
+      "sha256": "57a1cf5c85de8ddac66b7c2ca200b6da29bbbfe035c848b3ffbcc2956638dc52"
+    },
+    {
+      "path": "docs/07-ui-ux.md",
+      "size_bytes": 2248,
+      "sha256": "8ee981a99214888b78c71eafd7ef4fd8345aa25ec63b43337bffa7af9b48cf2e"
+    },
+    {
+      "path": "docs/08-data-model.md",
+      "size_bytes": 5838,
+      "sha256": "21e5917fde1379f638b44cb8106f924b6a054d1d8329b94f0b75ff31f9892852"
+    },
+    {
+      "path": "docs/09-api-and-jobs.md",
+      "size_bytes": 2133,
+      "sha256": "f3d2acdc0ae1d9adfb169bd5538eadaa0f0af04e84d2b1a738bd457251f7c738"
+    },
+    {
+      "path": "docs/10-testing-and-quality.md",
+      "size_bytes": 2227,
+      "sha256": "b70d1119553e733a325f64754f2773552f8a27682d4958bc53249183a9b8ced9"
+    },
+    {
+      "path": "docs/11-operations-and-troubleshooting.md",
+      "size_bytes": 2149,
+      "sha256": "ead32bfddba93199f3bab0152142a19b528ca124b64a2c9582a16f8ea0c79c5e"
+    },
+    {
+      "path": "docs/12-compatibility.md",
+      "size_bytes": 1670,
+      "sha256": "3e69a9d00010f83bb3321a450b4615020ff9639f2e841f93258cdf9e6cfa6831"
+    },
+    {
+      "path": "docs/13-milestones-and-dod.md",
+      "size_bytes": 2705,
+      "sha256": "b032683ff0515b76685fc7394daa2c74c9c08bd4569c1f63dc1c604f97cde04b"
+    },
+    {
+      "path": "docs/14-security.md",
+      "size_bytes": 1198,
+      "sha256": "70569e47eefb150aa54b2d6ac6bcff01beda9fcfbe2add0c79605c2ed3396d97"
+    },
+    {
+      "path": "docs/15-requirements-traceability.md",
+      "size_bytes": 1494,
+      "sha256": "caaa51065204a520ba2aafe6bf31251ffedcf7c33a08123e4725d4a0a6be2020"
+    },
+    {
+      "path": "templates/PROGRESS.md",
+      "size_bytes": 248,
+      "sha256": "9b806fc3aedc163ccf774b6b013f1fc4085101becb32128f7a46963bd271e646"
+    },
+    {
+      "path": "templates/config.example.toml",
+      "size_bytes": 872,
+      "sha256": "2c99938d64af3fcfdf4dab384d434c17311f8608522a5320b834c987d2ccb8a0"
+    }
+  ]
+}

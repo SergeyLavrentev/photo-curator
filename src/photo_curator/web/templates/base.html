@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token | default('') }}">
+    <title>{% block title %}Photo Curator{% endblock %}</title>
+    <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Photo Curator — главная">
+        <span class="brand-mark" aria-hidden="true">PC</span>
+        <span>Photo Curator</span>
+      </a>
+      <nav aria-label="Основная навигация">
+        <a href="/">Проекты</a>
+        <a href="/doctor">Диагностика</a>
+      </nav>
+      <span class="mode-badge">{% if demo %}Demo{% else %}Локально{% endif %}</span>
+    </header>
+    <main>{% block content %}{% endblock %}</main>
+    <footer>Локально на этом Mac · без облачной обработки · v{{ version }}</footer>
+    <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+  </body>
+</html>

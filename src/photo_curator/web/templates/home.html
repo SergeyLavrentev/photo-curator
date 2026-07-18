@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Photo Curator — Черногория{% endblock %}
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="eyebrow">{% if demo %}Демонстрационный проект{% else %}Apple Photos{% endif %}</p>
+      <h1>{% if demo %}Черногория{% else %}Новый проект{% endif %}</h1>
+      <p class="hero-copy">
+        Безопасное ревью фотографий: приложение ничего не удаляет и не изменяет оригиналы.
+      </p>
+    </div>
+    <button class="primary" type="button" {% if not demo %}disabled{% endif %}>
+      Продолжить ревью
+    </button>
+  </section>
+
+  <aside class="notice" aria-label="Важно о Shared Albums">
+    <span aria-hidden="true">i</span>
+    <p><strong>Shared Album сначала нужно импортировать.</strong> Photo Curator работает только
+      с обычным альбомом личной медиатеки и оценивает доступную импортированную версию.</p>
+  </aside>
+
+  {% if summary %}
+    <section aria-labelledby="summary-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Текущий результат</p><h2 id="summary-title">Сводка</h2></div>
+        <p>Данные synthetic demo</p>
+      </div>
+      <div class="summary-grid">
+        {% for item in summary %}
+          <article class="summary-card {{ item.tone }}">
+            <span>{{ item.label }}</span><strong>{{ item.value }}</strong>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  <section aria-labelledby="pipeline-title">
+    <div class="section-heading">
+      <div><p class="eyebrow">Visual pipeline</p><h2 id="pipeline-title">Ход обработки</h2></div>
+      <p>Без выдуманного ETA — только фактический прогресс</p>
+    </div>
+    <ol class="pipeline">
+      {% for stage in stages %}
+        <li class="stage {{ stage.status }}">
+          <div class="stage-topline">
+            <span class="stage-number">{{ stage.number }}</span>
+            <span class="stage-status">{{ stage.status_label }}</span>
+          </div>
+          <h3>{{ stage.name }}</h3>
+          <p>{{ stage.detail }}</p>
+          <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+               aria-valuenow="{{ stage.progress }}" aria-label="{{ stage.name }}">
+            <span style="width: {{ stage.progress }}%"></span>
+          </div>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+
+  <section class="safety-panel" aria-labelledby="safety-title">
+    <div><p class="eyebrow">Safety first</p><h2 id="safety-title">Решение всегда остаётся за вами</h2></div>
+    <ul>
+      <li>Оригиналы и metadata остаются неизменными</li>
+      <li>Favorite, edited и неоднозначные фото защищены</li>
+      <li>Перед публикацией обязателен отдельный dry-run</li>
+      <li>Финальное удаление выполняется вручную в Photos.app</li>
+    </ul>
+  </section>
+{% endblock %}
+
