@@ -1,82 +1,50 @@
-# Photo Curator — пакет проектной документации
+# Photo Curator
 
-Этот архив содержит согласованное техническое задание и комплект инженерной документации для MVP локального приложения **Photo Curator**.
+Локальный macOS-помощник для безопасного ревью Apple Photos. Он анализирует только
+обычные пользовательские альбомы, строит preview, технические метрики и группы
+дубликатов, сохраняет ручные решения и может создать отдельный Reject-альбом через
+`osxphotos`. Исходный альбом и оригиналы не изменяются; удаление остаётся ручным в
+Photos.app.
 
-Цель продукта — безопасно анализировать фотографии из **обычного пользовательского альбома** Apple Photos, визуально показывать ход обработки и результаты, помогать человеку выбрать неудачные кадры и публиковать подтверждённые кандидаты в отдельный временный Reject-альбом. Приложение не удаляет фотографии самостоятельно.
+## Быстрый запуск
 
-## Зафиксированный пользовательский workflow
-
-```text
-Apple Shared Album
-        ↓ ручной импорт пользователем
-Личная медиатека Apple Photos
-        ↓
-Обычный рабочий альбом «Черногория»
-        ↓
-Photo Curator
-        ↓
-локальный анализ + визуальное ревью
-        ↓
-временный обычный Reject-альбом
-        ↓
-ручное Command+Delete в Photos.app
+```bash
+uv sync
+uv run photo-curator --demo
 ```
 
-Shared Albums не являются прямым источником MVP. Пользователь сначала импортирует нужные элементы в личную медиатеку и собирает их в обычный альбом.
+Demo использует 12 синтетических изображений и проходит весь workflow без доступа к
+Photos Library. Для работы с реальной медиатекой:
 
-## С чего начинать Codex
-
-Передайте агенту целиком файл:
-
-```text
-CODEX_PROJECT_SPEC.md
+```bash
+uv run photo-curator doctor
+uv run photo-curator
 ```
 
-Это основной исполняемый документ: scope, ограничения, архитектура, pipeline, UI, данные, тестирование, milestones и Definition of Done.
+Сервер слушает только `127.0.0.1`. Одноразовый startup token заменяется Strict-cookie
+и удаляется из URL после первого открытия.
 
-## Состав архива
+## Workflow
 
-| Путь | Назначение |
-|---|---|
-| `CODEX_PROJECT_SPEC.md` | Единое полное ТЗ, готовое для передачи Codex |
-| `docs/01-product-requirements.md` | Пользовательские сценарии, scope и критерии продукта |
-| `docs/02-architecture.md` | Компоненты, потоки данных и границы модулей |
-| `docs/03-shared-album-intake.md` | Безопасный импорт из Shared Albums |
-| `docs/04-safety-and-data-integrity.md` | Неизменяемые safety-инварианты |
-| `docs/05-photos-integration.md` | Контракт с Apple Photos и `osxphotos` |
-| `docs/06-analysis-pipeline.md` | Previews, метрики, perceptual hashes и решения |
-| `docs/07-ui-ux.md` | Web GUI, pipeline visualizer и review workflow |
-| `docs/08-data-model.md` | SQLite schema и правила миграции |
-| `docs/09-api-and-jobs.md` | HTTP API, background jobs и resume |
-| `docs/10-testing-and-quality.md` | Unit, integration и manual tests |
-| `docs/11-operations-and-troubleshooting.md` | Doctor, логи, cache и диагностика |
-| `docs/12-compatibility.md` | Матрица совместимости и capability gates |
-| `docs/13-milestones-and-dod.md` | План реализации и Definition of Done |
-| `docs/14-security.md` | Защита локального web UI и subprocesses |
-| `docs/15-requirements-traceability.md` | Связь требований, тестов и milestones |
-| `decisions/` | Архитектурные решения в формате ADR |
-| `templates/PROGRESS.md` | Шаблон статуса для Codex |
-| `templates/config.example.toml` | Пример конфигурации |
-| `MANIFEST.json` | Состав архива и SHA-256 документов |
+1. Импортировать нужные кадры из Shared Album в личную медиатеку вручную.
+2. Собрать их в обычный альбом Photos.
+3. Создать проект и запустить inventory → previews → metrics → duplicates → decisions.
+4. Просмотреть рекомендации, сравнить дубликаты и сохранить manual overrides.
+5. Выполнить publish dry-run и отдельно подтвердить создание нового Reject-альбома.
+6. Проверить Reject-альбом в Photos и удалить действительно ненужные кадры вручную.
 
-## Источник истины
+Shared Albums отображаются, но недоступны для выбора. Приложение не пишет напрямую в
+Photos SQLite, не меняет Favorite/keywords/originals и не содержит API удаления фото.
 
-При конфликте документов приоритет следующий:
+## Проверки
 
-1. `CODEX_PROJECT_SPEC.md`.
-2. ADR в `decisions/`.
-3. Тематические документы в `docs/`.
-4. Примеры и шаблоны.
+```bash
+uv run pytest
+uv run pytest --cov=photo_curator
+uv run ruff check .
+uv run ruff format --check .
+```
 
-## Принципы MVP
-
-- Обычный пользовательский альбом — единственный прямой source.
-- Shared Album — только источник ручного импорта.
-- Локальное выполнение без cloud vision API.
-- Лёгкий стек: Python, `osxphotos`, Pillow, NumPy, FastAPI, Jinja2.
-- Никаких Docker, Node.js, Electron, Qt, PyTorch и внешнего ML-сервера.
-- Никаких прямых записей в Photos SQLite.
-- Никакого автоматического удаления.
-- Основной интерфейс — визуальный локальный web GUI, а не набор консольных команд.
-- Автоматический `reject` по умолчанию применяется только к уверенным проигравшим в duplicate-группах.
-- Все субъективные и неоднозначные случаи идут в `review`.
+Полное ТЗ находится в `CODEX_PROJECT_SPEC.md`, тематические документы — в `docs/`,
+архитектурные решения — в `decisions/`. Инструкции для разработчика и текущий статус:
+`DEVELOPMENT.md` и `PROGRESS.md`.

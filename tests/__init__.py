@@ -1,0 +1,1 @@
+"""Photo Curator test suite."""

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Дубликаты — {{ project.name }}{% endblock %}
+{% block content %}
+  <section class="page-heading"><div><p class="eyebrow">{{ project.name }}</p><h1>Дубликаты</h1></div>
+    <a class="secondary button-link" href="/projects/{{ project.id }}">← Pipeline</a></section>
+  <div class="duplicate-list" data-project-id="{{ project.id }}">
+    {% for group in groups %}
+      <section class="duplicate-group" data-group-id="{{ group.group_id }}">
+        <div class="section-heading"><div><p class="eyebrow">{{ group.kind }} · {{ '%.0f' | format(group.confidence * 100) }}%</p><h2>{{ group.group_id }}</h2></div>
+          <p>{{ group.member_count }} фото{% if group.flags %} · {{ group.flags | join(', ') }}{% endif %}</p></div>
+        <div class="duplicate-members">
+          {% for member in group.members %}
+            <article class="duplicate-member {% if member.is_leader %}leader{% endif %}">
+              <img src="/media/{{ project.id }}/thumbnail/{{ member.asset_uuid }}" alt="Duplicate {{ member.asset_uuid }}">
+              <h3>{% if member.is_leader %}Лидер · {% endif %}{{ member.asset_uuid }}</h3>
+              <p>{{ member.width }}×{{ member.height }} · quality {{ '%.2f' | format(member.quality_score or 0) }}</p>
+              <p>{{ member.final_disposition }}{% if member.favorite %} · ★ Favorite{% endif %}{% if member.has_adjustments %} · Edited{% endif %}</p>
+              {% if not member.is_leader %}<button data-make-leader="{{ member.asset_uuid }}">Сделать лидером</button>{% endif %}
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+    {% else %}<div class="empty-state">Duplicate-группы не найдены.</div>{% endfor %}
+  </div>
+{% endblock %}

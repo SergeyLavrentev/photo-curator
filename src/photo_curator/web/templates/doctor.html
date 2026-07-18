@@ -3,13 +3,16 @@
 {% block content %}
   <section class="hero compact">
     <div><p class="eyebrow">Doctor</p><h1>Диагностика среды</h1>
-      <p class="hero-copy">Milestone 0 проверяет локальную оболочку. Photos provider появится в Milestone 1.</p>
+      <p class="hero-copy">Read gate и возможности публикации проверяются отдельно. Ошибка publish
+        не блокирует локальный анализ и ручное ревью.</p>
     </div>
   </section>
   <section class="checks" aria-label="Результаты диагностики">
-    {% for label, status, detail in checks %}
-      <article><span class="check-status">{{ status }}</span><div><h2>{{ label }}</h2><p>{{ detail }}</p></div></article>
+    {% for check in checks %}
+      <article class="{{ check.status | lower }}">
+        <span class="check-status">{{ check.status }}</span>
+        <div><h2>{{ check.label }}</h2><p>{{ check.detail }}</p></div>
+      </article>
     {% endfor %}
   </section>
 {% endblock %}
-
