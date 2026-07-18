@@ -168,6 +168,16 @@ document.querySelector(".dialog-close")?.addEventListener("click", () => documen
 
 const duplicateList = document.querySelector(".duplicate-list");
 duplicateList?.addEventListener("click", async (event) => {
+  const decision = event.target.closest("[data-duplicate-decision]");
+  if (decision) {
+    const value = decision.dataset.duplicateDecision === "clear" ? null : decision.dataset.duplicateDecision;
+    await api(`/api/projects/${duplicateList.dataset.projectId}/assets/${decision.dataset.assetUuid}/decision`, {
+      method: "PATCH",
+      body: JSON.stringify({ disposition: value }),
+    });
+    window.location.reload();
+    return;
+  }
   const button = event.target.closest("[data-make-leader]");
   if (!button) return;
   const group = button.closest("[data-group-id]");
@@ -187,9 +197,10 @@ document.querySelector('[data-action="publish-dry-run"]')?.addEventListener("cli
 document.querySelector('[data-action="publish-apply"]')?.addEventListener("click", async (event) => {
   const root = document.querySelector("[data-project-id]");
   const confirmed = document.querySelector("#publish-confirm")?.checked || false;
-  await api(`/api/projects/${root.dataset.projectId}/publish/apply`, {
+  const result = await api(`/api/projects/${root.dataset.projectId}/publish/apply`, {
     method: "POST",
     body: JSON.stringify({ publish_id: event.currentTarget.dataset.publishId, confirmed }),
   });
-  window.location.reload();
+  if (result.status === "applied") window.location.assign("photos://");
+  else window.location.reload();
 });

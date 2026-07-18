@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from photo_curator.photos.library_resolver import library_fingerprint
 from photo_curator.photos.provider import PhotoAlbum, PhotoAsset, PhotoLibrary
+
+LOGGER = logging.getLogger(__name__)
 
 
 class OSXPhotosProvider:
@@ -45,10 +49,35 @@ class OSXPhotosProvider:
 
     def list_assets(self, album_id: str) -> list[PhotoAsset]:
         album = self._album_info(album_id)
-        return [self._asset_from_info(photo) for photo in album.photos]
+        assets = []
+        for photo in album.photos:
+            try:
+                assets.append(self._asset_from_info(photo))
+            except Exception as error:
+                uuid = str(getattr(photo, "uuid", "unknown"))
+                LOGGER.warning(
+                    "Asset metadata unavailable for UUID %s (%s)", uuid, type(error).__name__
+                )
+                assets.append(
+                    PhotoAsset(
+                        uuid=uuid,
+                        current_filename=getattr(photo, "filename", None),
+                        is_missing=True,
+                        provider_error=type(error).__name__,
+                    )
+                )
+        return assets
 
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
-        return [self._asset_from_info(photo) for photo in self._db.photos_by_uuid(asset_uuids)]
+        assets = []
+        for photo in self._db.photos_by_uuid(asset_uuids):
+            try:
+                assets.append(self._asset_from_info(photo))
+            except Exception:
+                LOGGER.warning(
+                    "Publish refresh failed for UUID %s", str(getattr(photo, "uuid", "unknown"))
+                )
+        return assets
 
     def asset_still_in_album(self, album_id: str, asset_uuid: str) -> bool:
         return any(photo.uuid == asset_uuid for photo in self._album_info(album_id).photos)
@@ -79,12 +108,12 @@ class OSXPhotosProvider:
             if (path := _path_or_none(value))
         )
         score = getattr(photo, "score", None)
-        scores = score if isinstance(score, dict) else None
+        scores = _score_dict(score)
         return PhotoAsset(
             uuid=str(photo.uuid),
             original_filename=photo.original_filename,
             current_filename=photo.filename,
-            taken_at=_iso(photo.date),
+            taken_at=_iso(getattr(photo, "date", None)),
             date_added=_iso(getattr(photo, "date_added", None)),
             width=getattr(photo, "width", None),
             height=getattr(photo, "height", None),
@@ -113,3 +142,13 @@ def _path_or_none(value: Any) -> Path | None:
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _score_dict(score: Any) -> dict[str, float] | None:
+    if score is None:
+        return None
+    values = asdict(score) if is_dataclass(score) else score if isinstance(score, dict) else {}
+    numeric = {
+        str(key): float(value) for key, value in values.items() if isinstance(value, (int, float))
+    }
+    return numeric or None

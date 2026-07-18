@@ -7,6 +7,8 @@ def percentile_ranks(values: list[float | None]) -> list[float | None]:
     available = np.asarray([value for value in values if value is not None], dtype=float)
     if not len(available):
         return [None] * len(values)
+    if len(available) == 1:
+        return [None if value is None else 0.5 for value in values]
     sorted_values = np.sort(available)
     denominator = max(1, len(sorted_values) - 1)
     return [

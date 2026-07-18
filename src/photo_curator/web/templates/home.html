@@ -16,6 +16,12 @@
     <p><strong>Shared Album сначала нужно импортировать.</strong> Приложение работает только
       с обычным альбомом личной медиатеки и никогда не удаляет фотографии.</p>
   </aside>
+  <section class="environment-grid" aria-label="Текущая среда">
+    {% for label, value in [('Photos Library', environment.library), ('Photos DB', environment.database_version),
+      ('osxphotos', environment.osxphotos_version), ('Совместимость', environment.compatibility)] %}
+      <article><span>{{ label }}</span><strong>{{ value }}</strong></article>
+    {% endfor %}
+  </section>
   {% if provider_error %}
     <aside class="notice warning" role="alert"><span aria-hidden="true">!</span>
       <p><strong>Photos Library пока недоступна.</strong> {{ provider_error }}</p></aside>

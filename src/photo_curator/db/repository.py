@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterable
@@ -47,8 +48,8 @@ def create_project(
         INSERT INTO projects (
             id, name, library_path, database_path, library_fingerprint,
             album_id, album_name, album_folder_path, album_full_path,
-            state, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)
+            album_snapshot_hash, state, settings_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?)
         """,
         (
             project_id,
@@ -60,6 +61,13 @@ def create_project(
             album.name,
             album.folder_path,
             album.full_path,
+            hashlib.sha256(
+                f"{album.id}|{album.photo_count}|{album.video_count}".encode()
+            ).hexdigest(),
+            json.dumps(
+                {"photo_count": album.photo_count, "video_count": album.video_count},
+                sort_keys=True,
+            ),
             now,
             now,
         ),
@@ -87,7 +95,9 @@ def set_project_state(connection: sqlite3.Connection, project_id: str, state: st
 
 
 def delete_project(connection: sqlite3.Connection, project_id: str) -> None:
-    connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    cursor = connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    if not cursor.rowcount:
+        raise KeyError(project_id)
 
 
 def upsert_assets(
@@ -119,20 +129,33 @@ def upsert_assets(
                 asset.burst_key,
                 int(asset.burst_default_pick),
                 int(asset.is_missing),
+                0,
                 str(asset.source_path) if asset.source_path else None,
+                json.dumps(
+                    {
+                        "local_path_available": bool(asset.source_path),
+                        "edited_path_available": bool(asset.edited_path),
+                        "derivative_count": len(asset.derivative_paths),
+                        "album_membership": True,
+                        "provider_error": asset.provider_error,
+                    },
+                    sort_keys=True,
+                ),
                 json.dumps(asset.apple_scores) if asset.apple_scores else None,
                 now,
                 now,
             )
         )
+    connection.execute("UPDATE assets SET no_longer_exists=1 WHERE project_id=?", (project_id,))
     connection.executemany(
         """
         INSERT INTO assets (
             project_id, asset_uuid, original_filename, current_filename, taken_at,
             date_added, width, height, original_width, original_height, orientation,
             favorite, hidden, has_adjustments, is_live_photo, is_burst, burst_key,
-            burst_default_pick, is_missing, source_path, apple_scores_json, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            burst_default_pick, is_missing, no_longer_exists, source_path, metadata_json,
+            apple_scores_json, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
             original_filename=excluded.original_filename,
             current_filename=excluded.current_filename,
@@ -151,7 +174,9 @@ def upsert_assets(
             burst_key=excluded.burst_key,
             burst_default_pick=excluded.burst_default_pick,
             is_missing=excluded.is_missing,
+            no_longer_exists=0,
             source_path=excluded.source_path,
+            metadata_json=excluded.metadata_json,
             apple_scores_json=excluded.apple_scores_json,
             updated_at=excluded.updated_at
         """,
@@ -172,11 +197,13 @@ def update_asset_preview(
     review_path: str | None,
     thumbnail_path: str | None,
     cache_state: str,
+    render_warning: str | None = None,
 ) -> None:
-    connection.execute(
+    cursor = connection.execute(
         """
         UPDATE assets SET source_kind=?, source_size=?, source_mtime=?, source_fingerprint=?,
-            review_path=?, thumbnail_path=?, cache_state=?, updated_at=?
+            review_path=?, thumbnail_path=?, cache_state=?,
+            metadata_json=json_set(metadata_json, '$.render_warning', ?), updated_at=?
         WHERE project_id=? AND asset_uuid=?
         """,
         (
@@ -187,11 +214,14 @@ def update_asset_preview(
             review_path,
             thumbnail_path,
             cache_state,
+            render_warning,
             utc_now(),
             project_id,
             asset_uuid,
         ),
     )
+    if not cursor.rowcount:
+        raise KeyError(asset_uuid)
 
 
 def invalidate_asset_analysis(
@@ -276,7 +306,7 @@ def update_metric_percentiles(
     connection.executemany(
         """
         UPDATE metrics SET sharpness_percentile=?, gradient_percentile=?,
-            contrast_percentile=?, technical_quality=?
+            contrast_percentile=?, apple_overall_percentile=?, technical_quality=?
         WHERE project_id=? AND asset_uuid=?
         """,
         [
@@ -284,6 +314,7 @@ def update_metric_percentiles(
                 data.get("sharpness_percentile"),
                 data.get("gradient_percentile"),
                 data.get("contrast_percentile"),
+                data.get("apple_overall_percentile"),
                 data.get("technical_quality"),
                 project_id,
                 uuid,
@@ -373,7 +404,10 @@ def duplicate_context(
     rows = connection.execute(
         """
         SELECT g.group_id, g.kind, g.confidence, g.flags_json,
-            m.asset_uuid, m.is_leader, m.resolution_ratio, m.similarity, m.evidence_json
+            m.asset_uuid, m.is_leader, m.resolution_ratio, m.similarity, m.evidence_json,
+            m.quality_score,
+            MAX(CASE WHEN m.is_leader=1 THEN m.quality_score END)
+                OVER (PARTITION BY m.project_id, m.group_id) leader_quality
         FROM duplicate_groups g
         JOIN duplicate_members m USING (project_id, group_id)
         WHERE g.project_id = ?
@@ -395,6 +429,7 @@ def duplicate_context(
             "flags": sorted(set(flags)),
             "is_leader": bool(row["is_leader"]),
             "resolution_ratio": row["resolution_ratio"],
+            "quality_margin": float(row["leader_quality"] or 0) - float(row["quality_score"] or 0),
         }
     return result
 
@@ -413,10 +448,11 @@ def list_duplicate_groups(
             for row in connection.execute(
                 """
                 SELECT m.*, a.width, a.height, a.favorite, a.has_adjustments,
-                    a.thumbnail_path, d.final_disposition
+                    a.thumbnail_path, d.final_disposition, x.sharpness_percentile
                 FROM duplicate_members m
                 JOIN assets a USING (project_id, asset_uuid)
                 LEFT JOIN decisions d USING (project_id, asset_uuid)
+                LEFT JOIN metrics x USING (project_id, asset_uuid)
                 WHERE m.project_id=? AND m.group_id=? ORDER BY m.is_leader DESC, m.asset_uuid
                 """,
                 (project_id, group["group_id"]),
@@ -474,7 +510,7 @@ def set_manual_decision(
 ) -> None:
     if disposition not in {None, "keep", "review", "reject"}:
         raise ValueError("Invalid disposition")
-    connection.execute(
+    cursor = connection.execute(
         """
         UPDATE decisions SET manual_disposition=?,
             final_disposition=COALESCE(?, auto_disposition),
@@ -491,6 +527,8 @@ def set_manual_decision(
             asset_uuid,
         ),
     )
+    if not cursor.rowcount:
+        raise KeyError(asset_uuid)
 
 
 def mark_best_candidates(
@@ -591,7 +629,15 @@ def latest_jobs(connection: sqlite3.Connection, project_id: str) -> list[dict[st
 
 
 def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str, int]:
-    result = {"total": 0, "ready": 0, "missing": 0, "keep": 0, "review": 0, "reject": 0}
+    result = {
+        "total": 0,
+        "ready": 0,
+        "missing": 0,
+        "keep": 0,
+        "review": 0,
+        "reject": 0,
+        "reviewed": 0,
+    }
     row = connection.execute(
         """
         SELECT COUNT(*) total,
@@ -611,6 +657,11 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         (project_id,),
     ).fetchall():
         result[str(row["disposition"])] = int(row["count"])
+    result["reviewed"] = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM decisions WHERE project_id=? AND reviewed=1", (project_id,)
+        ).fetchone()[0]
+    )
     result["duplicate_groups"] = int(
         connection.execute(
             "SELECT COUNT(*) FROM duplicate_groups WHERE project_id=?", (project_id,)
@@ -639,7 +690,46 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
             "resolution_warnings": int(counts[3] or 0),
         }
     )
+    settings_row = connection.execute(
+        "SELECT settings_json FROM projects WHERE id=?", (project_id,)
+    ).fetchone()
+    settings = json.loads(settings_row[0] or "{}") if settings_row else {}
+    result["videos_skipped"] = int(settings.get("video_count") or 0)
     return result
+
+
+def publish_summary(connection: sqlite3.Connection, project_id: str) -> dict[str, int]:
+    row = connection.execute(
+        """
+        SELECT
+            SUM(d.auto_disposition='reject') auto_reject,
+            SUM(d.final_disposition='reject' AND d.manual_override=1) manual_reject,
+            SUM(
+                d.final_disposition='reject' AND d.flags_json LIKE '%duplicate_loser%'
+            ) duplicate_losers,
+            SUM(d.final_disposition='reject' AND a.favorite=1) favorites,
+            SUM(d.final_disposition='reject' AND a.has_adjustments=1) edited,
+            SUM(d.final_disposition='reject' AND d.flags_json LIKE '%resolution%') resolution,
+            SUM(d.final_disposition='reject' AND a.cache_state!='ready') missing,
+            SUM(d.final_disposition='reject' AND d.reviewed=0) unreviewed
+        FROM assets a LEFT JOIN decisions d USING(project_id, asset_uuid)
+        WHERE a.project_id=?
+        """,
+        (project_id,),
+    ).fetchone()
+    return {
+        key: int(row[key] or 0)
+        for key in (
+            "auto_reject",
+            "manual_reject",
+            "duplicate_losers",
+            "favorites",
+            "edited",
+            "resolution",
+            "missing",
+            "unreviewed",
+        )
+    }
 
 
 def create_publish(
@@ -726,6 +816,8 @@ def latest_publish(connection: sqlite3.Connection, project_id: str) -> dict[str,
 
 def _decode_asset_row(row: dict[str, object]) -> dict[str, object]:
     for source, target, default in (
+        ("metadata_json", "metadata", {}),
+        ("apple_scores_json", "apple_scores", None),
         ("histogram_json", "histogram", []),
         ("flags_json", "flags", []),
         ("reasons_json", "reasons", []),

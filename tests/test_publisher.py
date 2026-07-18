@@ -125,3 +125,58 @@ def test_apply_requires_new_dry_run_after_source_drift(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="новый dry-run"):
         publisher.apply(str(dry_run["id"]))
+
+
+def test_resolution_inversion_blocks_publish_until_explicit_manual_confirmation(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+
+    def runner(args: list[str]) -> CommandResult:
+        return CommandResult(args, 0, "--uuid-from-file --add-to-album --dry-run", "")
+
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        runner=runner,
+        executable="/usr/bin/true",
+    )
+    with database_connection(paths.database) as connection:
+        connection.execute(
+            "UPDATE decisions SET final_disposition='reject', manual_override=0 "
+            "WHERE project_id=? AND asset_uuid='demo-001'",
+            (project_id,),
+        )
+        repository.set_manual_decision(connection, project_id, "demo-003", "keep")
+        repository.set_manual_decision(connection, project_id, "demo-002", "keep")
+
+    blocked = publisher.validate(project_id)
+    assert any("resolution inversion" in blocker for blocker in blocked.blockers)
+
+    with database_connection(paths.database) as connection:
+        repository.set_manual_decision(connection, project_id, "demo-001", "reject")
+    confirmed = publisher.validate(project_id)
+    assert not any("resolution inversion" in blocker for blocker in confirmed.blockers)
+    assert any("подтверждён вручную" in warning for warning in confirmed.warnings)
+
+
+def test_provider_failure_becomes_publish_blocker(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+
+    def unavailable(_: list[str]):
+        raise PermissionError("private library path")
+
+    provider.refresh_assets = unavailable
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        executable="/usr/bin/true",
+    )
+
+    validation = publisher.validate(project_id)
+    assert validation.blockers == ["Photos Library недоступна; повторите Doctor/read gate"]
+    assert "private library path" not in ";".join(validation.blockers)

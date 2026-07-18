@@ -1,8 +1,11 @@
+from dataclasses import dataclass
+
 from PIL import Image, ImageDraw, ImageFilter
 
 from photo_curator.analysis.hashes import dhash, hamming_distance, phash, render_equivalence_hash
 from photo_curator.analysis.normalization import percentile_ranks, robust_stats
 from photo_curator.analysis.technical import technical_metrics
+from photo_curator.photos.osxphotos_provider import _score_dict
 
 
 def patterned_image() -> Image.Image:
@@ -48,3 +51,16 @@ def test_robust_normalization_handles_missing_values() -> None:
     stats = robust_stats([1.0, 2.0, 100.0])
     assert stats["median"] == 2.0
     assert stats["mad"] == 1.0
+
+
+def test_single_optional_score_is_neutral_and_dataclass_is_supported() -> None:
+    @dataclass
+    class Score:
+        overall: float
+        curation: float
+
+    assert percentile_ranks([None, 0.9, None]) == [None, 0.5, None]
+    assert _score_dict(Score(overall=0.9, curation=0.4)) == {
+        "overall": 0.9,
+        "curation": 0.4,
+    }

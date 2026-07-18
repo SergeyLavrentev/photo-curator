@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Semaphore
 
 from photo_curator.analysis.decision_engine import decide_asset
 from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_equivalence_hash
@@ -21,6 +22,7 @@ from photo_curator.pipeline.previews import build_previews, source_fingerprint
 LOGGER = logging.getLogger(__name__)
 
 STAGES = ("inventory", "previews", "metrics", "duplicates", "decisions")
+PREVIEW_LIMIT = Semaphore(2)
 
 
 class PipelineCoordinator:
@@ -34,7 +36,9 @@ class PipelineCoordinator:
         self.database_path = database_path
         self.paths = paths
         self.provider = provider
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="photo-curator")
+        self._executor = ThreadPoolExecutor(
+            max_workers=min(4, os.cpu_count() or 2), thread_name_prefix="photo-curator"
+        )
         self._futures: dict[str, Future[None]] = {}
         self._lock = Lock()
 
@@ -51,7 +55,9 @@ class PipelineCoordinator:
         start_index = STAGES.index(from_stage) if from_stage else 0
         try:
             for stage in STAGES[start_index:]:
+                LOGGER.info("Stage started project=%s stage=%s", project_id, stage)
                 getattr(self, f"_stage_{stage}")(project_id)
+                LOGGER.info("Stage completed project=%s stage=%s", project_id, stage)
             with database_connection(self.database_path) as connection:
                 repository.set_project_state(connection, project_id, "ready")
         except Exception as error:
@@ -64,11 +70,12 @@ class PipelineCoordinator:
     def _stage_inventory(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)
+            job_id = repository.create_job(connection, project_id, "inventory", 0)
         assets = [
             asset for asset in self.provider.list_assets(str(project["album_id"])) if asset.is_photo
         ]
         with database_connection(self.database_path) as connection:
-            job_id = repository.create_job(connection, project_id, "inventory", len(assets))
+            connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (len(assets), job_id))
             repository.upsert_assets(connection, project_id, assets)
             repository.update_job(
                 connection,
@@ -110,6 +117,7 @@ class PipelineCoordinator:
                             review_path=None,
                             thumbnail_path=None,
                             cache_state="missing",
+                            render_warning=render.warning if render else "missing_preview",
                         )
                 else:
                     review_path = cache / "review" / f"{asset_uuid}.jpg"
@@ -131,12 +139,13 @@ class PipelineCoordinator:
                                 message=f"Preview {index} из {len(stored)} · cache",
                             )
                         continue
-                    result = build_previews(
-                        render.path,
-                        review_path,
-                        thumbnail_path,
-                        source_kind=render.kind,
-                    )
+                    with PREVIEW_LIMIT:
+                        result = build_previews(
+                            render.path,
+                            review_path,
+                            thumbnail_path,
+                            source_kind=render.kind,
+                        )
                     stat = render.path.stat()
                     with database_connection(self.database_path) as connection:
                         if row.get("source_fingerprint") != result.source_fingerprint:
@@ -152,6 +161,7 @@ class PipelineCoordinator:
                             review_path=str(result.review_path),
                             thumbnail_path=str(result.thumbnail_path),
                             cache_state="ready",
+                            render_warning=render.warning,
                         )
             except Exception:
                 errors += 1
@@ -168,6 +178,7 @@ class PipelineCoordinator:
                         review_path=None,
                         thumbnail_path=None,
                         cache_state="error",
+                        render_warning=render.warning if render else "missing_preview",
                     )
             with database_connection(self.database_path) as connection:
                 repository.update_job(
@@ -247,13 +258,19 @@ class PipelineCoordinator:
         sharpness = percentile_ranks([_float(asset.get("laplacian_variance")) for asset in assets])
         gradient = percentile_ranks([_float(asset.get("gradient_energy")) for asset in assets])
         contrast = percentile_ranks([_float(asset.get("contrast_std")) for asset in assets])
+        apple = percentile_ranks(
+            [_float((asset.get("apple_scores") or {}).get("overall")) for asset in assets]
+        )
         values = {}
-        for asset, sharp, grad, cont in zip(assets, sharpness, gradient, contrast, strict=True):
+        for asset, sharp, grad, cont, apple_rank in zip(
+            assets, sharpness, gradient, contrast, apple, strict=True
+        ):
             quality_values = [value for value in (sharp, grad, cont) if value is not None]
             values[str(asset["asset_uuid"])] = {
                 "sharpness_percentile": sharp,
                 "gradient_percentile": grad,
                 "contrast_percentile": cont,
+                "apple_overall_percentile": apple_rank,
                 "technical_quality": sum(quality_values) / len(quality_values),
             }
         with database_connection(self.database_path) as connection:

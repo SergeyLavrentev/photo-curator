@@ -59,7 +59,12 @@ def test_manual_override_survives_reanalysis(tmp_path: Path) -> None:
     with database_connection(paths.database) as connection:
         repository.set_manual_decision(connection, project_id, "demo-002", "keep", "важный кадр")
 
-    coordinator.run(project_id, from_stage="decisions")
+    restarted = PipelineCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=FakePhotosProvider(paths.cache_dir / "sources"),
+    )
+    restarted.run(project_id, from_stage="decisions")
 
     with database_connection(paths.database) as connection:
         asset = repository.get_asset(connection, project_id, "demo-002")
@@ -133,3 +138,27 @@ def test_stage_failure_marks_running_job_error_and_preserves_completed_stage(
     assert project["state"] == "error"
     assert jobs[0]["stage"] == "inventory" and jobs[0]["status"] == "done"
     assert jobs[1]["stage"] == "previews" and jobs[1]["status"] == "error"
+
+
+def test_inventory_snapshot_tracks_render_metadata_video_count_and_removed_assets(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        edited = repository.get_asset(connection, project_id, "demo-009")
+        scored = repository.get_asset(connection, project_id, "demo-010")
+        summary = repository.project_summary(connection, project_id)
+
+    assert summary["videos_skipped"] == 2
+    assert edited["metadata"]["local_path_available"] is True
+    assert edited["metadata"]["edited_path_available"] is False
+    assert edited["metadata"]["album_membership"] is True
+    assert "edited_render_missing" in edited["flags"]
+    assert scored["apple_overall_percentile"] == 0.5
+
+    provider._assets = [asset for asset in provider._assets if asset.uuid != "demo-012"]
+    coordinator.run(project_id, from_stage="inventory")
+    with database_connection(paths.database) as connection:
+        removed = repository.get_asset(connection, project_id, "demo-012")
+    assert removed["no_longer_exists"] == 1

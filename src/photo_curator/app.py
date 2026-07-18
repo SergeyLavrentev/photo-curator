@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.metadata
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -121,6 +123,10 @@ def create_app(
     )
     app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "web" / "static"), name="static")
 
+    @app.exception_handler(KeyError)
+    async def not_found(_: Request, __: KeyError):
+        return JSONResponse({"detail": "Resource not found"}, status_code=404)
+
     @app.middleware("http")
     async def session_gate(request: Request, call_next: Any):
         if request.url.path == "/health":
@@ -167,6 +173,7 @@ def create_app(
         with database_connection(app_paths.database) as connection:
             projects = repository.list_projects(connection)
         albums, shared, provider_error = _safe_album_lists(selected_provider)
+        environment = _home_environment(selected_provider, albums, provider_error)
         return templates.TemplateResponse(
             request,
             "home.html",
@@ -177,6 +184,7 @@ def create_app(
                 albums=albums,
                 shared_albums=shared,
                 provider_error=provider_error,
+                environment=environment,
                 csrf_token=secrets_.csrf_token,
             ),
         )
@@ -195,7 +203,10 @@ def create_app(
         project, summary, jobs = _project_data(app_paths.database, project_id)
         with database_connection(app_paths.database) as connection:
             distribution = _quality_distribution(repository.list_assets(connection, project_id))
-        summary["cache_size"] = _human_size(_directory_size(app_paths.cache_dir / project_id))
+            latest_publish = repository.latest_publish(connection, project_id)
+        project_cache = app_paths.cache_dir / project_id
+        summary["cache_size"] = _human_size(_directory_size(project_cache))
+        summary["cache_last_access"] = _last_access(project_cache)
         return templates.TemplateResponse(
             request,
             "project.html",
@@ -205,7 +216,7 @@ def create_app(
                 project=project,
                 summary=summary,
                 distribution=distribution,
-                stages=_stage_views(jobs),
+                stages=_stage_views(jobs, summary, latest_publish),
             ),
         )
 
@@ -265,6 +276,7 @@ def create_app(
         validation = publisher.validate(project_id) if publisher else None
         with database_connection(app_paths.database) as connection:
             latest = repository.latest_publish(connection, project_id)
+            publish_counts = repository.publish_summary(connection, project_id)
         return templates.TemplateResponse(
             request,
             "publish.html",
@@ -275,6 +287,7 @@ def create_app(
                 summary=summary,
                 validation=validation,
                 publish=latest,
+                publish_counts=publish_counts,
                 csrf_token=secrets_.csrf_token,
             ),
         )
@@ -347,7 +360,7 @@ def create_app(
         project, summary, jobs = _project_data(app_paths.database, project_id)
         project.pop("library_path", None)
         project.pop("database_path", None)
-        return {"project": project, "summary": summary, "jobs": jobs}
+        return {"project": project, "summary": summary, "jobs": [_public_job(job) for job in jobs]}
 
     @app.delete("/api/projects/{project_id}", status_code=204)
     async def delete_project_api(project_id: str):
@@ -361,6 +374,7 @@ def create_app(
     async def start_pipeline(project_id: str) -> dict[str, str]:
         if not coordinator:
             raise HTTPException(503, "Photos provider unavailable")
+        _ensure_project_exists(app_paths.database, project_id)
         try:
             coordinator.start(project_id)
         except RuntimeError as error:
@@ -371,6 +385,7 @@ def create_app(
     async def resume_pipeline(project_id: str) -> dict[str, str]:
         if not coordinator:
             raise HTTPException(503, "Photos provider unavailable")
+        _ensure_project_exists(app_paths.database, project_id)
         with database_connection(app_paths.database) as connection:
             jobs = repository.latest_jobs(connection, project_id)
         interrupted = next(
@@ -383,6 +398,7 @@ def create_app(
     async def retry_stage(project_id: str, stage: str) -> dict[str, str]:
         if not coordinator:
             raise HTTPException(503, "Photos provider unavailable")
+        _ensure_project_exists(app_paths.database, project_id)
         try:
             coordinator.start(project_id, from_stage=stage)
         except ValueError as error:
@@ -393,13 +409,14 @@ def create_app(
     async def retry_missing(project_id: str) -> dict[str, str]:
         if not coordinator:
             raise HTTPException(503, "Photos provider unavailable")
+        _ensure_project_exists(app_paths.database, project_id)
         coordinator.start(project_id, from_stage="previews")
         return {"status": "started", "stage": "previews"}
 
     @app.get("/api/jobs/{job_id}")
     async def job_api(job_id: str) -> dict[str, object]:
         with database_connection(app_paths.database) as connection:
-            return repository.get_job(connection, job_id)
+            return _public_job(repository.get_job(connection, job_id))
 
     @app.get("/api/projects/{project_id}/assets")
     async def assets_api(
@@ -460,6 +477,7 @@ def create_app(
     async def recalculate(project_id: str) -> dict[str, str]:
         if not coordinator:
             raise HTTPException(503, "Photos provider unavailable")
+        _ensure_project_exists(app_paths.database, project_id)
         coordinator.start(project_id, from_stage="decisions")
         return {"status": "started"}
 
@@ -489,11 +507,11 @@ def create_app(
 
     @app.post("/api/projects/{project_id}/cache/clean")
     async def clean_cache(project_id: str) -> dict[str, str]:
+        _ensure_project_exists(app_paths.database, project_id)
         project_cache = app_paths.cache_dir / project_id
         if project_cache.exists():
             safe_rmtree(project_cache, app_paths.cache_dir)
         with database_connection(app_paths.database) as connection:
-            repository.get_project(connection, project_id)
             connection.execute(
                 """
                 UPDATE assets SET review_path=NULL, thumbnail_path=NULL, cache_state='pending',
@@ -563,38 +581,117 @@ def _project_data(database_path: Path, project_id: str):
         )
 
 
-def _stage_views(jobs: list[dict[str, object]]) -> list[dict[str, object]]:
-    labels = [
-        ("inventory", "Инвентаризация"),
-        ("previews", "Подготовка preview"),
-        ("metrics", "Технический анализ"),
-        ("duplicates", "Поиск дубликатов"),
-        ("decisions", "Решения"),
-    ]
+def _ensure_project_exists(database_path: Path, project_id: str) -> None:
+    with database_connection(database_path) as connection:
+        repository.get_project(connection, project_id)
+
+
+def _stage_views(
+    jobs: list[dict[str, object]],
+    summary: dict[str, object],
+    publish: dict[str, object] | None,
+) -> list[dict[str, object]]:
     latest = {str(job["stage"]): job for job in jobs}
-    views = []
-    for number, (code, label) in enumerate(labels, start=1):
-        job = latest.get(code, {})
-        total = int(job.get("total_items") or 0)
-        processed = int(job.get("processed_items") or 0)
-        progress = (
-            int(processed / total * 100) if total else (100 if job.get("status") == "done" else 0)
-        )
-        views.append(
-            {
-                "number": number,
-                "code": code,
-                "name": label,
-                "status": job.get("status", "pending"),
-                "progress": progress,
-                "processed": processed,
-                "total": total,
-                "message": job.get("current_message") or "Ожидает",
-                "warnings": int(job.get("warning_count") or 0),
-                "errors": int(job.get("error_count") or 0),
-            }
-        )
-    return views
+    analysis_jobs = [latest.get(code, {}) for code in ("metrics", "duplicates", "decisions")]
+    analysis_status = _combined_status(analysis_jobs)
+    analysis = {
+        "stage": "metrics",
+        "status": analysis_status,
+        "processed_items": sum(int(job.get("processed_items") or 0) for job in analysis_jobs),
+        "total_items": sum(int(job.get("total_items") or 0) for job in analysis_jobs),
+        "warning_count": sum(int(job.get("warning_count") or 0) for job in analysis_jobs),
+        "error_count": sum(int(job.get("error_count") or 0) for job in analysis_jobs),
+        "current_message": "Метрики, hashes, поиск дубликатов и решения",
+        "started_at": next((job.get("started_at") for job in analysis_jobs if job), None),
+        "finished_at": next(
+            (job.get("finished_at") for job in reversed(analysis_jobs) if job), None
+        ),
+    }
+    total = int(summary.get("total") or 0)
+    reviewed = int(summary.get("reviewed") or 0)
+    review_status = (
+        "done"
+        if total and reviewed >= total
+        else ("active" if analysis_status == "done" else "pending")
+    )
+    publish_status = str(publish.get("status")) if publish else "pending"
+    publish_stage_status = {
+        "applied": "done",
+        "dry_run_ok": "active",
+        "dry_run_failed": "warning",
+        "apply_failed": "error",
+    }.get(publish_status, "pending")
+    stages = [
+        {
+            "stage": "doctor",
+            "status": "done",
+            "processed_items": 1,
+            "total_items": 1,
+            "current_message": "Среда проекта зафиксирована",
+        },
+        latest.get("inventory", {"stage": "inventory"}),
+        latest.get("previews", {"stage": "previews"}),
+        analysis,
+        {
+            "stage": "review",
+            "status": review_status,
+            "processed_items": reviewed,
+            "total_items": total,
+            "current_message": f"Ручные решения: {reviewed} из {total}",
+        },
+        {
+            "stage": "publish",
+            "status": publish_stage_status,
+            "processed_items": int(publish.get("asset_count") or 0) if publish else 0,
+            "total_items": int(summary.get("reject") or 0),
+            "current_message": f"Publish: {publish_status}",
+        },
+    ]
+    labels = {
+        "doctor": "Проверка среды",
+        "inventory": "Инвентаризация",
+        "previews": "Подготовка preview",
+        "metrics": "Анализ · Поиск дубликатов",
+        "review": "Ручное ревью",
+        "publish": "Публикация Reject-альбома",
+    }
+    return [
+        _stage_view(index, stage, labels[str(stage["stage"])])
+        for index, stage in enumerate(stages, 1)
+    ]
+
+
+def _stage_view(number: int, job: dict[str, object], label: str) -> dict[str, object]:
+    total = int(job.get("total_items") or 0)
+    processed = int(job.get("processed_items") or 0)
+    progress = (
+        int(processed / total * 100) if total else (100 if job.get("status") == "done" else 0)
+    )
+    elapsed = _elapsed_seconds(job.get("started_at"), job.get("finished_at"))
+    return {
+        "number": number,
+        "code": job.get("stage"),
+        "name": label,
+        "status": job.get("status", "pending"),
+        "progress": min(progress, 100),
+        "processed": processed,
+        "total": total,
+        "message": job.get("current_message") or "Ожидает",
+        "warnings": int(job.get("warning_count") or 0),
+        "errors": int(job.get("error_count") or 0),
+        "elapsed": _duration_label(elapsed),
+        "throughput": f"{processed / elapsed:.1f}/с" if processed and elapsed else "—",
+        "retryable": job.get("stage")
+        in {"inventory", "previews", "metrics", "duplicates", "decisions"},
+    }
+
+
+def _combined_status(jobs: list[dict[str, object]]) -> str:
+    statuses = [str(job.get("status")) for job in jobs if job]
+    for status in ("error", "running", "interrupted", "warning"):
+        if status in statuses:
+            return status
+    return "done" if statuses and all(status == "done" for status in statuses) else "pending"
 
 
 def _album_json(album, *, disabled: bool) -> dict[str, object]:
@@ -637,6 +734,10 @@ def _public_publish(publish: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in publish.items() if key not in hidden}
 
 
+def _public_job(job: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in job.items() if key != "error_text"}
+
+
 def _safe_album_lists(provider: PhotosProvider | None) -> tuple[list, list, str | None]:
     if provider is None:
         return [], [], "Photos provider недоступен"
@@ -644,6 +745,25 @@ def _safe_album_lists(provider: PhotosProvider | None) -> tuple[list, list, str 
         return provider.list_regular_albums(), provider.list_shared_albums(), None
     except Exception:
         return [], [], "Нет доступа к Photos Library. Откройте Doctor для инструкции."
+
+
+def _home_environment(
+    provider: PhotosProvider | None, albums: list, provider_error: str | None
+) -> dict[str, str]:
+    try:
+        version = importlib.metadata.version("osxphotos")
+    except importlib.metadata.PackageNotFoundError:
+        version = "не установлен"
+    library = None
+    if provider and not provider_error:
+        with suppress(Exception):
+            library = provider.get_current_library()
+    return {
+        "library": library.library_path if library else "недоступна",
+        "database_version": library.database_version or "—" if library else "—",
+        "osxphotos_version": version,
+        "compatibility": "готово" if library and albums else "требует внимания",
+    }
 
 
 def _filter_assets(assets: list[dict[str, object]], category: str) -> list[dict[str, object]]:
@@ -699,3 +819,29 @@ def _human_size(size: int) -> str:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024
     return f"{size} B"
+
+
+def _last_access(root: Path) -> str:
+    files = [path for path in root.rglob("*") if path.is_file()] if root.is_dir() else []
+    if not files:
+        return "—"
+    timestamp = max(path.stat().st_atime for path in files)
+    return datetime.fromtimestamp(timestamp).astimezone().strftime("%d.%m.%Y %H:%M")
+
+
+def _elapsed_seconds(started: object, finished: object) -> float:
+    if not started:
+        return 0.0
+    try:
+        start = datetime.fromisoformat(str(started))
+        end = datetime.fromisoformat(str(finished)) if finished else datetime.now(UTC)
+        return max(0.0, (end - start).total_seconds())
+    except ValueError:
+        return 0.0
+
+
+def _duration_label(seconds: float) -> str:
+    if seconds < 1:
+        return "<1 с" if seconds else "—"
+    minutes, remainder = divmod(int(seconds), 60)
+    return f"{minutes} мин {remainder} с" if minutes else f"{remainder} с"

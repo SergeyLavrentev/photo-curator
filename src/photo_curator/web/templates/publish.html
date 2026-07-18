@@ -8,6 +8,14 @@
     <article class="publish-card"><p class="eyebrow">Source drift</p><strong>{{ validation.removed_uuids | length if validation else 0 }}</strong><span>исключено</span></article>
     <article class="publish-card"><p class="eyebrow">Blockers</p><strong>{{ validation.blockers | length if validation else 1 }}</strong><span>до dry-run</span></article>
   </section>
+  <section class="publish-counts" aria-label="Состав reject-набора">
+    {% for label, value in [('Auto reject', publish_counts.auto_reject), ('Manual reject', publish_counts.manual_reject),
+      ('Duplicate losers', publish_counts.duplicate_losers), ('Favorite', publish_counts.favorites),
+      ('Edited', publish_counts.edited), ('Resolution', publish_counts.resolution),
+      ('Missing', publish_counts.missing), ('Не просмотрено', publish_counts.unreviewed)] %}
+      <article><span>{{ label }}</span><strong>{{ value }}</strong></article>
+    {% endfor %}
+  </section>
   <section class="publish-panel">
     <h2>Проверка безопасности</h2>
     {% if validation %}

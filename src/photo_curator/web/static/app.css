@@ -56,6 +56,14 @@ h1 { margin: 0; font-family: Iowan Old Style, Georgia, serif; font-size: clamp(4
   background: var(--amber); color: white; border-radius: 50%; font: 700 14px Georgia, serif; }
 .notice p { margin: 0; line-height: 1.5; }
 .notice.warning { border-color: #dec38f; background: var(--amber-soft); }
+.environment-grid, .publish-counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.environment-grid { margin: -30px 0 52px; }
+.publish-counts { margin: 16px 0 32px; }
+.environment-grid article, .publish-counts article { min-width: 0; padding: 15px; border: 1px solid var(--line);
+  border-radius: 14px; background: var(--panel); }
+.environment-grid span, .publish-counts span { display: block; color: var(--muted); font-size: 11px; }
+.environment-grid strong, .publish-counts strong { display: block; overflow: hidden; margin-top: 7px;
+  text-overflow: ellipsis; white-space: nowrap; }
 
 section + section { margin-top: 54px; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
@@ -208,7 +216,7 @@ input, select, textarea { width: 100%; border: 1px solid var(--line); border-rad
   main { width: min(92vw, 560px); padding-top: 38px; }
   .hero, .section-heading { align-items: start; flex-direction: column; }
   .summary-grid, .pipeline { grid-template-columns: 1fr; }
-  .project-grid, .new-project, .duplicate-members, .publish-layout { grid-template-columns: 1fr; }
+  .project-grid, .new-project, .duplicate-members, .publish-layout, .environment-grid, .publish-counts { grid-template-columns: 1fr; }
   .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .page-heading { align-items: start; flex-direction: column; }
   .review-toolbar { overflow-x: auto; }

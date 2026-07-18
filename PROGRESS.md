@@ -23,14 +23,18 @@
 uv sync                                     — success
 ruff format --check .                       — passed
 ruff check .                                — passed
-pytest                                      — 37 passed
-pytest --cov=photo_curator                   — 74% total coverage
+pytest                                      — 48 passed
+pytest --cov=photo_curator                   — 81% total coverage
 osxphotos batch-edit capability flags       — confirmed
 demo full pipeline                          — 12/12 previews, metrics and decisions
 cache reuse and source invalidation         — automated test passed
-manual override after reanalysis            — automated test passed
+manual override after restart/reanalysis    — automated test passed
 publisher dry-run/apply state machine       — mocked integration passed
+source drift and resolution inversion       — automated tests passed
+>3000 asset candidate reduction             — automated test passed
 loopback/session/CSRF/media path isolation   — automated tests passed
+desktop + 390 px browser workflow            — passed, no horizontal overflow
+duplicate manual override via browser        — passed end-to-end
 ```
 
 ## External acceptance gate

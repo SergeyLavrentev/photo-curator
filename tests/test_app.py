@@ -60,6 +60,13 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "Черногория" in response.text
     assert "Ход обработки" in response.text
     assert "Поиск дубликатов" in response.text
+    assert "Проверка среды" in response.text
+    assert "Ручное ревью" in response.text
+    assert "Публикация Reject-альбома" in response.text
+    assert "Видео пропущено" in response.text
+    assert "Cache accessed" in response.text
+    assert "Photos Library" in home.text
+    assert "osxphotos" in home.text
 
 
 def test_api_status_does_not_expose_local_paths(tmp_path: Path) -> None:
@@ -138,6 +145,22 @@ def test_review_page_supports_server_side_categories(tmp_path: Path) -> None:
     assert "disposition-keep" not in response.text
 
 
+def test_duplicate_and_publish_pages_expose_manual_and_safety_controls(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        duplicates = client.get("/projects/demo-project/duplicates")
+        publish = client.get("/projects/demo-project/publish")
+
+    assert duplicates.status_code == 200
+    assert "data-duplicate-decision" in duplicates.text
+    assert "similarity" in duplicates.text
+    assert "sharpness" in duplicates.text
+    assert publish.status_code == 200
+    assert "Auto reject" in publish.text
+    assert "Manual reject" in publish.text
+    assert "Не просмотрено" in publish.text
+
+
 class BrokenPhotosProvider(FakePhotosProvider):
     def list_regular_albums(self):
         raise PermissionError("private local path must not escape")
@@ -164,3 +187,21 @@ def test_closed_photos_permission_degrades_to_doctor_message(tmp_path: Path) -> 
     assert "private local path" not in home.text
     assert albums.status_code == 503
     assert "private local path" not in albums.text
+
+
+def test_missing_resources_return_404_and_jobs_hide_error_detail(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        client.cookies.set(CSRF_COOKIE, "csrf-secret")
+        headers = {"X-CSRF-Token": "csrf-secret"}
+        missing_project = client.post("/api/projects/absent/pipeline/start", headers=headers)
+        missing_asset = client.patch(
+            "/api/projects/demo-project/assets/absent/decision",
+            headers=headers,
+            json={"disposition": "keep"},
+        )
+        project = client.get("/api/projects/demo-project")
+
+    assert missing_project.status_code == 404
+    assert missing_asset.status_code == 404
+    assert all("error_text" not in job for job in project.json()["jobs"])

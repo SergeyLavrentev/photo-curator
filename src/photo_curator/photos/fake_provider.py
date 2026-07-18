@@ -33,6 +33,7 @@ class FakePhotosProvider:
                 name="Черногория",
                 folder_path="Путешествия/2026",
                 photo_count=len(self._assets),
+                video_count=2,
             )
         ]
 
@@ -70,7 +71,11 @@ class FakePhotosProvider:
             ("demo-007", ImageEnhance.Contrast(base).enhance(0.12), {}),
             ("demo-008", _shifted_image(base, 8), {}),
             ("demo-009", _landscape((1200, 800), (62, 104, 151)), {"has_adjustments": True}),
-            ("demo-010", _landscape((1200, 800), (130, 84, 52)), {}),
+            (
+                "demo-010",
+                _landscape((1200, 800), (130, 84, 52)),
+                {"apple_scores": {"overall": 0.85}},
+            ),
             ("demo-011", _landscape((900, 1200), (56, 124, 91)), {}),
             ("demo-012", _landscape((1200, 800), (116, 64, 101)), {}),
         ]
@@ -93,6 +98,7 @@ class FakePhotosProvider:
                     favorite=bool(flags.get("favorite")),
                     has_adjustments=bool(flags.get("has_adjustments")),
                     source_path=path,
+                    apple_scores=flags.get("apple_scores"),
                 )
             )
         return assets

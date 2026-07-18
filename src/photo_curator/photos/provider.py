@@ -53,6 +53,7 @@ class PhotoAsset:
     edited_path: Path | None = None
     derivative_paths: tuple[Path, ...] = field(default_factory=tuple)
     apple_scores: dict[str, float] | None = None
+    provider_error: str | None = None
 
     @property
     def pixel_count(self) -> int:

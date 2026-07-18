@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -11,6 +12,8 @@ from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.utils.subprocesses import CommandResult, find_executable, run_command
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,22 +65,30 @@ class PhotosPublisher:
             assets = repository.list_assets(connection, project_id)
             groups = repository.list_duplicate_groups(connection, project_id)
         rejects = [asset for asset in assets if asset.get("final_disposition") == "reject"]
-        refreshed = {
-            asset.uuid: asset
-            for asset in self.provider.refresh_assets(
-                [str(asset["asset_uuid"]) for asset in rejects]
+        try:
+            refreshed = {
+                asset.uuid: asset
+                for asset in self.provider.refresh_assets(
+                    [str(asset["asset_uuid"]) for asset in rejects]
+                )
+            }
+            current_library = self.provider.get_current_library()
+        except Exception:
+            return PublishValidation(
+                [], blockers=["Photos Library недоступна; повторите Doctor/read gate"]
             )
-        }
         accepted, removed, blockers, warnings = [], [], [], []
-        current_library = self.provider.get_current_library()
         if current_library.fingerprint != project["library_fingerprint"]:
             warnings.append("Photos Library fingerprint изменился после инвентаризации")
         for row in rejects:
             uuid = str(row["asset_uuid"])
             current = refreshed.get(uuid)
-            if not current or not self.provider.asset_still_in_album(
-                str(project["album_id"]), uuid
-            ):
+            try:
+                still_in_album = self.provider.asset_still_in_album(str(project["album_id"]), uuid)
+            except Exception:
+                blockers.append("Photos Library стала недоступна во время revalidation")
+                break
+            if not current or not still_in_album:
                 removed.append(uuid)
                 continue
             flags = set(row.get("flags") or [])
@@ -149,6 +160,13 @@ class PhotosPublisher:
                 uuid_file=str(uuid_file),
             )
         result = self.runner(self._command(uuid_file, album_name, dry_run=True))
+        LOGGER.info(
+            "Publish dry-run project=%s publish=%s assets=%d return_code=%d",
+            project_id,
+            publish_id,
+            len(validation.asset_uuids),
+            result.returncode,
+        )
         with database_connection(self.database_path) as connection:
             repository.record_dry_run(
                 connection,
@@ -194,6 +212,13 @@ class PhotosPublisher:
         if validation.blockers or prepared != validation.asset_uuids:
             raise ValueError("Source или решения изменились после dry-run; выполните новый dry-run")
         result = self.runner(self._command(uuid_file, str(publish["album_name"]), dry_run=False))
+        LOGGER.info(
+            "Publish apply project=%s publish=%s assets=%d return_code=%d",
+            publish["project_id"],
+            publish_id,
+            len(prepared),
+            result.returncode,
+        )
         with database_connection(self.database_path) as connection:
             repository.record_apply(
                 connection,
