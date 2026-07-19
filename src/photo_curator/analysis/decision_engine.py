@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from photo_curator.analysis.swipe_score import SwipeScoreResult
+
 
 @dataclass(frozen=True, slots=True)
 class DecisionResult:
@@ -17,6 +19,7 @@ def decide_asset(
     asset: dict[str, object],
     duplicate: dict[str, object] | None,
     selection_density: str = "balanced",
+    swipe_score: SwipeScoreResult | None = None,
 ) -> DecisionResult:
     flags: set[str] = set()
     reasons: list[dict[str, object]] = []
@@ -50,7 +53,27 @@ def decide_asset(
     metric_flags = _metric_flags(asset)
     flags.update(metric_flags)
     reasons.extend({"code": flag} for flag in sorted(metric_flags))
-    score, components = _selection_score(asset, duplicate, metric_flags)
+    if swipe_score is None:
+        score, components = _selection_score(asset, duplicate, metric_flags)
+        decision_confidence = 0.65
+    else:
+        score = swipe_score.score
+        components = {key: round(value) for key, value in swipe_score.components.items()}
+        decision_confidence = swipe_score.confidence
+        reasons.extend(swipe_score.reasons)
+        reasons.insert(
+            0,
+            {
+                "code": "swipe_score",
+                "schema_version": swipe_score.schema_version,
+                "score": swipe_score.score,
+                "generic_score": swipe_score.generic_score,
+                "personal_delta": swipe_score.personal_delta,
+                "confidence": swipe_score.confidence,
+                "components": swipe_score.components,
+                "model_versions": swipe_score.model_versions,
+            },
+        )
     reasons.insert(0, {"code": "selection_score", "score": score, "components": components})
     if flags & {"missing_preview", "analysis_error", "ambiguous_duplicate"}:
         return DecisionResult("review", 0.75, score, components, sorted(flags), reasons)
@@ -70,10 +93,12 @@ def decide_asset(
         "broad": (58, 30),
     }.get(selection_density, (70, 38))
     if score >= selected_threshold:
-        return DecisionResult("keep", 0.8, score, components, sorted(flags), reasons)
+        return DecisionResult(
+            "keep", max(0.7, decision_confidence), score, components, sorted(flags), reasons
+        )
     if score < excluded_threshold and metric_flags:
         return DecisionResult("reject", 0.72, score, components, sorted(flags), reasons)
-    return DecisionResult("review", 0.65, score, components, sorted(flags), reasons)
+    return DecisionResult("review", decision_confidence, score, components, sorted(flags), reasons)
 
 
 def _selection_score(

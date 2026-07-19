@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: реализован Swipe Score v1 и schema v7: Vision aesthetics — generic
+  baseline, rich Apple/attention/series/portrait signals — enrichment, technical quality —
+  penalty/safety layer. Score, confidence, reasons и model provenance сохраняются отдельно
+  от decisions; human-labelled uplift над legacy heuristic ещё не доказан.
 - 2026-07-20: native Vision встроен в real-project pipeline: schema v6 хранит каждый
   signal с source fingerprint, engine/request revision, duration и unavailable reason;
   packaged `.app` получает заранее собранный helper и не требует Swift toolchain runtime.
@@ -21,8 +25,8 @@
 ## Current milestone
 
 - Milestone: S0 — Truthful baseline and preference dataset
-- Status: S0 evaluation contract and S1 native signal/runtime integration implemented;
-  real 50–100-photo labels, corpus benchmark and measured baseline comparison still required
+- Status: S0 evaluation, S1 native runtime and S2 Swipe Score v1 implementation exist;
+  real labels, corpus benchmark and measured uplift are still required before S0–S2 acceptance
 
 ## Product roadmap
 
@@ -70,6 +74,7 @@ human-labelled manifest + metric evaluator     — implemented; real labels stil
 schema v2 pairwise + Top-K score comparison    — implemented; real labels still pending
 native Vision synthetic smoke                  — aesthetics 0.663; feature print 768; all signals OK
 native signal provenance                       — schema v6; 4 signals per analyzed asset
+Swipe Score v1 persistence                     — schema v7; technical-first weighting replaced
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
@@ -78,7 +83,7 @@ disk Best → Photos native PhotoKit publish       — implemented; dry-run + ex
 native Swift helper                              — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 100 passed
+pytest                                           — 105 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

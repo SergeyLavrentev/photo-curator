@@ -101,6 +101,17 @@ uv run photo-curator vision-benchmark --project-id PROJECT_ID \
 `vision-scores.json` совместим с `acceptance-evaluate --scores`, поэтому Vision baseline
 сравнивается с technical-first scorer на неизменной held-out разметке.
 
+### Swipe Score v1
+
+Real-project pipeline сохраняет versioned Swipe Score отдельно от review decision. В нём
+есть generic Apple Vision aesthetics, relative rich Apple Photos signals, attention,
+best-in-series, portrait signal, technical penalty, confidence и model provenance.
+`personal_delta` пока равен нулю до реализации S4 Personal Taste Profile.
+
+Техническая резкость/экспозиция больше не является главным weighted score: она может
+понизить рекомендацию или защитить решение, но сильный визуальный кадр способен обогнать
+технически идеальный слабый кадр. Качество формулы остаётся гипотезой до S0 held-out report.
+
 ### Human-labelled baseline acceptance
 
 Acceptance schema v2 измеряет safety/duplicates, pairwise preference, best-in-series и

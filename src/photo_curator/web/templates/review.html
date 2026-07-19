@@ -44,7 +44,7 @@
                data-reasons="{% for reason in asset.reasons %}{{ reason.code }}{% if reason.kind %} ({{ reason.kind }}{% if reason.confidence is not none %}, {{ '%.0f' | format(reason.confidence * 100) }}%{% endif %}){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}"
                data-quality="{{ asset.selection_score or 0 }}"
                data-sharpness="{{ '%.2f' | format(asset.sharpness_percentile or 0) }}"
-               data-components="резкость {{ asset.score_components.sharpness | default('—') }} · свет {{ asset.score_components.exposure | default('—') }} · контраст {{ asset.score_components.contrast | default('—') }} · серия {{ asset.score_components.series_rank | default(0) }} · уверенность {{ asset.score_components.selection_confidence | default('—') }} · штраф {{ asset.score_components.penalty | default(0) }}"
+               data-components="эстетика {{ asset.swipe_components.generic_aesthetics | default('—') }} · сюжет {{ asset.swipe_components.content_appeal | default('—') }} · композиция {{ asset.swipe_components.composition_and_attention | default('—') }} · серия {{ asset.swipe_components.best_in_series | default('—') }} · штраф {{ asset.swipe_components.technical_penalty | default(0) }}"
                data-note="{{ asset.manual_note or '' }}" tabindex="0">
         <label class="select-box"><input type="checkbox" aria-label="Выбрать {{ asset.current_filename or asset.asset_uuid }}"></label>
         {% if asset.cache_state == 'ready' %}
@@ -57,7 +57,8 @@
             <details class="asset-details"><summary aria-label="Почему принято это решение?">?</summary>
               <div><strong>{{ asset.current_filename }}</strong>
                 <p>{{ asset.width }}×{{ asset.height }}{% if asset.favorite %} · ★ Favorite{% endif %}{% if asset.has_adjustments %} · Edited{% endif %}</p>
-                <p>Оценка: <strong>{{ asset.selection_score or '—' }}/100</strong></p>
+                <p>Swipe Score: <strong>{{ asset.selection_score if asset.selection_score is not none else '—' }}/100</strong></p>
+                {% if asset.swipe_generic_score is not none %}<p>Базовый {{ '%.0f' | format(asset.swipe_generic_score) }} · лично {{ '%+.0f' | format(asset.swipe_personal_delta or 0) }} · уверенность {{ '%.0f' | format((asset.swipe_confidence or 0) * 100) }}%</p>{% endif %}
                 {% if asset.flags %}<p>{% for flag in asset.flags[:3] %}{{ flag_labels.get(flag, flag) }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
               </div>
             </details>

@@ -88,6 +88,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         jobs = repository.latest_jobs(connection, project_id)
         project = repository.get_project(connection, project_id)
         signals = repository.list_analysis_signals(connection, project_id)
+        swipe_scores = repository.list_swipe_scores(connection, project_id)
 
     assert project["state"] == "ready"
     assert summary["total"] == 12
@@ -104,6 +105,11 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     }
     assert all(signal["status"] == "ready" for signal in signals)
     assert all(signal["source_fingerprint"] for signal in signals)
+    assert len(swipe_scores) == 12
+    assert all(score["schema_version"] == 1 for score in swipe_scores)
+    assert all("generic_aesthetics" in score["components"] for score in swipe_scores)
+    assert all(asset["swipe_score"] is not None for asset in assets)
+    assert all(asset["swipe_personal_delta"] == 0 for asset in assets)
     assert {job["stage"] for job in jobs} == {
         "inventory",
         "previews",
@@ -286,4 +292,5 @@ def test_resume_from_duplicates_reuses_previews_and_metrics(tmp_path: Path) -> N
     assert Path(str(after["review_path"])).stat().st_mtime_ns == preview_mtime
     assert after["calculated_at"] == calculated_at
     assert after["selection_score"] is not None
-    assert after["score_components"]["selection_confidence"] >= 0
+    assert after["swipe_confidence"] >= 0
+    assert after["score_components"]["generic_aesthetics"] >= 0

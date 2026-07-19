@@ -386,6 +386,10 @@ def invalidate_asset_analysis(
         (project_id, asset_uuid),
     )
     connection.execute(
+        "DELETE FROM swipe_scores WHERE project_id=? AND asset_uuid=?",
+        (project_id, asset_uuid),
+    )
+    connection.execute(
         "DELETE FROM decisions WHERE project_id=? AND asset_uuid=? AND manual_override=0",
         (project_id, asset_uuid),
     )
@@ -576,15 +580,95 @@ def list_analysis_signals(
     return result
 
 
+def analysis_signals_by_asset(
+    connection: sqlite3.Connection, project_id: str
+) -> dict[str, dict[str, dict[str, object]]]:
+    result: dict[str, dict[str, dict[str, object]]] = {}
+    for signal in list_analysis_signals(connection, project_id):
+        result.setdefault(str(signal["asset_uuid"]), {})[str(signal["signal_kind"])] = signal
+    return result
+
+
+def upsert_swipe_score(
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuid: str,
+    *,
+    schema_version: int,
+    score: float,
+    generic_score: float,
+    personal_delta: float,
+    confidence: float,
+    components: dict[str, float],
+    reasons: list[dict[str, object]],
+    model_versions: dict[str, str],
+    source_fingerprint: str | None,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO swipe_scores (
+            project_id, asset_uuid, schema_version, score, generic_score,
+            personal_delta, confidence, components_json, reasons_json,
+            model_versions_json, source_fingerprint, calculated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
+            schema_version=excluded.schema_version,
+            score=excluded.score,
+            generic_score=excluded.generic_score,
+            personal_delta=excluded.personal_delta,
+            confidence=excluded.confidence,
+            components_json=excluded.components_json,
+            reasons_json=excluded.reasons_json,
+            model_versions_json=excluded.model_versions_json,
+            source_fingerprint=excluded.source_fingerprint,
+            calculated_at=excluded.calculated_at
+        """,
+        (
+            project_id,
+            asset_uuid,
+            schema_version,
+            score,
+            generic_score,
+            personal_delta,
+            confidence,
+            json.dumps(components, sort_keys=True),
+            json.dumps(reasons, sort_keys=True),
+            json.dumps(model_versions, sort_keys=True),
+            source_fingerprint,
+            utc_now(),
+        ),
+    )
+
+
+def list_swipe_scores(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
+    rows = connection.execute(
+        "SELECT * FROM swipe_scores WHERE project_id=? ORDER BY score DESC, asset_uuid",
+        (project_id,),
+    ).fetchall()
+    result = []
+    for raw in rows:
+        row = dict(raw)
+        row["components"] = json.loads(str(row["components_json"]))
+        row["reasons"] = json.loads(str(row["reasons_json"]))
+        row["model_versions"] = json.loads(str(row["model_versions_json"]))
+        result.append(row)
+    return result
+
+
 def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
     rows = connection.execute(
         """
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
-            d.manual_note, d.reviewed
+            d.manual_note, d.reviewed, s.score AS swipe_score,
+            s.generic_score AS swipe_generic_score, s.personal_delta AS swipe_personal_delta,
+            s.confidence AS swipe_confidence, s.components_json AS swipe_components_json,
+            s.reasons_json AS swipe_reasons_json, s.model_versions_json AS swipe_models_json,
+            s.schema_version AS swipe_schema_version
         FROM assets a
         LEFT JOIN metrics m USING (project_id, asset_uuid)
         LEFT JOIN decisions d USING (project_id, asset_uuid)
+        LEFT JOIN swipe_scores s USING (project_id, asset_uuid)
         WHERE a.project_id = ?
         ORDER BY a.taken_at, a.asset_uuid
         """,
@@ -1089,4 +1173,13 @@ def _decode_asset_row(row: dict[str, object]) -> dict[str, object]:
     )
     row["selection_score"] = score_reason.get("score")
     row["score_components"] = score_reason.get("components", {})
+    row["swipe_components"] = (
+        json.loads(str(row["swipe_components_json"])) if row.get("swipe_components_json") else {}
+    )
+    row["swipe_reasons"] = (
+        json.loads(str(row["swipe_reasons_json"])) if row.get("swipe_reasons_json") else []
+    )
+    row["swipe_model_versions"] = (
+        json.loads(str(row["swipe_models_json"])) if row.get("swipe_models_json") else {}
+    )
     return row

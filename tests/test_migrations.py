@@ -32,6 +32,7 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "publishes",
         "shared_copy_jobs",
         "analysis_signals",
+        "swipe_scores",
     } <= tables
     assert "destination_album_id" in publish_columns
 

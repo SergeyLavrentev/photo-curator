@@ -14,6 +14,7 @@ from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_
 from photo_curator.analysis.image_loader import load_normalized
 from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
 from photo_curator.analysis.normalization import percentile_ranks
+from photo_curator.analysis.swipe_score import apple_score_percentiles, calculate_swipe_score
 from photo_curator.analysis.technical import technical_metrics
 from photo_curator.analysis.vision import analyze_faces, vision_available
 from photo_curator.db import repository
@@ -503,20 +504,34 @@ class PipelineCoordinator:
         with database_connection(self.database_path) as connection:
             assets = repository.list_assets(connection, project_id)
             duplicate_by_asset = repository.duplicate_context(connection, project_id)
+            signal_by_asset = repository.analysis_signals_by_asset(connection, project_id)
             project = repository.get_project(connection, project_id)
             settings = json.loads(str(project.get("settings_json") or "{}"))
             density = str(settings.get("selection_density") or "balanced")
             job_id = repository.create_job(connection, project_id, "decisions", len(assets))
+            apple_percentiles = apple_score_percentiles(assets)
+            swipe_scores = [
+                calculate_swipe_score(
+                    asset,
+                    duplicate_by_asset.get(str(asset["asset_uuid"])),
+                    signal_by_asset.get(str(asset["asset_uuid"]), {}),
+                    apple_percentiles=apple_percentiles.get(str(asset["asset_uuid"]), {}),
+                )
+                for asset in assets
+            ]
             decisions = [
                 decide_asset(
                     asset,
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
+                    swipe_score,
                 )
-                for asset in assets
+                for asset, swipe_score in zip(assets, swipe_scores, strict=True)
             ]
             demoted = _diversity_demotions(assets, decisions)
-            for index, (asset, decision) in enumerate(zip(assets, decisions, strict=True), start=1):
+            for index, (asset, swipe_score, decision) in enumerate(
+                zip(assets, swipe_scores, decisions, strict=True), start=1
+            ):
                 if str(asset["asset_uuid"]) in demoted:
                     decision = replace(
                         decision,
@@ -524,6 +539,20 @@ class PipelineCoordinator:
                         flags=sorted({*decision.flags, "diversity_limit"}),
                         reasons=[*decision.reasons, {"code": "diversity_limit"}],
                     )
+                repository.upsert_swipe_score(
+                    connection,
+                    project_id,
+                    str(asset["asset_uuid"]),
+                    schema_version=swipe_score.schema_version,
+                    score=swipe_score.score,
+                    generic_score=swipe_score.generic_score,
+                    personal_delta=swipe_score.personal_delta,
+                    confidence=swipe_score.confidence,
+                    components=swipe_score.components,
+                    reasons=swipe_score.reasons,
+                    model_versions=swipe_score.model_versions,
+                    source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                )
                 repository.upsert_decision(
                     connection,
                     project_id,
@@ -550,7 +579,7 @@ class PipelineCoordinator:
                 str(asset["asset_uuid"])
                 for asset in sorted(
                     eligible,
-                    key=lambda value: float(value.get("technical_quality") or 0),
+                    key=lambda value: float(value.get("swipe_score") or 0),
                     reverse=True,
                 )[:best_count]
             }

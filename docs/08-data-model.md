@@ -1,8 +1,8 @@
 # Модель данных SQLite
 
-> Это схема переходного baseline плюс первая V2 migration. `analysis_signals` уже хранит
-> native Vision provenance; S2–S4 ещё должны добавить versioned Swipe Score, pairwise
-> preference examples и Personal Taste Profile.
+> Это схема переходного baseline плюс V2 migrations. `analysis_signals` хранит native
+> Vision provenance, а `swipe_scores` — versioned generic ranking. S4 ещё должен добавить
+> pairwise preference examples и Personal Taste Profile.
 
 ## V2 schema direction
 
@@ -25,6 +25,13 @@ render fingerprint, schema/engine/request revision, status, JSON value, duration
 
 Legacy face columns в `metrics` временно остаются projection для совместимости старого
 decision engine; источником provenance является `analysis_signals`.
+
+## `swipe_scores` (schema v7)
+
+Отдельная строка на asset хранит schema version, итоговый score, generic score,
+personal delta, confidence, components, короткие reasons, model/request provenance и
+source fingerprint. Review disposition остаётся в `decisions`: пользовательское решение
+не смешивается с ranking model и не теряется при пересчёте score.
 
 ## Connection settings
 
