@@ -50,7 +50,7 @@ Unedited:
 
 ## Publish contract
 
-Publisher:
+Для обычного Photos-проекта publisher:
 
 1. получает UUIDs только из repository;
 2. повторно валидирует их;
@@ -62,13 +62,28 @@ Publisher:
 
 Если `--add-to-album` или иной необходимый capability недоступен в текущей версии, publish отключается. Запрещены direct DB writes и UI scripting как fallback.
 
+Для проекта из service-owned disk snapshot финальный `Best` использует отдельный
+нативный PhotoKit helper:
+
+1. dry-run сохраняет неизменяемый список принятых UUID и не пишет в Photos;
+2. apply доступен только после явного подтверждения;
+3. перед apply повторно проверяются disposition, путь, размер и mtime каждого файла;
+4. PhotoKit создаёт новый regular album и импортирует локальные image copies;
+5. destination album identifier и результат импорта сохраняются в audit;
+6. частично выполненный import можно безопасно повторить: уже добавленные имена файлов
+   переиспользуются.
+
+Для дискового проекта Reject не публикуется: это не финальный результат и его импорт
+создавал бы лишние Photos assets. Direct DB writes, AppleScript и Photos UI не нужны.
+
 ## Shared copy contract
 
 Shared intake отделён от анализа. Сервис сначала сохраняет план и требует отдельного
 подтверждения, затем копирует только локально доступные photo renders в собственный
 persistent-каталог и атомарно записывает manifest. `LocalAlbumsProvider` включает этот
 snapshot в обычный album browser и pipeline. Видео и отсутствующие renders не подменяются
-JPEG-превью; Photos Library, AppleScript, PhotoKit writes и UI scripting не используются.
+JPEG-превью; intake не использует Photos Library writes, AppleScript, PhotoKit writes или
+UI scripting. PhotoKit используется позже только для отдельной подтверждённой публикации.
 
 ## Open in Photos
 

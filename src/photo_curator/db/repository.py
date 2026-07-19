@@ -955,16 +955,19 @@ def record_apply(
     stdout: str,
     stderr: str,
     return_code: int,
+    destination_album_id: str | None = None,
 ) -> None:
     connection.execute(
         """
         UPDATE publishes SET apply_stdout=?, apply_stderr=?, apply_return_code=?,
+            destination_album_id=COALESCE(?, destination_album_id),
             status=?, applied_at=? WHERE id=?
         """,
         (
             stdout,
             stderr,
             return_code,
+            destination_album_id,
             "applied" if return_code == 0 else "apply_failed",
             utc_now() if return_code == 0 else None,
             publish_id,

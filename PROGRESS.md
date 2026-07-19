@@ -44,19 +44,20 @@ spec traceability audit                        — polling/resume/missing/resolu
 ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
 local album provider → project API               — covered end-to-end in tests
-real Montenegro disk snapshot                    — 80 photos / 8,087,729 bytes / 372 videos skipped
-real disk-snapshot pipeline                      — ready; 31 selected / 37 review / 12 excluded / 2 series
-pytest                                           — 87 passed
-local PhotoCurator data roots                  — present after live intake investigation
-legacy osxphotos test album                     — 39 photos; stopped, retained pending user cleanup decision
+disk Best → Photos native PhotoKit publish       — implemented; dry-run + explicit approval gated
+native Swift helper                              — compiles on this Mac; real apply not run
+temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
+legacy 39-photo Photos test album                — removed; library assets left untouched
+pytest                                           — 91 passed
 ```
 
-The Chrome extension opened `127.0.0.1` directly and verified the compact workflow
+The browser opened `127.0.0.1` directly and verified the compact workflow
 at an exact 390 x 844 px viewport. The document client and scroll widths were both
 390 px, the console contained no warnings or errors, and a fast full-pipeline rerun
 returned to a clean `ready` screen without a stale launch message. A real 50–100
 photo human-labelled album remains the external release-quality gate. The real
-macOS Photos Best dry-run passed; apply was intentionally not executed.
+macOS Photos Best dry-run passed; native disk-snapshot apply was intentionally not
+executed against the real library and remains part of R7 acceptance.
 
 ## Previous MVP evidence — retained for history only
 

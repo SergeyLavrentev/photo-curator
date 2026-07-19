@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -10,7 +11,9 @@ from pathlib import Path
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
+from photo_curator.photos.native_publisher import NativePhotosImporter
 from photo_curator.photos.provider import PhotosProvider
+from photo_curator.utils.safe_paths import ensure_within
 from photo_curator.utils.subprocesses import CommandResult, find_executable, run_command
 
 LOGGER = logging.getLogger(__name__)
@@ -34,6 +37,7 @@ class PhotosPublisher:
         runner: Callable[[list[str]], CommandResult] = run_command,
         executable: str | None = None,
         enabled: bool = True,
+        local_importer: NativePhotosImporter | None = None,
     ) -> None:
         self.database_path = database_path
         self.paths = paths
@@ -41,6 +45,7 @@ class PhotosPublisher:
         self.runner = runner
         self.executable = executable or find_executable("osxphotos")
         self.enabled = enabled
+        self.local_importer = local_importer or NativePhotosImporter(paths, enabled=enabled)
         self._capability: bool | None = None
 
     @property
@@ -66,14 +71,8 @@ class PhotosPublisher:
             project = repository.get_project(connection, project_id)
             assets = repository.list_assets(connection, project_id)
             groups = repository.list_duplicate_groups(connection, project_id)
-        if str(project["album_id"]).startswith("local-"):
-            return PublishValidation(
-                [],
-                blockers=[
-                    "Дисковый альбом Photo Curator сначала проверяется локально; "
-                    "публикация в Photos требует отдельного import workflow"
-                ],
-            )
+        if self._is_local_project(project):
+            return self._validate_local(assets, kind)
         candidates = [
             asset
             for asset in assets
@@ -184,7 +183,22 @@ class PhotosPublisher:
                 uuid_file=str(uuid_file),
                 kind=kind,
             )
-        result = self.runner(self._command(uuid_file, album_name, dry_run=True))
+        if self._is_local_project(project):
+            result = CommandResult(
+                ["photokit-publish", "--dry-run"],
+                0,
+                json.dumps(
+                    {
+                        "mode": "dry-run",
+                        "album_name": album_name,
+                        "asset_count": len(validation.asset_uuids),
+                    },
+                    ensure_ascii=False,
+                ),
+                "",
+            )
+        else:
+            result = self.runner(self._command(uuid_file, album_name, dry_run=True))
         LOGGER.info(
             "Publish dry-run project=%s publish=%s assets=%d return_code=%d",
             project_id,
@@ -225,7 +239,10 @@ class PhotosPublisher:
     def apply(self, publish_id: str) -> dict[str, object]:
         with database_connection(self.database_path) as connection:
             publish = repository.get_publish(connection, publish_id)
-        if publish.get("status") != "dry_run_ok" or publish.get("dry_run_return_code") != 0:
+        if (
+            publish.get("status") not in {"dry_run_ok", "apply_failed"}
+            or publish.get("dry_run_return_code") != 0
+        ):
             raise ValueError("Успешный dry-run обязателен перед apply")
         uuid_file = Path(str(publish["uuid_file"]))
         if not uuid_file.is_file():
@@ -236,7 +253,28 @@ class PhotosPublisher:
         )
         if validation.blockers or prepared != validation.asset_uuids:
             raise ValueError("Source или решения изменились после dry-run; выполните новый dry-run")
-        result = self.runner(self._command(uuid_file, str(publish["album_name"]), dry_run=False))
+        with database_connection(self.database_path) as connection:
+            project = repository.get_project(connection, str(publish["project_id"]))
+            assets = repository.list_assets(connection, str(publish["project_id"]))
+        destination_album_id = None
+        if self._is_local_project(project):
+            by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
+            files = [Path(str(by_uuid[uuid]["source_path"])) for uuid in prepared]
+            try:
+                native_result = self.local_importer.publish(str(publish["album_name"]), files)
+                destination_album_id = str(native_result["album_identifier"])
+                result = CommandResult(
+                    ["photokit-publish"],
+                    0,
+                    json.dumps(native_result, ensure_ascii=False),
+                    "",
+                )
+            except Exception as error:
+                result = CommandResult(["photokit-publish"], 1, "", str(error)[:500])
+        else:
+            result = self.runner(
+                self._command(uuid_file, str(publish["album_name"]), dry_run=False)
+            )
         LOGGER.info(
             "Publish apply project=%s publish=%s assets=%d return_code=%d",
             publish["project_id"],
@@ -251,8 +289,56 @@ class PhotosPublisher:
                 stdout=result.stdout,
                 stderr=result.stderr,
                 return_code=result.returncode,
+                destination_album_id=destination_album_id,
             )
             return repository.get_publish(connection, publish_id)
+
+    @staticmethod
+    def _is_local_project(project: dict[str, object]) -> bool:
+        return str(project["album_id"]).startswith("local-")
+
+    def _validate_local(self, assets: list[dict[str, object]], kind: str) -> PublishValidation:
+        if kind != "best":
+            return PublishValidation(
+                [], blockers=["Для дискового проекта в Photos публикуется только финальный Best"]
+            )
+        candidates = [asset for asset in assets if asset.get("final_disposition") == "keep"]
+        accepted: list[str] = []
+        blockers: list[str] = []
+        root = self.paths.data_dir / "local_albums"
+        for row in candidates:
+            uuid = str(row["asset_uuid"])
+            value = row.get("source_path")
+            if row.get("cache_state") != "ready" or not value:
+                blockers.append(f"{uuid}: локальный источник отсутствует")
+                continue
+            try:
+                path = ensure_within(Path(str(value)), root)
+                stat = path.stat()
+            except (OSError, ValueError):
+                blockers.append(f"{uuid}: локальный источник недоступен")
+                continue
+            expected_size = row.get("source_size")
+            expected_mtime = row.get("source_mtime")
+            if expected_size is not None and stat.st_size != int(expected_size):
+                blockers.append(f"{uuid}: файл изменился после анализа")
+                continue
+            if expected_mtime is not None and abs(stat.st_mtime - float(expected_mtime)) > 0.01:
+                blockers.append(f"{uuid}: файл изменился после анализа")
+                continue
+            accepted.append(uuid)
+        if not accepted:
+            blockers.append("Нет отобранных фотографий")
+        if not self.local_importer.capability_available:
+            blockers.append("Нативная публикация через PhotoKit недоступна")
+        return PublishValidation(
+            sorted(accepted),
+            blockers=blockers,
+            warnings=[
+                "В Photos будут импортированы локальные копии Shared Album; "
+                "их разрешение может быть ниже оригиналов"
+            ],
+        )
 
     def _command(self, uuid_file: Path, album_name: str, *, dry_run: bool) -> list[str]:
         if not self.capability_available:

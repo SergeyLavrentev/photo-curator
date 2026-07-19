@@ -408,6 +408,7 @@ def create_app(
                 publish=latest,
                 publish_counts=publish_counts,
                 publish_kind=kind,
+                local_source=str(project["album_id"]).startswith("local-"),
                 csrf_token=secrets_.csrf_token,
             ),
         )

@@ -221,6 +221,7 @@ CREATE TABLE publishes (
     apply_stdout TEXT,
     apply_stderr TEXT,
     apply_return_code INTEGER,
+    destination_album_id TEXT,
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     applied_at TEXT,

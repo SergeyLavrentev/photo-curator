@@ -14,8 +14,8 @@ flowchart TD
     AN --> DB[(SQLite Project State)]
     DB --> UI[Local FastAPI/Jinja UI]
     UI --> PUB[PhotosPublisher]
-    PUB --> BA[Curated Best Album]
-    PUB --> RA[Optional Reject Album]
+    PUB -->|PhotoKit import after approval| BA[Curated Best Album]
+    PUB -->|Existing regular assets| RA[Optional Reject Album]
     BA --> PL
 ```
 
@@ -23,7 +23,8 @@ flowchart TD
 
 ### `photos/`
 
-Единственный слой, знающий об `osxphotos`, Photos Library paths и publish subprocesses.
+Единственный слой, знающий об `osxphotos`, PhotoKit helper, Photos Library paths и
+publish subprocesses.
 `SharedCopyCoordinator` читает только локальные Shared Album renders и создаёт
 service-owned disk snapshot; Shared Album и Photos Library остаются read-only.
 
@@ -52,8 +53,8 @@ HTML/UI/API. Не обращается к `osxphotos` напрямую, толь
 5. Duplicate stage строит connected components и leaders.
 6. DecisionEngine создаёт auto decisions, не затрагивая manual overrides.
 7. UI выполняет human review.
-8. Publisher revalidates source и создаёт UUID file для Best или Reject.
-9. Dry-run предшествует apply.
+8. Publisher revalidates source и создаёт immutable selection file для Best или Reject.
+9. Dry-run предшествует apply; disk Best импортируется через PhotoKit только после approval.
 
 ## Failure containment
 
@@ -67,7 +68,7 @@ HTML/UI/API. Не обращается к `osxphotos` напрямую, толь
 ```text
 web → services/coordinator → photos/pipeline/db
 analysis → только Pillow/NumPy/stdlib
-photos → osxphotos + subprocess wrapper
+photos → osxphotos + native PhotoKit helper + subprocess wrapper
 db → sqlite3
 ```
 

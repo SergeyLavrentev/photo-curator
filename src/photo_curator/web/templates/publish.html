@@ -14,6 +14,11 @@
   </section>
   <section class="publish-panel">
     <h2>{{ 'Best' if publish_kind == 'best' else 'Reject' }}-альбом Apple Photos</h2>
+    {% if local_source and publish_kind == 'best' %}
+      <p>После подтверждения Photo Curator импортирует принятые локальные копии в новый обычный альбом Photos. Приложение Photos открывать не требуется.</p>
+    {% elif local_source %}
+      <p>Для локальной копии Shared Album финальным результатом считается Best. Reject остаётся только в галерее проверки и не создаёт лишних копий в Photos.</p>
+    {% endif %}
     {% if validation %}
       {% for blocker in validation.blockers %}<p class="validation blocker">✕ {{ blocker }}</p>{% endfor %}
       {% for warning in validation.warnings %}<p class="validation warning">⚠ {{ warning }}</p>{% endfor %}
@@ -30,12 +35,12 @@
       <p>Альбом: {{ publish.album_name }}</p>
       <p>Dry-run return code: {{ publish.dry_run_return_code if publish.dry_run_return_code is not none else '—' }}.
         Полный audit сохранён только в локальной SQLite.</p>
-      <label class="confirmation"><input type="checkbox" id="publish-confirm"> Я понимаю: будет создан новый обычный альбом, фотографии не удаляются.</label>
+      <label class="confirmation"><input type="checkbox" id="publish-confirm"> Я проверил результат и подтверждаю создание нового обычного альбома; фотографии не удаляются.</label>
       <button class="primary" data-action="publish-apply" data-publish-id="{{ publish.id }}" {% if publish.status != 'dry_run_ok' %}disabled{% endif %}>2. Создать {{ 'Best' if publish_kind == 'best' else 'Reject' }}-альбом</button>
     </section>
   {% endif %}
   <section class="safety-panel"><div><p class="eyebrow">Безопасный результат</p><h2>Создаётся новый {{ 'Best' if publish_kind == 'best' else 'Reject' }}-альбом</h2></div>
-    <p>Оригиналы и исходный альбом не меняются. Даже Reject-альбом ничего не удаляет автоматически.</p></section>
+    <p>Оригиналы и исходный альбом не меняются. {% if local_source %}В Photos добавляются отдельные копии только после подтверждения.{% else %}Даже Reject-альбом ничего не удаляет автоматически.{% endif %}</p></section>
   {% if publish_kind == 'reject' %}
     <details class="publish-panel delete-instructions">
       <summary>Как безопасно удалить подтверждённые кадры после публикации</summary>

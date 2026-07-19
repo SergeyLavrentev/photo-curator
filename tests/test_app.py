@@ -333,7 +333,8 @@ def test_shared_album_copy_page_and_confirmed_plan_are_exposed(tmp_path: Path) -
     assert any(album["id"] == local_album_id for album in albums["regular"])
     assert created.status_code == 201
     assert project["project"]["settings"]["source_provenance"] == "service_shared_copy"
-    assert "Дисковый альбом Photo Curator" in publish.text
+    assert "импортирует принятые локальные копии" in publish.text
+    assert "Нет отобранных фотографий" in publish.text
 
 
 def test_media_route_does_not_accept_filesystem_path(tmp_path: Path) -> None:

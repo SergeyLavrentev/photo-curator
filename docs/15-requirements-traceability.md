@@ -17,6 +17,7 @@
 | Protect high-res original | leader/validation | shared-like copy fixture |
 | Manual override persistence | decisions/repository | restart/reanalysis test |
 | Dry-run before apply | publisher state machine | publisher mocks |
+| Approved disk Best to Photos | native PhotoKit importer | compile check + integration fake |
 | Unique Best/Reject albums | publisher kind and naming | publisher tests |
 | Score 0–100 and reasons | decision engine and gallery | decision/UI tests |
 | Bounded candidate generation | hash bands, time windows, valid bursts | scale tests |

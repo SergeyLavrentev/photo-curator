@@ -7,7 +7,7 @@
 3. Приложение не меняет originals.
 4. Приложение не меняет Favorite, keywords, title, description, location и date.
 5. Shared intake пишет только service-owned disk snapshot; отдельный publish может
-   добавить подтверждённые existing assets в новый regular Photos album.
+   импортировать подтверждённые Best-копии в новый regular Photos album.
 6. Реальному publish всегда предшествует отдельный dry-run.
 7. Каждый publish использует новый уникальный album name.
 8. Финальное удаление выполняет пользователь в Photos.app.
@@ -35,6 +35,7 @@
 - apply stdout/stderr/return code;
 - UUID file path;
 - publish album name и timestamp.
+- destination Photos album identifier для нативного импорта.
 
 ## Source drift
 
@@ -44,6 +45,9 @@
 - membership в source album;
 - library fingerprint;
 - блокирующие warnings.
+
+Для disk snapshot вместо Photos membership и library fingerprint проверяются безопасная
+принадлежность пути persistent root, размер и mtime файла.
 
 Удалённые после scan UUID исключить, но сохранить в audit.
 
@@ -61,9 +65,10 @@
 Перед apply показать:
 
 ```text
-Будет создан новый обычный альбом и в него будут добавлены ссылки
-на существующие фотографии. Фотографии не будут удалены, originals
-и metadata не будут изменены.
+Будет создан новый обычный альбом. Для обычного Photos-проекта в него
+добавляются существующие assets; для Shared snapshot импортируются отдельные
+локальные копии. Фотографии не будут удалены, исходные файлы и metadata
+не будут изменены.
 ```
 
 ## Destructive instruction

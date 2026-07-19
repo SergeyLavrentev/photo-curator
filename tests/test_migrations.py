@@ -16,6 +16,9 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
+        publish_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(publishes)").fetchall()
+        }
 
     assert version == SCHEMA_VERSION
     assert {
@@ -29,6 +32,7 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "publishes",
         "shared_copy_jobs",
     } <= tables
+    assert "destination_album_id" in publish_columns
 
 
 def test_migration_is_idempotent(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -211,6 +211,10 @@ CREATE TABLE shared_copy_jobs (
 );
 """
 
+MIGRATION_5 = """
+ALTER TABLE publishes ADD COLUMN destination_album_id TEXT;
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -233,4 +237,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 4:
         connection.executescript(MIGRATION_4)
         connection.execute("PRAGMA user_version = 4")
+        version = 4
+    if version < 5:
+        connection.executescript(MIGRATION_5)
+        connection.execute("PRAGMA user_version = 5")
     connection.commit()

@@ -5,9 +5,68 @@ import pytest
 
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
+from photo_curator.db.migrations import migrate
+from photo_curator.paths import default_application_paths
+from photo_curator.photos.fake_provider import FakePhotosProvider
+from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.publisher import PhotosPublisher, unique_album_name
+from photo_curator.photos.shared_copy import SharedCopyCoordinator
+from photo_curator.pipeline.coordinator import PipelineCoordinator
 from photo_curator.utils.subprocesses import CommandResult
 from tests.test_pipeline import build_pipeline
+
+
+class FakeNativeImporter:
+    capability_available = True
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[Path]]] = []
+
+    def publish(self, album_name: str, files: list[Path]) -> dict[str, object]:
+        self.calls.append((album_name, files))
+        return {"album_identifier": "photos-album-1", "imported": len(files), "reused": 0}
+
+
+class FailingOnceNativeImporter(FakeNativeImporter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    def publish(self, album_name: str, files: list[Path]) -> dict[str, object]:
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("synthetic partial failure")
+        return super().publish(album_name, files)
+
+
+def build_local_pipeline(tmp_path: Path):
+    paths = default_application_paths(tmp_path)
+    paths.ensure()
+    base = FakePhotosProvider(paths.cache_dir / "sources")
+    provider = LocalAlbumsProvider(base, paths.data_dir / "local_albums")
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+    copier = SharedCopyCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+    )
+    job = copier.prepare("demo-shared-album", mode="full", destination_album_name="Local")
+    copier.run(str(job["id"]))
+    with database_connection(paths.database) as connection:
+        completed = repository.get_shared_copy_job(connection, str(job["id"]))
+        album_id = str(completed["destination_album_id"])
+        album = next(album for album in provider.list_regular_albums() if album.id == album_id)
+        project_id = repository.create_project(
+            connection,
+            name="Local",
+            library=provider.get_current_library(),
+            album=album,
+            source_provenance="service_shared_copy",
+        )
+    coordinator = PipelineCoordinator(database_path=paths.database, paths=paths, provider=provider)
+    coordinator.run(project_id)
+    return paths, provider, project_id
 
 
 def test_unique_album_name_is_sanitized_and_bounded() -> None:
@@ -208,3 +267,89 @@ def test_provider_failure_becomes_publish_blocker(tmp_path: Path) -> None:
     validation = publisher.validate(project_id)
     assert validation.blockers == ["Photos Library недоступна; повторите Doctor/read gate"]
     assert "private library path" not in ";".join(validation.blockers)
+
+
+def test_local_project_publishes_approved_best_files_after_dry_run(tmp_path: Path) -> None:
+    paths, provider, project_id = build_local_pipeline(tmp_path)
+    importer = FakeNativeImporter()
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        local_importer=importer,
+    )
+
+    validation = publisher.validate(project_id, "best")
+    dry_run = publisher.dry_run(project_id, "best")
+
+    assert validation.asset_uuids
+    assert not validation.blockers
+    assert importer.calls == []
+    assert dry_run["status"] == "dry_run_ok"
+
+    applied = publisher.apply(str(dry_run["id"]))
+
+    assert applied["status"] == "applied"
+    assert applied["destination_album_id"] == "photos-album-1"
+    assert len(importer.calls) == 1
+    album_name, files = importer.calls[0]
+    assert album_name == dry_run["album_name"]
+    assert len(files) == len(validation.asset_uuids)
+    assert all(path.is_file() for path in files)
+    assert all(paths.data_dir / "local_albums" in path.parents for path in files)
+
+
+def test_local_project_reject_publish_is_not_supported(tmp_path: Path) -> None:
+    paths, provider, project_id = build_local_pipeline(tmp_path)
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        local_importer=FakeNativeImporter(),
+    )
+
+    assert publisher.validate(project_id, "reject").blockers == [
+        "Для дискового проекта в Photos публикуется только финальный Best"
+    ]
+
+
+def test_local_apply_requires_new_dry_run_after_file_changes(tmp_path: Path) -> None:
+    paths, provider, project_id = build_local_pipeline(tmp_path)
+    importer = FakeNativeImporter()
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        local_importer=importer,
+    )
+    dry_run = publisher.dry_run(project_id, "best")
+    selected_uuid = Path(str(dry_run["uuid_file"])).read_text().splitlines()[0]
+    with database_connection(paths.database) as connection:
+        selected = repository.get_asset(connection, project_id, selected_uuid)
+    source = Path(str(selected["source_path"]))
+    source.touch()
+
+    with pytest.raises(ValueError, match="новый dry-run"):
+        publisher.apply(str(dry_run["id"]))
+
+    assert importer.calls == []
+
+
+def test_failed_local_apply_can_retry_the_same_audited_plan(tmp_path: Path) -> None:
+    paths, provider, project_id = build_local_pipeline(tmp_path)
+    importer = FailingOnceNativeImporter()
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        local_importer=importer,
+    )
+    dry_run = publisher.dry_run(project_id, "best")
+
+    failed = publisher.apply(str(dry_run["id"]))
+    retried = publisher.apply(str(dry_run["id"]))
+
+    assert failed["status"] == "apply_failed"
+    assert "synthetic partial failure" in str(failed["apply_stderr"])
+    assert retried["status"] == "applied"
+    assert retried["destination_album_id"] == "photos-album-1"

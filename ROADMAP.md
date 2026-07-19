@@ -117,13 +117,18 @@ a service-owned disk snapshot, and no Shared intake action writes to Photos.
 - Review the curated gallery before any external write.
 - Create a new regular `PhotoCurator — <source> — Best` album from Selected.
 - Optionally create a separate Reject album from confirmed Excluded assets.
+- For a service-owned Shared snapshot, import approved Selected files through public
+  PhotoKit without opening Photos; do not publish its Reject copies.
 - Keep dry-run and explicit apply confirmation for every Photos write.
 - Offer a local ZIP of review renders; never label it as an original-file export.
 
-Acceptance: Best and Reject publishing are independently previewed, confirmed and audited.
+Acceptance: regular-library Best/Reject and disk-snapshot Best publishing are previewed,
+explicitly confirmed and audited.
 
 Verified on macOS: a temporary 20-photo real project produced a successful Best
 album `osxphotos` dry-run with 10 selected UUIDs. Apply was intentionally not run.
+The native disk-to-Photos helper compiles on macOS and its approval/state flow is
+covered with an integration fake; a real PhotoKit apply remains an R7 acceptance check.
 
 ## R7 — acceptance and release
 
