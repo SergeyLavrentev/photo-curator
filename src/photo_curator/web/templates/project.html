@@ -5,9 +5,12 @@
     <div><p class="eyebrow">{{ project.album_full_path }}</p><h1>{{ project.name }}</h1>
       <p class="hero-copy">Статус: <strong>{{ project.state }}</strong>. Результаты сохраняются после перезапуска.</p>
     </div>
-    <div class="button-row">
-      <button class="secondary" data-action="pipeline-start">Запустить анализ</button>
-      <a class="primary button-link" href="/projects/{{ project.id }}/review">Открыть ревью</a>
+    <div class="pipeline-actions">
+      <div class="button-row">
+        <button class="secondary" data-action="pipeline-start">Запустить анализ</button>
+        <a class="primary button-link" href="/projects/{{ project.id }}/review">Открыть ревью</a>
+      </div>
+      <p class="form-status" data-pipeline-status role="status"></p>
     </div>
   </section>
 

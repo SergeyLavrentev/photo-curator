@@ -217,6 +217,7 @@ def create_app(
                 summary=summary,
                 distribution=distribution,
                 stages=_stage_views(jobs, summary, latest_publish),
+                csrf_token=secrets_.csrf_token,
             ),
         )
 

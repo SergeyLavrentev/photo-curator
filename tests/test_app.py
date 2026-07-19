@@ -67,6 +67,7 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "Cache accessed" in response.text
     assert "Photos Library" in home.text
     assert "osxphotos" in home.text
+    assert '<meta name="csrf-token" content="csrf-secret">' in response.text
 
 
 def test_api_status_does_not_expose_local_paths(tmp_path: Path) -> None:

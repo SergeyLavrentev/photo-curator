@@ -136,6 +136,7 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 13px; font-weig
 input, select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 11px; padding: 12px; background: white;
   color: var(--ink); font: inherit; }
 .form-status { min-height: 20px; margin: 0; color: var(--red); }
+.pipeline-actions { display: grid; gap: 8px; }
 .project-nav { display: flex; gap: 6px; margin: 0 0 38px; padding: 5px; border: 1px solid var(--line);
   border-radius: 14px; background: var(--panel); overflow-x: auto; }
 .project-nav a, .project-nav button { flex: 0 0 auto; padding: 9px 13px; border: 0; border-radius: 10px; background: transparent;

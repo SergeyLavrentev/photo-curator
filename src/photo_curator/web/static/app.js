@@ -33,10 +33,18 @@ newProjectForm?.addEventListener("submit", async (event) => {
 
 document.querySelector('[data-action="pipeline-start"]')?.addEventListener("click", async (event) => {
   const root = document.querySelector("[data-project-id]");
-  event.currentTarget.disabled = true;
-  await api(`/api/projects/${root.dataset.projectId}/pipeline/start`, { method: "POST" });
-  sessionStorage.setItem("photo-curator-running", `${root.dataset.projectId}:0`);
-  window.location.reload();
+  const button = event.currentTarget;
+  const status = document.querySelector("[data-pipeline-status]");
+  button.disabled = true;
+  if (status) status.textContent = "Запускаем анализ…";
+  try {
+    await api(`/api/projects/${root.dataset.projectId}/pipeline/start`, { method: "POST" });
+    sessionStorage.setItem("photo-curator-running", `${root.dataset.projectId}:0`);
+    window.location.reload();
+  } catch (error) {
+    button.disabled = false;
+    if (status) status.textContent = `Не удалось запустить анализ: ${error.message}`;
+  }
 });
 
 const projectRoot = document.querySelector("[data-project-state][data-project-id]");
