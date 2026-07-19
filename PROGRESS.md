@@ -3,7 +3,7 @@
 ## Current milestone
 
 - Milestone: R7 — Acceptance and release audit
-- Status: Feature stages R0–R6 implemented; external visual and Photos apply gates remain
+- Status: Feature stages R0–R6 implemented; external visual and human-labelled gates remain
 
 ## Product roadmap
 
@@ -66,7 +66,7 @@ the new roadmap complete and must not be used as release acceptance.
 ## Current external acceptance gate
 
 The root failure from the old 1,671-photo run is covered by sentinel and bounded
-candidate tests. Release acceptance still requires the three R7 gates listed above.
+candidate tests. Release acceptance still requires the two external R7 gates above.
 
 ## Safety invariants verified in code
 
