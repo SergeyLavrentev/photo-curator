@@ -1,5 +1,4 @@
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -295,8 +294,6 @@ def test_shared_albums_are_returned_disabled(tmp_path: Path) -> None:
 
 def test_shared_album_copy_page_and_confirmed_plan_are_exposed(tmp_path: Path) -> None:
     app = make_app(tmp_path)
-    app.state.shared_copier.enabled = True
-    app.state.shared_copier.bridge = SimpleNamespace(capability_available=True)
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, "session-secret")
         client.cookies.set(CSRF_COOKIE, "csrf-secret")
@@ -312,6 +309,17 @@ def test_shared_album_copy_page_and_confirmed_plan_are_exposed(tmp_path: Path) -
             },
         )
         plan_page = client.get(planned.json()["url"])
+        app.state.shared_copier.run(planned.json()["id"])
+        copy_status = client.get(f"/api/shared-copies/{planned.json()['id']}").json()
+        local_album_id = copy_status["destination_album_id"]
+        albums = client.get("/api/albums").json()
+        created = client.post(
+            "/api/projects",
+            headers={"X-CSRF-Token": "csrf-secret"},
+            json={"album_id": local_album_id, "name": "Disk copy analysis"},
+        )
+        project = client.get(f"/api/projects/{created.json()['id']}").json()
+        publish = client.get(f"/projects/{created.json()['id']}/publish?kind=best")
 
     assert page.status_code == 200
     assert "Первые фотографии по времени" in page.text
@@ -321,6 +329,11 @@ def test_shared_album_copy_page_and_confirmed_plan_are_exposed(tmp_path: Path) -
     assert planned.json()["status"] == "planned"
     assert planned.json()["total_items"] == 3
     assert "Создать локальную копию" in plan_page.text
+    assert copy_status["status"] == "done"
+    assert any(album["id"] == local_album_id for album in albums["regular"])
+    assert created.status_code == 201
+    assert project["project"]["settings"]["source_provenance"] == "service_shared_copy"
+    assert "Дисковый альбом Photo Curator" in publish.text
 
 
 def test_media_route_does_not_accept_filesystem_path(tmp_path: Path) -> None:

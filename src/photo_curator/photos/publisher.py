@@ -66,6 +66,14 @@ class PhotosPublisher:
             project = repository.get_project(connection, project_id)
             assets = repository.list_assets(connection, project_id)
             groups = repository.list_duplicate_groups(connection, project_id)
+        if str(project["album_id"]).startswith("local-"):
+            return PublishValidation(
+                [],
+                blockers=[
+                    "Дисковый альбом Photo Curator сначала проверяется локально; "
+                    "публикация в Photos требует отдельного import workflow"
+                ],
+            )
         candidates = [
             asset
             for asset in assets

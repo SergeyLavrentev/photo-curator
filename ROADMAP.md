@@ -98,11 +98,10 @@ works at 390 px, and all statuses remain understandable without colour alone.
 
 - Keep existing regular Photos albums as the primary source.
 - Detect Shared Albums separately and offer partial (first N or selected) and full
-  photo-only local-working-copy flows when installed macOS/osxphotos capabilities
-  can import them safely.
-- Build an explicit plan, require confirmation, stage only local Shared Album renders
-  and create a new regular Photos album through a native public PhotoKit helper without
-  launching or scripting the Photos.app UI.
+  photo-only disk snapshot flows when local renders are available.
+- Build an explicit plan, require confirmation and copy Shared Album renders into a
+  persistent service-owned album with an atomic manifest. The album then enters the
+  same analysis pipeline without any Photos Library write.
 - Skip videos explicitly because the available local derivatives are JPEG previews,
   not playable source media.
 - Otherwise present an explicit import-to-library instruction instead of a dead
@@ -110,8 +109,8 @@ works at 390 px, and all statuses remain understandable without colour alone.
 - Record `regular_album` / `manual_shared_copy` / `service_shared_copy` provenance
   and warn when shared copies may have reduced resolution or metadata.
 
-Acceptance: the user always understands whether a source is analyzed directly,
-copied locally, or requires manual import.
+Acceptance: the user always understands whether a source is analyzed directly or from
+a service-owned disk snapshot, and no Shared intake action writes to Photos.
 
 ## R6 — outputs
 

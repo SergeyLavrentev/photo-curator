@@ -7,8 +7,8 @@ Photo Curator превращает большой обычный альбом Ap
 ## Primary persona
 
 Технически грамотный владелец Mac и iPhone, использующий Apple Photos и iCloud Photos.
-Пользователь хочет поручить приложению создание рабочей копии Shared Album и не хочет
-поддерживать постоянные JPEG-папки или вручную собирать альбом в Photos.
+Пользователь хочет поручить приложению создание управляемого дискового snapshot Shared
+Album и не хочет вручную поддерживать JPEG-папки или собирать альбом в Photos.
 
 ## Primary job to be done
 
@@ -17,8 +17,8 @@ Photo Curator превращает большой обычный альбом Ap
 ## User journey
 
 1. Пользователь выбирает Shared Album и объём копии: первые N, отмеченные или все фото.
-2. Проверяет план и подтверждает создание нового обычного Photos album.
-3. Выбирает созданный working album для анализа.
+2. Проверяет план и подтверждает создание service-owned disk album.
+3. Выбирает созданный локальный working album для анализа.
 4. Наблюдает pipeline и видит предупреждения.
 5. Просматривает `Selected / Review / Excluded`, оценки и серии.
 6. Исправляет решения и leaders.
@@ -29,8 +29,8 @@ Photo Curator превращает большой обычный альбом Ap
 ## Functional requirements
 
 - Regular album browser с folder path и количеством assets.
-- Capability-gated частичная/полная фотокопия Shared Album с планом, подтверждением,
-  повторным использованием дублей и явным пропуском видео.
+- Частичный/полный disk snapshot Shared Album с планом, подтверждением, resumable copy,
+  atomic manifest и явным пропуском видео.
 - Project state и resumable pipeline.
 - Preview cache без permanent originals.
 - Technical metrics и perceptual similarity.

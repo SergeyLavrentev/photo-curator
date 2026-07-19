@@ -80,8 +80,8 @@ Apple Photos
 
 ```text
 Apple Shared Album
-        ↓ план + подтверждённая локальная фотокопия
-Личная медиатека Apple Photos
+        ↓ план + подтверждённая дисковая копия
+Photo Curator local album (JPEG/PNG/HEIC + manifest)
         ↓
 Обычный рабочий альбом «Черногория»
         ↓
@@ -102,9 +102,9 @@ duplicate groups + decisions
 ручное Command+Delete в Photos.app
 ```
 
-Shared Albums не поддерживаются как прямой источник анализа. Photo Curator может
-создать из локально доступных photo renders отдельный обычный альбом после явного
-подтверждения пользователя.
+Shared Albums не поддерживаются как прямой источник анализа. Photo Curator создаёт
+из локально доступных photo renders собственный неизменяемый snapshot на диске после
+явного подтверждения пользователя; Photos Library при intake не изменяется.
 
 ---
 
@@ -134,11 +134,11 @@ Shared Albums не поддерживаются как прямой источн
 
 Пользователь выбирает первые N, отмеченные на странице или все доступные фотографии.
 Приложение проверяет локальные renders, сохраняет план и только после отдельного
-подтверждения вызывает встроенный capability-gated Swift/PhotoKit helper. Через публичный
-macOS API создаётся новый обычный альбом без запуска или UI scripting Photos.app;
-исходный Shared Album остаётся read-only. Видео явно пропускаются, потому что доступный
-derivative может быть только JPEG-preview, а не исходным видео. При отсутствии capability
-показывается ручной fallback.
+подтверждения копирует файлы в `Application Support/PhotoCurator/local_albums/<id>`.
+Atomic manifest фиксирует metadata и source paths, после чего локальный альбом появляется
+в общем селекторе и проходит обычный pipeline. Исходный Shared Album и Photos Library
+остаются read-only. Видео явно пропускаются, потому что доступный derivative может быть
+только JPEG-preview, а не исходным видео.
 
 В UI показать предупреждение:
 
@@ -1239,8 +1239,8 @@ Helper должен быть локальным, optional и без downloadable
 
 ```text
 Shared Album
-        ↓ native PhotoKit copy after confirmation
-Personal Photos Library
+        ↓ confirmed disk snapshot
+Photo Curator local album
         ↓
 Regular working album
         ↓

@@ -324,7 +324,7 @@ document.querySelector('[data-action="shared-copy-apply"]')?.addEventListener("c
   const root = document.querySelector("[data-shared-copy-job]");
   const confirmed = document.querySelector("#shared-copy-confirm")?.checked || false;
   if (!confirmed) {
-    document.querySelector("[data-copy-message]").textContent = "Подтвердите создание обычного альбома Photos";
+    document.querySelector("[data-copy-message]").textContent = "Подтвердите создание локального альбома Photo Curator";
     return;
   }
   event.currentTarget.disabled = true;

@@ -7,23 +7,8 @@ from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.fake_provider import FakePhotosProvider
+from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.shared_copy import SharedCopyCoordinator
-
-
-class FakePhotoKitBridge:
-    capability_available = True
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    def add_files(self, **kwargs) -> dict[str, object]:
-        self.calls.append(kwargs)
-        count = len(kwargs["files"])
-        return {
-            "album_identifier": kwargs["album_identifier"] or "photokit-album-id",
-            "imported": count,
-            "reused": 0,
-        }
 
 
 def _coordinator(tmp_path: Path):
@@ -31,19 +16,18 @@ def _coordinator(tmp_path: Path):
     paths.ensure()
     with database_connection(paths.database) as connection:
         migrate(connection)
-    provider = FakePhotosProvider(paths.cache_dir / "fixtures")
-    bridge = FakePhotoKitBridge()
+    base = FakePhotosProvider(paths.cache_dir / "fixtures")
+    provider = LocalAlbumsProvider(base, paths.data_dir / "local_albums")
     coordinator = SharedCopyCoordinator(
         database_path=paths.database,
         paths=paths,
         provider=provider,
-        bridge=bridge,
     )
-    return paths, provider, coordinator, bridge
+    return paths, provider, coordinator
 
 
-def test_shared_copy_sample_is_persisted_imported_and_cleaned(tmp_path: Path) -> None:
-    paths, _, coordinator, bridge = _coordinator(tmp_path)
+def test_shared_copy_sample_is_persisted_and_exposed_as_local_album(tmp_path: Path) -> None:
+    paths, provider, coordinator = _coordinator(tmp_path)
     job = coordinator.prepare(
         "demo-shared-album",
         mode="sample",
@@ -59,13 +43,17 @@ def test_shared_copy_sample_is_persisted_imported_and_cleaned(tmp_path: Path) ->
     assert result["processed_items"] == 4
     assert result["imported_items"] == 4
     assert result["reused_items"] == 0
-    assert not (paths.cache_dir / "_shared_copies" / str(job["id"])).exists()
-    assert bridge.calls[-1]["album_name"] == "Local Test"
-    assert len(bridge.calls[-1]["files"]) == 4
+    album_id = str(result["destination_album_id"])
+    albums = {album.id: album for album in provider.list_regular_albums()}
+    assert albums[album_id].name == "Local Test"
+    assets = provider.list_assets(album_id)
+    assert len(assets) == 4
+    assert all(asset.source_path and asset.source_path.is_file() for asset in assets)
+    assert all(paths.data_dir in asset.source_path.parents for asset in assets if asset.source_path)
 
 
 def test_shared_copy_rejects_ambiguous_or_unknown_selection(tmp_path: Path) -> None:
-    _, _, coordinator, _ = _coordinator(tmp_path)
+    _, _, coordinator = _coordinator(tmp_path)
 
     with pytest.raises(ValueError, match="Размер выборки"):
         coordinator.prepare("demo-shared-album", mode="sample", sample_size=5)
@@ -78,7 +66,7 @@ def test_shared_copy_rejects_ambiguous_or_unknown_selection(tmp_path: Path) -> N
 
 
 def test_shared_copy_does_not_append_to_an_existing_named_album(tmp_path: Path) -> None:
-    _, provider, coordinator, _ = _coordinator(tmp_path)
+    _, provider, coordinator = _coordinator(tmp_path)
     existing_name = provider.list_regular_albums()[0].name
 
     with pytest.raises(ValueError, match="уже существует"):
@@ -91,7 +79,7 @@ def test_shared_copy_does_not_append_to_an_existing_named_album(tmp_path: Path) 
 
 
 def test_running_shared_copy_is_interrupted_on_restart(tmp_path: Path) -> None:
-    paths, _, coordinator, _ = _coordinator(tmp_path)
+    paths, _, coordinator = _coordinator(tmp_path)
     job = coordinator.prepare("demo-shared-album", mode="full")
     with database_connection(paths.database) as connection:
         repository.update_shared_copy_job(
@@ -106,17 +94,14 @@ def test_running_shared_copy_is_interrupted_on_restart(tmp_path: Path) -> None:
     assert interrupted["status"] == "interrupted"
 
 
-def test_shared_copy_reuses_photokit_album_between_batches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    paths, _, coordinator, bridge = _coordinator(tmp_path)
-    monkeypatch.setattr("photo_curator.photos.shared_copy.IMPORT_BATCH_SIZE", 2)
+def test_shared_copy_reuses_files_when_resumed(tmp_path: Path) -> None:
+    paths, _, coordinator = _coordinator(tmp_path)
     job = coordinator.prepare("demo-shared-album", mode="full")
+    coordinator.run(str(job["id"]))
     coordinator.run(str(job["id"]))
 
     with database_connection(paths.database) as connection:
         result = repository.get_shared_copy_job(connection, str(job["id"]))
     assert result["status"] == "done"
-    assert len(bridge.calls) == 2
-    assert bridge.calls[0]["album_identifier"] is None
-    assert bridge.calls[1]["album_identifier"] == "photokit-album-id"
+    assert result["imported_items"] == 0
+    assert result["reused_items"] == 4

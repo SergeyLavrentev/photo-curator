@@ -24,6 +24,7 @@ from photo_curator.db.migrations import SCHEMA_VERSION, migrate
 from photo_curator.paths import ApplicationPaths, default_application_paths
 from photo_curator.photos.doctor import run_doctor
 from photo_curator.photos.fake_provider import FakePhotosProvider
+from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.publisher import PhotosPublisher
@@ -87,8 +88,13 @@ def create_app(
 ) -> FastAPI:
     app_paths = paths or default_application_paths()
     secrets_ = session_secrets or SessionSecrets.generate()
-    selected_provider = provider or (
+    base_provider = provider or (
         FakePhotosProvider(app_paths.cache_dir / "_demo_sources") if demo else _try_real_provider()
+    )
+    selected_provider = (
+        LocalAlbumsProvider(base_provider, app_paths.data_dir / "local_albums")
+        if base_provider
+        else None
     )
     coordinator = (
         PipelineCoordinator(
@@ -114,7 +120,7 @@ def create_app(
             database_path=app_paths.database,
             paths=app_paths,
             provider=selected_provider,
-            enabled=not demo,
+            enabled=True,
         )
         if selected_provider
         else None
@@ -470,7 +476,7 @@ def create_app(
     @app.post("/api/shared-copies/{job_id}/apply", status_code=202)
     async def apply_shared_copy(job_id: str, payload: SharedCopyApplyRequest) -> dict[str, object]:
         if not payload.confirmed:
-            raise HTTPException(400, "Подтвердите создание обычного альбома Photos")
+            raise HTTPException(400, "Подтвердите создание локального альбома Photo Curator")
         if not shared_copier:
             raise HTTPException(503, "Shared Album intake недоступен")
         try:

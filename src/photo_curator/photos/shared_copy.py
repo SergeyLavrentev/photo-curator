@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
 import shutil
-from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -14,117 +12,15 @@ from threading import Lock
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
+from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.provider import PhotoAlbum, PhotoAsset, PhotosProvider
-from photo_curator.utils.safe_paths import safe_rmtree
-from photo_curator.utils.subprocesses import CommandResult, find_executable, run_command
 
 LOGGER = logging.getLogger(__name__)
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff"}
-IMPORT_BATCH_SIZE = 25
-NATIVE_SOURCE = Path(__file__).parent / "native" / "photo_curator_photos.swift"
-NATIVE_INFO_PLIST = Path(__file__).parent / "native" / "PhotoCuratorPhotos-Info.plist"
-
-
-class PhotoKitBridge:
-    """Compile and invoke a small supported PhotoKit helper without Photos.app UI."""
-
-    def __init__(
-        self,
-        paths: ApplicationPaths,
-        *,
-        runner: Callable[..., CommandResult] = run_command,
-    ) -> None:
-        self.paths = paths
-        self.runner = runner
-        self.swiftc = find_executable("swiftc") or _xcrun_swiftc(runner)
-        self.executable = paths.data_dir / "native" / "photo-curator-photos-helper"
-        self.digest_file = self.executable.with_suffix(".sha256")
-        self._capability: bool | None = None
-
-    @property
-    def capability_available(self) -> bool:
-        if self._capability is None:
-            try:
-                self._ensure_compiled()
-                probe = self.runner([str(self.executable), "--capability"], timeout=30)
-                self._capability = probe.returncode == 0 and "photokit" in probe.stdout
-            except Exception:
-                LOGGER.warning("Native PhotoKit helper unavailable", exc_info=True)
-                self._capability = False
-        return self._capability
-
-    def add_files(
-        self,
-        *,
-        job_id: str,
-        album_name: str,
-        files: list[Path],
-        album_identifier: str | None,
-    ) -> dict[str, object]:
-        self._ensure_compiled()
-        request_path = self.paths.cache_dir / "_shared_copies" / job_id / "request.json"
-        request_path.write_text(
-            json.dumps(
-                {
-                    "album_name": album_name,
-                    "album_identifier": album_identifier,
-                    "files": [str(path) for path in files],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        result = self.runner([str(self.executable), str(request_path)], timeout=900)
-        if result.returncode != 0:
-            detail = next(
-                (line.strip() for line in reversed(result.stderr.splitlines()) if line.strip()),
-                "PhotoKit helper завершился с ошибкой",
-            )
-            raise RuntimeError(detail[-500:])
-        try:
-            return json.loads(result.stdout.splitlines()[-1])
-        except (IndexError, json.JSONDecodeError) as error:
-            raise RuntimeError("PhotoKit helper вернул некорректный результат") from error
-
-    def _ensure_compiled(self) -> None:
-        if not self.swiftc or not NATIVE_SOURCE.is_file() or not NATIVE_INFO_PLIST.is_file():
-            raise RuntimeError("Swift/PhotoKit toolchain недоступен")
-        digest = hashlib.sha256(
-            NATIVE_SOURCE.read_bytes() + NATIVE_INFO_PLIST.read_bytes()
-        ).hexdigest()
-        if (
-            self.executable.is_file()
-            and self.digest_file.is_file()
-            and self.digest_file.read_text().strip() == digest
-        ):
-            return
-        self.executable.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        result = self.runner(
-            [
-                self.swiftc,
-                str(NATIVE_SOURCE),
-                "-framework",
-                "Photos",
-                "-o",
-                str(self.executable),
-                "-Xlinker",
-                "-sectcreate",
-                "-Xlinker",
-                "__TEXT",
-                "-Xlinker",
-                "__info_plist",
-                "-Xlinker",
-                str(NATIVE_INFO_PLIST),
-            ],
-            timeout=180,
-        )
-        if result.returncode != 0:
-            raise RuntimeError((result.stderr or "Не удалось собрать PhotoKit helper")[-1000:])
-        self.digest_file.write_text(digest, encoding="utf-8")
 
 
 class SharedCopyCoordinator:
-    """Create a regular Photos album through the public native PhotoKit API."""
+    """Copy Shared Album renders into a persistent service-owned disk album."""
 
     def __init__(
         self,
@@ -132,14 +28,13 @@ class SharedCopyCoordinator:
         database_path: Path,
         paths: ApplicationPaths,
         provider: PhotosProvider,
-        bridge: PhotoKitBridge | None = None,
         enabled: bool = True,
     ) -> None:
         self.database_path = database_path
         self.paths = paths
         self.provider = provider
-        self.bridge = bridge or PhotoKitBridge(paths)
         self.enabled = enabled
+        self.local_provider = provider if isinstance(provider, LocalAlbumsProvider) else None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shared-copy")
         self._futures: dict[str, Future[None]] = {}
         self._lock = Lock()
@@ -148,7 +43,7 @@ class SharedCopyCoordinator:
 
     @property
     def capability_available(self) -> bool:
-        return self.enabled and self.bridge.capability_available
+        return self.enabled and self.local_provider is not None
 
     def shared_album(self, album_id: str) -> PhotoAlbum:
         albums = {album.id: album for album in self.provider.list_shared_albums()}
@@ -187,7 +82,7 @@ class SharedCopyCoordinator:
         asset_uuids: list[str] | None = None,
     ) -> dict[str, object]:
         if not self.capability_available:
-            raise ValueError("Нативный PhotoKit helper недоступен")
+            raise ValueError("Локальные альбомы Photo Curator недоступны")
         if mode not in {"full", "sample", "custom"}:
             raise ValueError("Неизвестный режим локальной копии")
         album = self.shared_album(album_id)
@@ -216,7 +111,7 @@ class SharedCopyCoordinator:
             )
         destination = _album_name(destination_album_name, album.name, mode)
         if any(item.name == destination for item in self.provider.list_regular_albums()):
-            raise ValueError("Обычный альбом с таким названием уже существует")
+            raise ValueError("Альбом с таким названием уже существует")
         with database_connection(self.database_path) as connection:
             job_id = repository.create_shared_copy_job(
                 connection,
@@ -248,14 +143,18 @@ class SharedCopyCoordinator:
                     reused=0,
                     warnings=0,
                     errors=0,
-                    message="Создание локальной копии поставлено в очередь",
+                    message="Создание дисковой копии поставлено в очередь",
                     clear_error=True,
                     reset_finished=True,
                 )
             self._futures[job_id] = self._executor.submit(self.run, job_id)
 
     def run(self, job_id: str) -> None:
-        staging = self.paths.cache_dir / "_shared_copies" / job_id
+        if not self.local_provider:
+            raise RuntimeError("LocalAlbumsProvider недоступен")
+        album_id = f"local-{job_id}"
+        album_root = self.local_provider.album_root(album_id)
+        assets_root = album_root / "assets"
         try:
             with database_connection(self.database_path) as connection:
                 job = repository.get_shared_copy_job(connection, job_id)
@@ -264,105 +163,75 @@ class SharedCopyCoordinator:
                     job_id,
                     status="running",
                     processed=0,
-                    message="Подготавливаем локальные файлы",
+                    message="Копируем фотографии в Photo Curator",
                     started=True,
                 )
             wanted = json.loads(str(job["asset_uuids_json"]))
             assets = {asset.uuid: asset for asset in self.assets(str(job["shared_album_id"]))}
-            staging.mkdir(parents=True, exist_ok=True, mode=0o700)
-            prepared: list[Path] = []
-            warnings = 0
+            assets_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            local_assets: list[PhotoAsset] = []
+            copied = reused = warnings = 0
             for index, asset_uuid in enumerate(wanted, start=1):
                 asset = assets.get(str(asset_uuid))
                 source = _shared_render(asset) if asset else None
-                if not source:
+                if not asset or not source:
                     warnings += 1
                 else:
-                    target = staging / f"{asset_uuid}{source.suffix.lower()}"
-                    if not target.is_file() or target.stat().st_size != source.stat().st_size:
+                    target = assets_root / f"{asset_uuid}{source.suffix.lower()}"
+                    if target.is_symlink():
+                        raise RuntimeError("Небезопасная ссылка в локальном альбоме")
+                    if target.is_file() and target.stat().st_size == source.stat().st_size:
+                        reused += 1
+                    else:
                         shutil.copy2(source, target)
-                    prepared.append(target)
+                        copied += 1
+                    local_assets.append(_local_asset(asset, target))
                 with database_connection(self.database_path) as connection:
                     repository.update_shared_copy_job(
                         connection,
                         job_id,
                         processed=index,
-                        warnings=warnings,
-                        message=f"Подготовлено {index} из {len(wanted)}",
-                    )
-            if len(prepared) != len(wanted):
-                raise RuntimeError("Не все Shared Album renders доступны локально")
-            imported = reused = 0
-            album_identifier = str(job.get("destination_album_id") or "") or None
-            for offset in range(0, len(prepared), IMPORT_BATCH_SIZE):
-                batch = prepared[offset : offset + IMPORT_BATCH_SIZE]
-                result = self.bridge.add_files(
-                    job_id=job_id,
-                    album_name=str(job["destination_album_name"]),
-                    files=batch,
-                    album_identifier=album_identifier,
-                )
-                album_identifier = str(result["album_identifier"])
-                imported += int(result.get("imported", 0))
-                reused += int(result.get("reused", 0))
-                with database_connection(self.database_path) as connection:
-                    repository.update_shared_copy_job(
-                        connection,
-                        job_id,
-                        destination_album_id=album_identifier,
-                        imported=imported,
+                        imported=copied,
                         reused=reused,
-                        message=f"Добавлено в Photos {min(offset + len(batch), len(prepared))} "
-                        f"из {len(prepared)}",
+                        warnings=warnings,
+                        message=f"Скопировано {index} из {len(wanted)}",
                     )
-            try:
-                self.provider.refresh_library()
-                matches = [
-                    album
-                    for album in self.provider.list_regular_albums()
-                    if album.name == str(job["destination_album_name"])
-                ]
-                if len(matches) == 1:
-                    album_identifier = matches[0].id
-                else:
-                    warnings += 1
-            except Exception:
-                warnings += 1
+            if len(local_assets) != len(wanted):
+                raise RuntimeError("Не все Shared Album renders доступны локально")
+            self.local_provider.write_album(
+                PhotoAlbum(
+                    id=album_id,
+                    name=str(job["destination_album_name"]),
+                    folder_path="Photo Curator Local",
+                    photo_count=len(local_assets),
+                ),
+                local_assets,
+            )
             with database_connection(self.database_path) as connection:
                 repository.update_shared_copy_job(
                     connection,
                     job_id,
                     status="done",
-                    processed=len(prepared),
-                    imported=imported,
+                    processed=len(local_assets),
+                    imported=copied,
                     reused=reused,
-                    destination_album_id=album_identifier,
+                    destination_album_id=album_id,
                     warnings=warnings,
-                    message="Локальная копия готова",
+                    message="Локальный альбом Photo Curator готов",
                     finished=True,
                 )
-            safe_rmtree(staging, self.paths.cache_dir)
         except Exception as error:
-            LOGGER.exception("Shared Album copy failed job=%s", job_id)
+            LOGGER.exception("Shared Album disk copy failed job=%s", job_id)
             with database_connection(self.database_path) as connection:
                 repository.update_shared_copy_job(
                     connection,
                     job_id,
                     status="error",
                     errors=1,
-                    message="Не удалось создать локальную копию",
+                    message="Не удалось создать дисковую копию",
                     error_text=str(error)[:500],
                     finished=True,
                 )
-
-
-def _xcrun_swiftc(runner: Callable[..., CommandResult]) -> str | None:
-    try:
-        result = runner(["xcrun", "--find", "swiftc"], timeout=30)
-        candidate = result.stdout.strip()
-        return candidate if result.returncode == 0 and Path(candidate).is_file() else None
-    except Exception:
-        return None
 
 
 def _shared_render(asset: PhotoAsset | None) -> Path | None:
@@ -376,10 +245,34 @@ def _shared_render(asset: PhotoAsset | None) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_size, default=None)
 
 
+def _local_asset(asset: PhotoAsset, path: Path) -> PhotoAsset:
+    return PhotoAsset(
+        uuid=asset.uuid,
+        original_filename=asset.original_filename,
+        current_filename=asset.current_filename,
+        taken_at=asset.taken_at,
+        date_added=asset.date_added,
+        width=asset.width,
+        height=asset.height,
+        original_width=asset.original_width,
+        original_height=asset.original_height,
+        orientation=asset.orientation,
+        favorite=asset.favorite,
+        hidden=asset.hidden,
+        has_adjustments=asset.has_adjustments,
+        is_live_photo=asset.is_live_photo,
+        is_burst=asset.is_burst,
+        burst_key=asset.burst_key,
+        burst_default_pick=asset.burst_default_pick,
+        source_path=path,
+        apple_scores=asset.apple_scores,
+    )
+
+
 def _album_name(value: str | None, source_name: str, mode: str) -> str:
     requested = re.sub(r"[/\n\r\t:]+", " — ", (value or "").strip()).strip(" —")
     if requested:
         return requested[:120]
-    label = "R7 Test" if mode != "full" else "Local Copy"
+    label = "Test" if mode != "full" else "Local Copy"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"PhotoCurator — {source_name} — {label} — {timestamp}"[:120]

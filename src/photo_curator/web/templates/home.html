@@ -51,8 +51,8 @@
     {% if shared_albums %}
       <details class="shared-intake">
         <summary>{{ shared_albums | length }} общих альбомов · можно создать локальную копию</summary>
-        <p>Photo Curator подготовит уменьшенные Shared Album renders и после вашего
-          подтверждения создаст новый обычный альбом Photos. Исходный общий альбом не меняется.</p>
+        <p>Photo Curator скопирует доступные Shared Album renders в собственный локальный
+          альбом на диске. Photos Library и исходный общий альбом не меняются.</p>
         <ul>{% for album in shared_albums %}<li><a href="/shared/{{ album.id }}/copy">{{ album.full_path }} · {{ album.photo_count }} фото{% if album.video_count %} · {{ album.video_count }} видео{% endif %}</a></li>{% endfor %}</ul>
       </details>
     {% endif %}

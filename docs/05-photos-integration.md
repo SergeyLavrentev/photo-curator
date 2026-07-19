@@ -65,11 +65,10 @@ Publisher:
 ## Shared copy contract
 
 Shared intake отделён от анализа. Сервис сначала сохраняет план и требует отдельного
-подтверждения, затем передаёт только локально доступные photo renders встроенному
-Swift/PhotoKit helper. Он создаёт regular album через `PHPhotoLibrary.performChanges`,
-не открывая Photos.app. Видео и отсутствующие renders не подменяются JPEG-превью.
-Успех повторно проверяется чтением Photos Library; direct DB writes, AppleScript и UI
-scripting для этого workflow запрещены.
+подтверждения, затем копирует только локально доступные photo renders в собственный
+persistent-каталог и атомарно записывает manifest. `LocalAlbumsProvider` включает этот
+snapshot в обычный album browser и pipeline. Видео и отсутствующие renders не подменяются
+JPEG-превью; Photos Library, AppleScript, PhotoKit writes и UI scripting не используются.
 
 ## Open in Photos
 

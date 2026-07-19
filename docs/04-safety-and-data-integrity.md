@@ -6,7 +6,8 @@
 2. Приложение не пишет напрямую в Photos SQLite.
 3. Приложение не меняет originals.
 4. Приложение не меняет Favorite, keywords, title, description, location и date.
-5. Единственная запись — add existing assets to a newly created regular album.
+5. Shared intake пишет только service-owned disk snapshot; отдельный publish может
+   добавить подтверждённые existing assets в новый regular Photos album.
 6. Реальному publish всегда предшествует отдельный dry-run.
 7. Каждый publish использует новый уникальный album name.
 8. Финальное удаление выполняет пользователь в Photos.app.
@@ -49,6 +50,8 @@
 ## Cache safety
 
 - Cache только внутри `~/Library/Caches/PhotoCurator`.
+- Persistent local albums только внутри
+  `~/Library/Application Support/PhotoCurator/local_albums` и содержат atomic manifest.
 - Recursive delete только после resolved-path validation.
 - Atomic writes для previews.
 - Source files только read-only.

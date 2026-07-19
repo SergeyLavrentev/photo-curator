@@ -42,9 +42,11 @@ home workflow                                  — album → density → analysi
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 ruff format / check                            — passed
-native Swift/PhotoKit helper capability        — compiled and passed; Photos.app UI not used
-Shared Album copy unit/API tests                — passed; live PhotoKit apply intentionally not run
-pytest                                         — 87 passed
+Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
+local album provider → project API               — covered end-to-end in tests
+real Montenegro disk snapshot                    — 80 photos / 8,087,729 bytes / 372 videos skipped
+real disk-snapshot pipeline                      — ready; 31 selected / 37 review / 12 excluded / 2 series
+pytest                                           — 87 passed
 local PhotoCurator data roots                  — present after live intake investigation
 legacy osxphotos test album                     — 39 photos; stopped, retained pending user cleanup decision
 ```

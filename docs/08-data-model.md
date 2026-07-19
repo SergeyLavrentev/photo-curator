@@ -13,6 +13,12 @@ PRAGMA busy_timeout = 5000;
 `projects.settings_json` stores `selection_density`, source photo/video counts and
 `source_provenance` (`regular_album`, `manual_shared_copy` or `service_shared_copy`).
 
+Service-owned albums находятся вне SQLite в
+`Application Support/PhotoCurator/local_albums/local-<job-id>/`: каталог `assets/`
+содержит независимые renders, а атомарный `manifest.json` — album metadata и snapshot
+каждого asset. Каталог без manifest считается незавершённой resumable-копией и не
+показывается в album browser.
+
 ## `projects`
 
 ```sql

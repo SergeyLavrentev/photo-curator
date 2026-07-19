@@ -2,7 +2,7 @@
 {% block title %}Локальная копия {{ album.name }} — Photo Curator{% endblock %}
 {% block content %}
   <section class="hero compact" data-shared-album-id="{{ album.id }}"{% if copy_job %} data-shared-copy-job="{{ copy_job.id }}"{% endif %}>
-    <div><p class="eyebrow">Shared Album → обычный альбом Photos</p><h1>{{ album.name }}</h1>
+    <div><p class="eyebrow">Shared Album → локальный альбом Photo Curator</p><h1>{{ album.name }}</h1>
       <p class="hero-copy">{{ total_photos }} фото{% if album.video_count %} · {{ album.video_count }} видео не копируются{% endif %}</p></div>
     <a class="secondary button-link" href="/">Назад к проектам</a>
   </section>
@@ -13,7 +13,7 @@
 
   {% if not copy_available %}
     <aside class="notice warning" role="alert"><span aria-hidden="true">!</span><p>
-      <strong>Автоматическая копия недоступна.</strong> Нативный PhotoKit helper не прошёл capability gate.</p></aside>
+      <strong>Автоматическая копия недоступна.</strong> Локальное хранилище Photo Curator недоступно.</p></aside>
   {% endif %}
 
   {% if copy_job %}
@@ -27,10 +27,10 @@
       <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="{{ copy_job.total_items }}" aria-valuenow="{{ copy_job.processed_items }}">
         <span style="width:{{ (copy_job.processed_items * 100 / copy_job.total_items) if copy_job.total_items else 0 }}%"></span></div>
       {% if copy_job.status in ['planned', 'interrupted', 'error'] %}
-        <label class="confirmation"><input type="checkbox" id="shared-copy-confirm"> Я понимаю: будет создан новый обычный альбом Photos; Shared Album не изменится.</label>
+        <label class="confirmation"><input type="checkbox" id="shared-copy-confirm"> Я понимаю: фотографии будут скопированы в локальное хранилище Photo Curator; Shared Album не изменится.</label>
         <button class="primary" data-action="shared-copy-apply">{% if copy_job.status == 'planned' %}Создать локальную копию{% else %}Повторить создание{% endif %}</button>
       {% elif copy_job.status == 'done' %}
-        <p class="success-copy"><strong>Готово.</strong> Импортировано {{ copy_job.imported_items }}, переиспользовано без дублей {{ copy_job.reused_items }}.</p>
+        <p class="success-copy"><strong>Готово.</strong> Скопировано {{ copy_job.imported_items }}, переиспользовано при возобновлении {{ copy_job.reused_items }}.</p>
         <a class="primary button-link" href="/">Выбрать новый альбом для анализа</a>
       {% endif %}
       {% if copy_job.status == 'error' and copy_job.error_text %}<p class="error-copy">{{ copy_job.error_text }}</p>{% endif %}
@@ -39,7 +39,7 @@
     <section aria-labelledby="copy-options-title">
       <div class="section-heading"><div><p class="eyebrow">Что скопировать</p><h2 id="copy-options-title">Создать локальный альбом</h2></div></div>
       <form id="shared-copy-form">
-        <label>Название обычного альбома
+        <label>Название локального альбома
           <input name="destination_album_name" maxlength="120" placeholder="PhotoCurator — {{ album.name }} — R7 Test">
         </label>
         <div class="copy-options">
