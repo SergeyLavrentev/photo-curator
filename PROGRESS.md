@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: S0 quality harness переведён на acceptance schema v2: held-out A/B
+  preference accuracy, Top-K agreement, series leaders, safety metrics и versioned
+  score snapshots для честного сравнения engine versions. Реальная human-разметка
+  остаётся обязательной до завершения S0.
 - 2026-07-20: принят новый продуктовый контракт V2: универсальный Swipe Score,
   Personal Taste Profile, Apple Vision/Core ML baseline и целевой native SwiftUI/AppKit
   workflow. Roadmap и ADR готовы; реализация S0–S8 ещё не завершена.
@@ -10,8 +14,8 @@
 ## Current milestone
 
 - Milestone: S0 — Truthful baseline and preference dataset
-- Status: V2 roadmap accepted; existing R0–R6 implementation is the frozen transition
-  baseline, not proof of Swipe Score or native product completion
+- Status: evaluation code and baseline snapshot contract implemented; real 50–100-photo
+  human labels and measured baseline report still required
 
 ## Product roadmap
 
@@ -56,6 +60,7 @@ responsive navigation regression contract     — passed
 390 px overflow contract                       — scroll width 390 at a 390 px viewport
 home workflow                                  — album → density → analysis; technical details collapsed
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
+schema v2 pairwise + Top-K score comparison    — implemented; real labels still pending
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
@@ -64,7 +69,7 @@ disk Best → Photos native PhotoKit publish       — implemented; dry-run + ex
 native Swift helper                              — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 92 passed
+pytest                                           — 97 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

@@ -86,3 +86,23 @@ uv run ruff format --check .
 - Нет web routes, напрямую вызывающих `osxphotos`.
 - Нет необработанных source paths в HTML/JSON.
 - Manual overrides не теряются.
+
+## S0 preference acceptance
+
+Schema v2 human manifest содержит 50–100 реальных фотографий, disposition labels,
+как минимум одну серию с лидером, минимум 10 held-out A/B preferences и минимум 5
+ожидаемых Top-K UUID. Calibration pairs не участвуют в held-out метрике.
+
+Каждый scorer экспортируется в immutable JSON snapshot с `project_id`, engine name,
+engine version и числовым score для каждого размеченного asset. Один manifest оценивает
+несколько snapshots без изменения labels. Отчёт включает duplicate precision/recall,
+series leader accuracy, false exclusion rate, pairwise accuracy и Top-K overlap.
+
+```bash
+uv run photo-curator acceptance-template --project-id PROJECT_ID --output labels.json
+uv run photo-curator acceptance-score-export --project-id PROJECT_ID \
+  --engine-name technical-first-selection-score --engine-version legacy-v1 \
+  --output baseline.json
+uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
+  --labels labels.json --scores baseline.json --json
+```

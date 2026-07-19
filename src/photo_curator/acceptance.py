@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
@@ -12,7 +13,11 @@ DEFAULT_THRESHOLDS = {
     "duplicate_recall": 0.80,
     "leader_accuracy": 0.80,
     "false_exclusion_rate": 0.05,
+    "pairwise_accuracy": 0.65,
+    "top_k_overlap": 0.60,
 }
+MIN_HELD_OUT_PAIRS = 10
+MIN_TOP_K = 5
 
 
 class AcceptanceManifestError(ValueError):
@@ -21,9 +26,11 @@ class AcceptanceManifestError(ValueError):
 
 def build_manifest_template(project_id: str, assets: list[dict[str, object]]) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "project_id": project_id,
         "thresholds": DEFAULT_THRESHOLDS.copy(),
+        "preference_pairs": [],
+        "expected_top_k": [],
         "assets": [
             {
                 "asset_uuid": str(asset["asset_uuid"]),
@@ -38,6 +45,32 @@ def build_manifest_template(project_id: str, assets: list[dict[str, object]]) ->
     }
 
 
+def build_score_snapshot(
+    project_id: str,
+    assets: list[dict[str, object]],
+    *,
+    engine_name: str,
+    engine_version: str,
+) -> dict[str, object]:
+    scores: dict[str, float] = {}
+    for asset in assets:
+        if asset.get("no_longer_exists"):
+            continue
+        asset_uuid = str(asset["asset_uuid"])
+        score = asset.get("selection_score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            raise AcceptanceManifestError(
+                f"Проект не содержит завершённый selection_score для {asset_uuid}"
+            )
+        scores[asset_uuid] = float(score)
+    return {
+        "schema_version": 1,
+        "project_id": project_id,
+        "engine": {"name": engine_name, "version": engine_version},
+        "scores": scores,
+    }
+
+
 def load_manifest(path: Path) -> dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -48,14 +81,25 @@ def load_manifest(path: Path) -> dict[str, object]:
     return payload
 
 
+def load_score_snapshot(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise AcceptanceManifestError(f"Не удалось прочитать score snapshot: {error}") from error
+    if not isinstance(payload, dict):
+        raise AcceptanceManifestError("Корень score snapshot должен быть JSON-объектом")
+    return payload
+
+
 def evaluate_acceptance(
     manifest: dict[str, object],
     assets: list[dict[str, object]],
     predicted_groups: list[dict[str, object]],
     *,
     project_id: str,
+    score_snapshot: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    labels, thresholds = _validate_manifest(manifest, assets, project_id)
+    labels, thresholds, preferences = _validate_manifest(manifest, assets, project_id)
     labelled_ids = set(labels)
     asset_by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
     incomplete_results = sorted(
@@ -90,22 +134,47 @@ def evaluate_acceptance(
     ]
     false_exclusion_rate = _safe_ratio(len(false_exclusions), len(protected), empty_value=True)
 
+    preference_metrics: dict[str, float] = {}
+    preference_counts: dict[str, int] = {}
+    preference_details: dict[str, object] = {}
+    scorer: dict[str, str] | None = None
+    if preferences is not None:
+        score_map, scorer = _validated_score_map(
+            score_snapshot, asset_by_uuid, labelled_ids, project_id
+        )
+        preference_metrics, preference_counts, preference_details = _preference_metrics(
+            preferences, score_map
+        )
+
     metrics = {
         "duplicate_precision": precision,
         "duplicate_recall": recall,
         "leader_accuracy": leader_accuracy,
         "false_exclusion_rate": false_exclusion_rate,
+        **preference_metrics,
     }
     checks = {
         "duplicate_precision": precision >= thresholds["duplicate_precision"],
         "duplicate_recall": recall >= thresholds["duplicate_recall"],
         "leader_accuracy": leader_accuracy >= thresholds["leader_accuracy"],
         "false_exclusion_rate": false_exclusion_rate <= thresholds["false_exclusion_rate"],
+        **{
+            key: preference_metrics[key] >= thresholds[key]
+            for key in ("pairwise_accuracy", "top_k_overlap")
+            if key in preference_metrics
+        },
     }
     release_eligible = 50 <= len(labels) <= 100 and bool(truth_pairs) and leader_total > 0
+    if preferences is not None:
+        release_eligible = (
+            release_eligible
+            and preference_counts["held_out_pairs"] >= MIN_HELD_OUT_PAIRS
+            and preference_counts["expected_top_k"] >= MIN_TOP_K
+        )
     return {
-        "schema_version": 1,
+        "schema_version": int(manifest["schema_version"]),
         "project_id": project_id,
+        "scorer": scorer,
         "labelled_assets": len(labels),
         "release_eligible": release_eligible,
         "passed": release_eligible and all(checks.values()),
@@ -120,10 +189,12 @@ def evaluate_acceptance(
             "correct_leaders": leader_correct,
             "protected_from_exclusion": len(protected),
             "false_exclusions": len(false_exclusions),
+            **preference_counts,
         },
         "details": {
             "false_exclusion_uuids": sorted(false_exclusions),
             "leader_groups": leader_details,
+            **preference_details,
         },
     }
 
@@ -145,8 +216,15 @@ def format_report(report: dict[str, object]) -> str:
         "duplicate_recall": "Duplicate recall",
         "leader_accuracy": "Series leader accuracy",
         "false_exclusion_rate": "False exclusion rate",
+        "pairwise_accuracy": "Held-out pairwise accuracy",
+        "top_k_overlap": "Top-K agreement",
     }
+    scorer = report.get("scorer")
+    if isinstance(scorer, dict):
+        lines.append(f"Scorer: {scorer['name']} @ {scorer['version']}")
     for key, label in labels.items():
+        if key not in metrics:
+            continue
         value = float(metrics[key])
         lines.append(f"[{'PASS' if checks[key] else 'FAIL'}] {label}: {value:.1%}")
     lines.extend(
@@ -157,6 +235,15 @@ def format_report(report: dict[str, object]) -> str:
             f"Лидеры: {counts['correct_leaders']} / {counts['truth_groups']}",
             f"Ложные исключения: {counts['false_exclusions']} / "
             f"{counts['protected_from_exclusion']}",
+            *(
+                [
+                    f"Held-out пары: {counts['correct_preference_pairs']} верно + "
+                    f"{counts['tied_preference_pairs']} ничьих / {counts['held_out_pairs']}",
+                    f"Top-K: {counts['top_k_matches']} / {counts['expected_top_k']}",
+                ]
+                if "held_out_pairs" in counts
+                else []
+            ),
             f"Итог: {'PASS' if report['passed'] else 'FAIL'}",
         ]
     )
@@ -165,9 +252,14 @@ def format_report(report: dict[str, object]) -> str:
 
 def _validate_manifest(
     manifest: dict[str, object], assets: list[dict[str, object]], project_id: str
-) -> tuple[dict[str, dict[str, object]], dict[str, float]]:
-    if manifest.get("schema_version") != 1:
-        raise AcceptanceManifestError("Поддерживается только schema_version=1")
+) -> tuple[
+    dict[str, dict[str, object]],
+    dict[str, float],
+    dict[str, object] | None,
+]:
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise AcceptanceManifestError("Поддерживаются schema_version=1 и schema_version=2")
     if manifest.get("project_id") != project_id:
         raise AcceptanceManifestError("project_id manifest не совпадает с проектом")
     raw_assets = manifest.get("assets")
@@ -222,12 +314,166 @@ def _validate_manifest(
     if not isinstance(raw_thresholds, dict):
         raise AcceptanceManifestError("thresholds должен быть объектом")
     thresholds: dict[str, float] = {}
-    for key, default in DEFAULT_THRESHOLDS.items():
+    required_thresholds = list(DEFAULT_THRESHOLDS)
+    if schema_version == 1:
+        required_thresholds = required_thresholds[:4]
+    for key in required_thresholds:
+        default = DEFAULT_THRESHOLDS[key]
         value = raw_thresholds.get(key, default)
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value <= 1:
             raise AcceptanceManifestError(f"thresholds.{key} должен быть числом от 0 до 1")
         thresholds[key] = float(value)
-    return labels, thresholds
+    preferences = _validate_preferences(manifest, project_ids) if schema_version == 2 else None
+    return labels, thresholds, preferences
+
+
+def _validate_preferences(manifest: dict[str, object], project_ids: set[str]) -> dict[str, object]:
+    raw_pairs = manifest.get("preference_pairs")
+    if not isinstance(raw_pairs, list):
+        raise AcceptanceManifestError("preference_pairs должен быть массивом")
+    pairs: list[dict[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for index, raw_pair in enumerate(raw_pairs):
+        if not isinstance(raw_pair, dict):
+            raise AcceptanceManifestError(f"preference_pairs[{index}] должен быть объектом")
+        left = raw_pair.get("left_uuid")
+        right = raw_pair.get("right_uuid")
+        preferred = raw_pair.get("preferred_uuid")
+        split = raw_pair.get("split", "held_out")
+        if not all(isinstance(value, str) and value for value in (left, right, preferred)):
+            raise AcceptanceManifestError(
+                f"preference_pairs[{index}] требует left_uuid, right_uuid и preferred_uuid"
+            )
+        if left == right:
+            raise AcceptanceManifestError(f"preference_pairs[{index}] сравнивает фото с собой")
+        if left not in project_ids or right not in project_ids:
+            raise AcceptanceManifestError(f"preference_pairs[{index}] содержит неизвестное фото")
+        if preferred not in {left, right}:
+            raise AcceptanceManifestError(
+                f"preference_pairs[{index}].preferred_uuid должен быть одним из пары"
+            )
+        if split not in {"calibration", "held_out"}:
+            raise AcceptanceManifestError(
+                f"preference_pairs[{index}].split должен быть calibration или held_out"
+            )
+        key = tuple(sorted((left, right)))
+        if key in seen_pairs:
+            raise AcceptanceManifestError(f"Повторная preference pair: {left}, {right}")
+        seen_pairs.add(key)
+        pairs.append(
+            {
+                "left_uuid": left,
+                "right_uuid": right,
+                "preferred_uuid": preferred,
+                "split": split,
+            }
+        )
+
+    raw_top_k = manifest.get("expected_top_k")
+    if not isinstance(raw_top_k, list):
+        raise AcceptanceManifestError("expected_top_k должен быть массивом")
+    top_k: list[str] = []
+    for index, value in enumerate(raw_top_k):
+        if not isinstance(value, str) or value not in project_ids:
+            raise AcceptanceManifestError(f"expected_top_k[{index}] содержит неизвестное фото")
+        if value in top_k:
+            raise AcceptanceManifestError(f"Повтор в expected_top_k: {value}")
+        top_k.append(value)
+    return {"pairs": pairs, "expected_top_k": top_k}
+
+
+def _validated_score_map(
+    snapshot: dict[str, object] | None,
+    asset_by_uuid: dict[str, dict[str, object]],
+    labelled_ids: set[str],
+    project_id: str,
+) -> tuple[dict[str, float], dict[str, str]]:
+    if snapshot is None:
+        raw_scores = {
+            asset_uuid: asset_by_uuid[asset_uuid].get("selection_score")
+            for asset_uuid in labelled_ids
+        }
+        scorer = {"name": "selection_score", "version": "legacy-db-v1"}
+    else:
+        if snapshot.get("schema_version") != 1:
+            raise AcceptanceManifestError("Score snapshot требует schema_version=1")
+        if snapshot.get("project_id") != project_id:
+            raise AcceptanceManifestError("project_id score snapshot не совпадает с проектом")
+        engine = snapshot.get("engine")
+        raw_scores = snapshot.get("scores")
+        if not isinstance(engine, dict) or not isinstance(raw_scores, dict):
+            raise AcceptanceManifestError("Score snapshot требует engine и scores")
+        name, version = engine.get("name"), engine.get("version")
+        if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
+            raise AcceptanceManifestError("Score snapshot engine требует name и version")
+        scorer = {"name": name, "version": version}
+    scores: dict[str, float] = {}
+    for asset_uuid in labelled_ids:
+        value = raw_scores.get(asset_uuid)
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+        ):
+            raise AcceptanceManifestError(f"Нет числового score для {asset_uuid}")
+        scores[asset_uuid] = float(value)
+    unknown = set(raw_scores) - set(asset_by_uuid)
+    if unknown:
+        raise AcceptanceManifestError(f"Score snapshot содержит неизвестное фото: {min(unknown)}")
+    return scores, scorer
+
+
+def _preference_metrics(
+    preferences: dict[str, object], scores: dict[str, float]
+) -> tuple[dict[str, float], dict[str, int], dict[str, object]]:
+    raw_pairs = preferences["pairs"]
+    expected_top_k = preferences["expected_top_k"]
+    assert isinstance(raw_pairs, list)
+    assert isinstance(expected_top_k, list)
+    held_out = [pair for pair in raw_pairs if pair["split"] == "held_out"]
+    correct = 0
+    tied = 0
+    pair_details = []
+    for pair in held_out:
+        left, right = pair["left_uuid"], pair["right_uuid"]
+        left_score, right_score = scores[left], scores[right]
+        predicted = (
+            left if left_score > right_score else right if right_score > left_score else None
+        )
+        correct += int(predicted == pair["preferred_uuid"])
+        tied += int(predicted is None)
+        pair_details.append(
+            {
+                "left_uuid": left,
+                "right_uuid": right,
+                "preferred_uuid": pair["preferred_uuid"],
+                "predicted_uuid": predicted,
+                "correct": predicted == pair["preferred_uuid"],
+            }
+        )
+    pairwise_accuracy = (correct + tied * 0.5) / len(held_out) if held_out else 0.0
+    k = len(expected_top_k)
+    predicted_top_k = sorted(scores, key=lambda uuid: (-scores[uuid], uuid))[:k]
+    matches = len(set(expected_top_k) & set(predicted_top_k))
+    return (
+        {
+            "pairwise_accuracy": pairwise_accuracy,
+            "top_k_overlap": _safe_ratio(matches, k, empty_value=False),
+        },
+        {
+            "calibration_pairs": len(raw_pairs) - len(held_out),
+            "held_out_pairs": len(held_out),
+            "correct_preference_pairs": correct,
+            "tied_preference_pairs": tied,
+            "expected_top_k": k,
+            "top_k_matches": matches,
+        },
+        {
+            "preference_pairs": pair_details,
+            "expected_top_k": expected_top_k,
+            "predicted_top_k": predicted_top_k,
+        },
+    )
 
 
 def _truth_pairs(labels: dict[str, dict[str, object]]) -> set[tuple[str, str]]:

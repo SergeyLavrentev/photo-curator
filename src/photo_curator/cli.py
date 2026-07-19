@@ -16,9 +16,11 @@ from photo_curator import __version__
 from photo_curator.acceptance import (
     AcceptanceManifestError,
     build_manifest_template,
+    build_score_snapshot,
     evaluate_acceptance,
     format_report,
     load_manifest,
+    load_score_snapshot,
 )
 from photo_curator.app import create_app
 from photo_curator.db.connection import database_connection
@@ -43,13 +45,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["doctor", "version", "acceptance-template", "acceptance-evaluate"],
+        choices=[
+            "doctor",
+            "version",
+            "acceptance-template",
+            "acceptance-score-export",
+            "acceptance-evaluate",
+        ],
     )
     parser.add_argument("--demo", action="store_true", help="Запустить synthetic demo")
     parser.add_argument("--no-browser", action="store_true", help="Не открывать браузер")
     parser.add_argument("--port", type=valid_port, default=0, help="Loopback port; 0 — выбрать")
     parser.add_argument("--project-id", help="ID проекта для acceptance")
     parser.add_argument("--labels", type=Path, help="JSON manifest с человеческой разметкой")
+    parser.add_argument(
+        "--scores",
+        type=Path,
+        help="Versioned JSON score snapshot; без него используется текущий selection_score",
+    )
+    parser.add_argument(
+        "--engine-name",
+        default="technical-first-selection-score",
+        help="Имя scorer для acceptance-score-export",
+    )
+    parser.add_argument(
+        "--engine-version",
+        default="legacy-v1",
+        help="Версия scorer для acceptance-score-export",
+    )
     parser.add_argument("--output", type=Path, help="Записать template в файл вместо stdout")
     parser.add_argument("--json", action="store_true", help="Вывести acceptance-отчёт как JSON")
     return parser
@@ -96,8 +119,17 @@ def run_acceptance_command(args: argparse.Namespace) -> int:
         except KeyError as error:
             raise AcceptanceManifestError(f"Проект не найден: {args.project_id}") from error
         assets = list_assets(connection, args.project_id)
-        if args.command == "acceptance-template":
-            payload = build_manifest_template(args.project_id, assets)
+        if args.command in {"acceptance-template", "acceptance-score-export"}:
+            payload = (
+                build_manifest_template(args.project_id, assets)
+                if args.command == "acceptance-template"
+                else build_score_snapshot(
+                    args.project_id,
+                    assets,
+                    engine_name=args.engine_name,
+                    engine_version=args.engine_version,
+                )
+            )
             rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
             if args.output:
                 try:
@@ -106,7 +138,12 @@ def run_acceptance_command(args: argparse.Namespace) -> int:
                     raise AcceptanceManifestError(
                         f"Не удалось записать template: {error}"
                     ) from error
-                print(f"Acceptance template: {args.output}")
+                label = (
+                    "Acceptance template"
+                    if args.command == "acceptance-template"
+                    else "Acceptance score snapshot"
+                )
+                print(f"{label}: {args.output}")
             else:
                 print(rendered, end="")
             return 0
@@ -118,6 +155,9 @@ def run_acceptance_command(args: argparse.Namespace) -> int:
             assets,
             list_duplicate_groups(connection, args.project_id),
             project_id=args.project_id,
+            score_snapshot=load_score_snapshot(args.scores)
+            if getattr(args, "scores", None)
+            else None,
         )
     print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else format_report(report))
     return 0 if report["passed"] else 1
@@ -130,7 +170,11 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "doctor":
         raise SystemExit(print_doctor())
-    if args.command in {"acceptance-template", "acceptance-evaluate"}:
+    if args.command in {
+        "acceptance-template",
+        "acceptance-score-export",
+        "acceptance-evaluate",
+    }:
         try:
             result = run_acceptance_command(args)
         except AcceptanceManifestError as error:

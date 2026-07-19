@@ -87,8 +87,8 @@ uv run ruff format --check .
 
 ### Human-labelled baseline acceptance
 
-Существующий evaluator используется как исходный safety/duplicate baseline. В S0 он
-расширяется pairwise preference, best-in-series и Top-K разметкой.
+Acceptance schema v2 измеряет safety/duplicates, pairwise preference, best-in-series и
+Top-K agreement на одном воспроизводимом наборе.
 Команда создаёт шаблон с UUID и именами файлов, но не копирует фотографии:
 
 ```bash
@@ -98,18 +98,30 @@ uv run photo-curator acceptance-template --project-id PROJECT_ID \
 
 Для каждого фото человек заполняет `expected_disposition` (`keep`, `review` или
 `reject`). Кадры одной серии получают одинаковый `duplicate_group`; ровно один из
-них отмечается `expected_leader: true`. После этого отчёт строится одной командой:
+них отмечается `expected_leader: true`. Дополнительно заполняются минимум 10
+`preference_pairs` со `split: held_out` и минимум 5 UUID в `expected_top_k`.
+
+Текущий technical-first scorer можно заморозить в отдельный versioned snapshot:
+
+```bash
+uv run photo-curator acceptance-score-export --project-id PROJECT_ID \
+  --engine-name technical-first-selection-score --engine-version legacy-v1 \
+  --output baseline-scores.json
+```
+
+После этого отчёт строится одной командой:
 
 ```bash
 uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
-  --labels human-labels.json
+  --labels human-labels.json --scores baseline-scores.json
 ```
 
 Release-fixture должен содержать 50–100 фото и хотя бы одну размеченную серию.
 Пороговые значения записаны прямо в manifest: duplicate precision ≥ 90%, recall ≥
-80%, точность лидера серии ≥ 80%, доля ложных исключений ≤ 5%. Ключ `--json`
-выдаёт машинно-читаемый отчёт. Exit code `0` означает PASS, `1` — измеренный FAIL,
-`2` — некорректную или неполную разметку.
+80%, точность лидера серии ≥ 80%, доля ложных исключений ≤ 5%, pairwise accuracy ≥
+65%, Top-K overlap ≥ 60%. Один manifest можно прогнать против нескольких score snapshots.
+Ключ `--json` выдаёт машинно-читаемый отчёт. Exit code `0` означает PASS, `1` —
+измеренный FAIL, `2` — некорректную или неполную разметку.
 
 Полное ТЗ находится в `CODEX_PROJECT_SPEC.md`, тематические документы — в `docs/`,
 архитектурные решения — в `decisions/`. Инструкции для разработчика и текущий статус:

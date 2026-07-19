@@ -7,9 +7,11 @@ import pytest
 from photo_curator.acceptance import (
     AcceptanceManifestError,
     build_manifest_template,
+    build_score_snapshot,
     evaluate_acceptance,
     format_report,
     load_manifest,
+    load_score_snapshot,
 )
 from photo_curator.cli import build_parser, run_acceptance_command
 from photo_curator.db import repository
@@ -24,6 +26,7 @@ def _assets(count: int = 50) -> list[dict[str, object]]:
             "current_filename": f"IMG_{index:04d}.JPG",
             "final_disposition": "keep",
             "no_longer_exists": 0,
+            "selection_score": 100 - index,
         }
         for index in range(count)
     ]
@@ -37,6 +40,16 @@ def _manifest() -> dict[str, object]:
         row["expected_disposition"] = "keep"
     rows[0].update(duplicate_group="view-1", expected_leader=True)
     rows[1].update(duplicate_group="view-1")
+    template["preference_pairs"] = [
+        {
+            "left_uuid": f"asset-{index:02d}",
+            "right_uuid": f"asset-{index + 20:02d}",
+            "preferred_uuid": f"asset-{index:02d}",
+            "split": "held_out",
+        }
+        for index in range(10)
+    ]
+    template["expected_top_k"] = [f"asset-{index:02d}" for index in range(5)]
     return template
 
 
@@ -63,6 +76,8 @@ def test_perfect_human_labelled_fixture_passes_release_thresholds() -> None:
         "duplicate_recall": 1.0,
         "leader_accuracy": 1.0,
         "false_exclusion_rate": 0.0,
+        "pairwise_accuracy": 1.0,
+        "top_k_overlap": 1.0,
     }
     assert "Итог: PASS" in format_report(report)
 
@@ -86,6 +101,7 @@ def test_evaluator_reports_false_pair_wrong_leader_and_false_exclusions() -> Non
     assert report["metrics"]["duplicate_recall"] == 1.0
     assert report["metrics"]["leader_accuracy"] == 0.0
     assert report["metrics"]["false_exclusion_rate"] == 0.06
+    assert report["metrics"]["pairwise_accuracy"] == 1.0
     assert report["details"]["false_exclusion_uuids"] == [
         "asset-00",
         "asset-01",
@@ -125,16 +141,48 @@ def test_manifest_loader_and_cli_commands_are_available(tmp_path: Path) -> None:
     path.write_text("[]", encoding="utf-8")
     with pytest.raises(AcceptanceManifestError, match="JSON-объект"):
         load_manifest(path)
+    with pytest.raises(AcceptanceManifestError, match="JSON-объект"):
+        load_score_snapshot(path)
 
     parser = build_parser()
     template = parser.parse_args(["acceptance-template", "--project-id", "trip"])
     evaluate = parser.parse_args(
-        ["acceptance-evaluate", "--project-id", "trip", "--labels", str(path), "--json"]
+        [
+            "acceptance-evaluate",
+            "--project-id",
+            "trip",
+            "--labels",
+            str(path),
+            "--scores",
+            str(path),
+            "--json",
+        ]
     )
     assert template.command == "acceptance-template"
     assert evaluate.command == "acceptance-evaluate"
     assert evaluate.labels == path
+    assert evaluate.scores == path
     assert evaluate.json is True
+
+
+def test_score_snapshot_freezes_engine_identity_and_current_scores() -> None:
+    snapshot = build_score_snapshot(
+        "trip", _assets(3), engine_name="technical-first", engine_version="legacy-v1"
+    )
+
+    assert snapshot == {
+        "schema_version": 1,
+        "project_id": "trip",
+        "engine": {"name": "technical-first", "version": "legacy-v1"},
+        "scores": {"asset-00": 100.0, "asset-01": 99.0, "asset-02": 98.0},
+    }
+
+    incomplete = _assets(3)
+    incomplete[1]["selection_score"] = None
+    with pytest.raises(AcceptanceManifestError, match="selection_score"):
+        build_score_snapshot(
+            "trip", incomplete, engine_name="technical-first", engine_version="legacy-v1"
+        )
 
 
 def test_cli_exports_template_from_analyzed_project(
@@ -150,8 +198,11 @@ def test_cli_exports_template_from_analyzed_project(
             command="acceptance-template",
             project_id=project_id,
             labels=None,
+            scores=None,
             output=output,
             json=False,
+            engine_name="technical-first-selection-score",
+            engine_version="legacy-v1",
         )
     )
     payload = json.loads(output.read_text(encoding="utf-8"))
@@ -188,10 +239,95 @@ def test_cli_evaluates_database_results_but_rejects_too_small_release_fixture(
             command="acceptance-evaluate",
             project_id=project_id,
             labels=path,
+            scores=None,
             output=None,
             json=False,
+            engine_name="technical-first-selection-score",
+            engine_version="legacy-v1",
         )
     )
 
     assert result == 1
     assert "Release fixture: нет" in capsys.readouterr().out
+
+
+def test_cli_exports_current_score_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    monkeypatch.setattr("photo_curator.cli.default_application_paths", lambda: paths)
+    output = tmp_path / "baseline-scores.json"
+
+    result = run_acceptance_command(
+        Namespace(
+            command="acceptance-score-export",
+            project_id=project_id,
+            labels=None,
+            scores=None,
+            output=output,
+            json=False,
+            engine_name="technical-first-selection-score",
+            engine_version="legacy-v1",
+        )
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result == 0
+    assert payload["project_id"] == project_id
+    assert payload["engine"]["version"] == "legacy-v1"
+    assert len(payload["scores"]) == 12
+
+
+def test_external_score_snapshot_can_compare_a_new_engine() -> None:
+    scores = {f"asset-{index:02d}": float(index) for index in range(50)}
+    snapshot = {
+        "schema_version": 1,
+        "project_id": "trip",
+        "engine": {"name": "vision-aesthetics", "version": "1.0"},
+        "scores": scores,
+    }
+
+    report = evaluate_acceptance(
+        _manifest(),
+        _assets(),
+        [_group("predicted-1", ["asset-00", "asset-01"], "asset-00")],
+        project_id="trip",
+        score_snapshot=snapshot,
+    )
+
+    assert report["scorer"] == {"name": "vision-aesthetics", "version": "1.0"}
+    assert report["metrics"]["pairwise_accuracy"] == 0.0
+    assert report["metrics"]["top_k_overlap"] == 0.0
+    assert report["passed"] is False
+
+
+def test_v2_manifest_requires_valid_preferences_and_complete_scores() -> None:
+    manifest = _manifest()
+    manifest["preference_pairs"][0]["preferred_uuid"] = "asset-49"
+    with pytest.raises(AcceptanceManifestError, match="preferred_uuid"):
+        evaluate_acceptance(manifest, _assets(), [], project_id="trip")
+
+    manifest = _manifest()
+    assets = _assets()
+    assets[0]["selection_score"] = None
+    with pytest.raises(AcceptanceManifestError, match="Нет числового score"):
+        evaluate_acceptance(manifest, assets, [], project_id="trip")
+
+
+def test_schema_v1_manifest_remains_evaluable_without_preference_labels() -> None:
+    manifest = _manifest()
+    manifest["schema_version"] = 1
+    manifest.pop("preference_pairs")
+    manifest.pop("expected_top_k")
+
+    report = evaluate_acceptance(
+        manifest,
+        _assets(),
+        [_group("predicted-1", ["asset-00", "asset-01"], "asset-00")],
+        project_id="trip",
+    )
+
+    assert report["schema_version"] == 1
+    assert "pairwise_accuracy" not in report["metrics"]
+    assert report["passed"] is True
