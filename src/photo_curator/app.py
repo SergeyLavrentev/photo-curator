@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from photo_curator import __version__
+from photo_curator.analysis.native_vision import NativeVisionEngine
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import SCHEMA_VERSION, migrate
@@ -103,6 +104,7 @@ def create_app(
             database_path=app_paths.database,
             paths=app_paths,
             provider=selected_provider,
+            vision_engine=NativeVisionEngine(app_paths) if not demo else None,
         )
         if selected_provider
         else None

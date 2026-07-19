@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import platform
+import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -32,7 +33,9 @@ class NativeVisionEngine:
         self.paths = paths
         self.runner = runner
         self.swiftc = swiftc or find_executable("swiftc") or _xcrun_swiftc(runner)
-        self.executable = paths.data_dir / "native" / "photo-curator-vision"
+        bundled = _bundled_executable()
+        self._is_bundled = bundled is not None
+        self.executable = bundled or paths.data_dir / "native" / "photo-curator-vision"
         self.digest_file = self.executable.with_suffix(".sha256")
 
     def analyze(
@@ -90,6 +93,10 @@ class NativeVisionEngine:
         return payload
 
     def _ensure_compiled(self) -> None:
+        if self._is_bundled:
+            if self.executable.is_file():
+                return
+            raise NativeVisionError("В bundle отсутствует Vision helper")
         if not self.swiftc or not SOURCE.is_file():
             raise NativeVisionError("Swift/Vision toolchain недоступен")
         target = f"{platform.machine()}-apple-macosx13.0"
@@ -181,3 +188,10 @@ def _xcrun_swiftc(runner: Callable[..., CommandResult]) -> str | None:
     except Exception:
         LOGGER.debug("xcrun swiftc lookup failed", exc_info=True)
         return None
+
+
+def _bundled_executable() -> Path | None:
+    if not getattr(sys, "frozen", False):
+        return None
+    candidate = Path(sys.executable).resolve().parents[2] / "native" / "photo-curator-vision"
+    return candidate

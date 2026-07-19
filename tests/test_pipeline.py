@@ -11,6 +11,52 @@ from photo_curator.photos.fake_provider import FakePhotosProvider
 from photo_curator.pipeline.coordinator import PipelineCoordinator
 
 
+class FakeNativeVisionEngine:
+    def analyze(self, assets, *, warmup_iterations=0, measured_iterations=1):
+        del warmup_iterations, measured_iterations
+        return {
+            "schema_version": 1,
+            "engine": {"name": "apple-vision-native", "version": "test-v1"},
+            "assets": [
+                {
+                    "asset_uuid": asset_uuid,
+                    "aesthetics": {
+                        "overall_score": (index - 6) / 12,
+                        "is_utility": False,
+                        "revision": 1,
+                    },
+                    "feature_print": {
+                        "revision": 2,
+                        "element_count": 2,
+                        "element_type": 1,
+                        "data_base64": "AAAAAA==",
+                    },
+                    "attention_saliency": {
+                        "revision": 2,
+                        "heatmap_width": 68,
+                        "heatmap_height": 68,
+                        "salient_objects": [],
+                    },
+                    "faces": {
+                        "face_count": 0,
+                        "eyes_detected": 0,
+                        "best_capture_quality": None,
+                        "landmark_revision": 3,
+                        "quality_revision": 3,
+                    },
+                    "durations_ms": {
+                        "aesthetics": 10.0,
+                        "feature_print": 5.0,
+                        "attention_saliency": 20.0,
+                        "faces": 8.0,
+                    },
+                    "errors": {},
+                }
+                for index, (asset_uuid, _) in enumerate(assets)
+            ],
+        }
+
+
 def build_pipeline(tmp_path: Path):
     paths = default_application_paths(tmp_path)
     paths.ensure()
@@ -23,7 +69,12 @@ def build_pipeline(tmp_path: Path):
             library=provider.get_current_library(),
             album=provider.list_regular_albums()[0],
         )
-    coordinator = PipelineCoordinator(database_path=paths.database, paths=paths, provider=provider)
+    coordinator = PipelineCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        vision_engine=FakeNativeVisionEngine(),
+    )
     return paths, provider, coordinator, project_id
 
 
@@ -36,6 +87,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         assets = repository.list_assets(connection, project_id)
         jobs = repository.latest_jobs(connection, project_id)
         project = repository.get_project(connection, project_id)
+        signals = repository.list_analysis_signals(connection, project_id)
 
     assert project["state"] == "ready"
     assert summary["total"] == 12
@@ -43,6 +95,15 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     assert summary["duplicate_groups"] >= 1
     assert summary["reject"] >= 1
     assert all(asset["phash"] and asset["final_disposition"] for asset in assets)
+    assert len(signals) == 48
+    assert {signal["signal_kind"] for signal in signals} == {
+        "aesthetics",
+        "feature_print",
+        "attention_saliency",
+        "faces",
+    }
+    assert all(signal["status"] == "ready" for signal in signals)
+    assert all(signal["source_fingerprint"] for signal in signals)
     assert {job["stage"] for job in jobs} == {
         "inventory",
         "previews",
@@ -139,6 +200,34 @@ def test_stage_failure_marks_running_job_error_and_preserves_completed_stage(
     assert project["state"] == "error"
     assert jobs[0]["stage"] == "inventory" and jobs[0]["status"] == "done"
     assert jobs[1]["stage"] == "previews" and jobs[1]["status"] == "error"
+
+
+def test_native_vision_failure_is_persisted_without_breaking_review_pipeline(
+    tmp_path: Path,
+) -> None:
+    class FailingVisionEngine:
+        def analyze(self, assets, *, warmup_iterations=0, measured_iterations=1):
+            raise OSError("synthetic Vision capability failure")
+
+    paths, provider, _, project_id = build_pipeline(tmp_path)
+    coordinator = PipelineCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        vision_engine=FailingVisionEngine(),
+    )
+
+    coordinator.run(project_id)
+
+    with database_connection(paths.database) as connection:
+        signals = repository.list_analysis_signals(connection, project_id)
+        jobs = repository.latest_jobs(connection, project_id)
+        assets = repository.list_assets(connection, project_id)
+    assert len(signals) == 48
+    assert all(signal["status"] == "unavailable" for signal in signals)
+    assert all("synthetic Vision" in str(signal["error_text"]) for signal in signals)
+    assert next(job for job in jobs if job["stage"] == "vision")["status"] == "warning"
+    assert all(asset["final_disposition"] for asset in assets)
 
 
 def test_inventory_snapshot_tracks_render_metadata_video_count_and_removed_assets(

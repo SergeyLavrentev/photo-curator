@@ -1,5 +1,8 @@
 # Progress
 
+- 2026-07-20: native Vision встроен в real-project pipeline: schema v6 хранит каждый
+  signal с source fingerprint, engine/request revision, duration и unavailable reason;
+  packaged `.app` получает заранее собранный helper и не требует Swift toolchain runtime.
 - 2026-07-20: реализован первый S1 vertical slice: независимый Swift Apple Vision CLI,
   публичные aesthetics/feature-print/saliency/face requests, capability и request revision
   provenance, warmup/measured latency, Python runner, CLI export и acceptance score snapshot.
@@ -18,8 +21,8 @@
 ## Current milestone
 
 - Milestone: S0 — Truthful baseline and preference dataset
-- Status: evaluation code and baseline snapshot contract implemented; real 50–100-photo
-  human labels and measured baseline report still required
+- Status: S0 evaluation contract and S1 native signal/runtime integration implemented;
+  real 50–100-photo labels, corpus benchmark and measured baseline comparison still required
 
 ## Product roadmap
 
@@ -66,6 +69,7 @@ home workflow                                  — album → density → analysi
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
 schema v2 pairwise + Top-K score comparison    — implemented; real labels still pending
 native Vision synthetic smoke                  — aesthetics 0.663; feature print 768; all signals OK
+native signal provenance                       — schema v6; 4 signals per analyzed asset
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
@@ -74,7 +78,7 @@ disk Best → Photos native PhotoKit publish       — implemented; dry-run + ex
 native Swift helper                              — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 99 passed
+pytest                                           — 100 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

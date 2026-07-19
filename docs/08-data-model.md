@@ -1,9 +1,8 @@
 # Модель данных SQLite
 
-> Это схема текущего переходного baseline. S0–S4 добавят миграции для versioned
-> Swipe Score, signal provenance, pairwise preference examples и Personal Taste Profile.
-> До миграции нельзя маскировать новые компоненты внутри старого `selection_score` как
-> будто контракт уже реализован.
+> Это схема переходного baseline плюс первая V2 migration. `analysis_signals` уже хранит
+> native Vision provenance; S2–S4 ещё должны добавить versioned Swipe Score, pairwise
+> preference examples и Personal Taste Profile.
 
 ## V2 schema direction
 
@@ -16,6 +15,16 @@
 - `model_registry` с license, checksum, Core ML compute policy и compatibility.
 
 Manual decisions и safety protections остаются отдельными от learned preference state.
+
+## `analysis_signals` (schema v6)
+
+Каждый native result хранится отдельно по `(project_id, asset_uuid, signal_kind)`:
+`aesthetics`, `feature_print`, `attention_saliency` или `faces`. Запись содержит
+render fingerprint, schema/engine/request revision, status, JSON value, duration и
+явный error/unavailable reason. Изменение source render удаляет зависимые signals.
+
+Legacy face columns в `metrics` временно остаются projection для совместимости старого
+decision engine; источником provenance является `analysis_signals`.
 
 ## Connection settings
 

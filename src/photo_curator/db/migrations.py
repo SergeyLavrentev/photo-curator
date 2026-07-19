@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -215,6 +215,29 @@ MIGRATION_5 = """
 ALTER TABLE publishes ADD COLUMN destination_album_id TEXT;
 """
 
+MIGRATION_6 = """
+CREATE TABLE analysis_signals (
+    project_id TEXT NOT NULL,
+    asset_uuid TEXT NOT NULL,
+    signal_kind TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    engine_name TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    request_revision INTEGER,
+    source_fingerprint TEXT,
+    status TEXT NOT NULL,
+    value_json TEXT,
+    duration_ms REAL,
+    error_text TEXT,
+    calculated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, asset_uuid, signal_kind),
+    FOREIGN KEY (project_id, asset_uuid)
+      REFERENCES assets(project_id, asset_uuid) ON DELETE CASCADE
+);
+CREATE INDEX analysis_signals_project_kind
+ON analysis_signals(project_id, signal_kind, status);
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -241,4 +264,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 5:
         connection.executescript(MIGRATION_5)
         connection.execute("PRAGMA user_version = 5")
+        version = 5
+    if version < 6:
+        connection.executescript(MIGRATION_6)
+        connection.execute("PRAGMA user_version = 6")
     connection.commit()

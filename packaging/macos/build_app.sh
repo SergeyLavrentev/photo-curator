@@ -20,6 +20,7 @@ fi
 
 /bin/rm -rf "$BUILD_ROOT"
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES/backend" "$BACKEND_DIST" "$BACKEND_WORK" "$ICON_WORK"
+mkdir -p "$RESOURCES/native"
 
 cd "$PROJECT_ROOT"
 uv run pyinstaller \
@@ -30,6 +31,14 @@ uv run pyinstaller \
   "$SCRIPT_DIR/backend.spec"
 
 /usr/bin/ditto "$BACKEND_DIST/photo-curator-backend" "$RESOURCES/backend"
+xcrun swiftc \
+  -swift-version 5 \
+  -O \
+  -target "$(uname -m)-apple-macosx13.0" \
+  -framework Vision \
+  -framework CoreVideo \
+  "$PROJECT_ROOT/src/photo_curator/analysis/native/photo_curator_vision.swift" \
+  -o "$RESOURCES/native/photo-curator-vision"
 xcrun swiftc \
   -swift-version 5 \
   -parse-as-library \

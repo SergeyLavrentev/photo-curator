@@ -12,6 +12,7 @@ from threading import Lock, Semaphore
 from photo_curator.analysis.decision_engine import DecisionResult, decide_asset
 from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_equivalence_hash
 from photo_curator.analysis.image_loader import load_normalized
+from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
 from photo_curator.analysis.normalization import percentile_ranks
 from photo_curator.analysis.technical import technical_metrics
 from photo_curator.analysis.vision import analyze_faces, vision_available
@@ -36,10 +37,12 @@ class PipelineCoordinator:
         database_path: Path,
         paths: ApplicationPaths,
         provider: PhotosProvider,
+        vision_engine: NativeVisionEngine | None = None,
     ) -> None:
         self.database_path = database_path
         self.paths = paths
         self.provider = provider
+        self.vision_engine = vision_engine
         self._executor = ThreadPoolExecutor(
             max_workers=min(4, os.cpu_count() or 2), thread_name_prefix="photo-curator"
         )
@@ -319,6 +322,9 @@ class PipelineCoordinator:
                 if asset.get("cache_state") == "ready" and asset.get("phash")
             ]
             job_id = repository.create_job(connection, project_id, "vision", len(assets))
+        if self.vision_engine is not None:
+            self._stage_native_vision(project_id, job_id, assets)
+            return
         if not vision_available():
             with database_connection(self.database_path) as connection:
                 repository.update_job(
@@ -353,6 +359,136 @@ class PipelineCoordinator:
                     processed=index,
                     errors=errors,
                     message=f"Лица и глаза {index} из {len(assets)}",
+                )
+        with database_connection(self.database_path) as connection:
+            repository.update_job(
+                connection,
+                job_id,
+                status="warning" if errors else "done",
+                processed=len(assets),
+                errors=errors,
+            )
+
+    def _stage_native_vision(
+        self, project_id: str, job_id: str, assets: list[dict[str, object]]
+    ) -> None:
+        try:
+            report = self.vision_engine.analyze(
+                [(str(asset["asset_uuid"]), Path(str(asset["review_path"]))) for asset in assets]
+            )
+        except (NativeVisionError, OSError, ValueError) as error:
+            LOGGER.exception("Native Vision batch failed for %s", project_id)
+            with database_connection(self.database_path) as connection:
+                for asset in assets:
+                    for signal_kind in (
+                        "aesthetics",
+                        "feature_print",
+                        "attention_saliency",
+                        "faces",
+                    ):
+                        repository.upsert_analysis_signal(
+                            connection,
+                            project_id,
+                            str(asset["asset_uuid"]),
+                            signal_kind=signal_kind,
+                            schema_version=1,
+                            engine_name="apple-vision-native",
+                            engine_version="unknown",
+                            request_revision=None,
+                            source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                            status="unavailable",
+                            value=None,
+                            duration_ms=None,
+                            error_text=str(error)[-1000:],
+                        )
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="warning",
+                    processed=0,
+                    warnings=1,
+                    errors=len(assets),
+                    message="Apple Vision недоступен; сохранена причина",
+                )
+            return
+        engine = report.get("engine")
+        rows = report.get("assets")
+        raw_capabilities = report.get("capabilities")
+        capabilities = raw_capabilities if isinstance(raw_capabilities, dict) else {}
+        if not isinstance(engine, dict) or not isinstance(rows, list):
+            raise NativeVisionError("Native Vision report contract нарушен")
+        engine_name = str(engine.get("name") or "apple-vision-native")
+        engine_version = str(engine.get("version") or "unknown")
+        by_uuid = {
+            str(row["asset_uuid"]): row
+            for row in rows
+            if isinstance(row, dict) and row.get("asset_uuid")
+        }
+        errors = 0
+        for index, asset in enumerate(assets, start=1):
+            asset_uuid = str(asset["asset_uuid"])
+            row = by_uuid[asset_uuid]
+            raw_errors = row.get("errors")
+            signal_errors = raw_errors if isinstance(raw_errors, dict) else {}
+            durations = row.get("durations_ms")
+            signal_durations = durations if isinstance(durations, dict) else {}
+            asset_has_error = False
+            with database_connection(self.database_path) as connection:
+                for signal_kind in (
+                    "aesthetics",
+                    "feature_print",
+                    "attention_saliency",
+                    "faces",
+                ):
+                    value = row.get(signal_kind)
+                    error_text = signal_errors.get(signal_kind)
+                    status = (
+                        "ready"
+                        if isinstance(value, dict)
+                        else "unavailable"
+                        if capabilities.get(signal_kind) is False
+                        else "error"
+                    )
+                    if status != "ready":
+                        asset_has_error = True
+                    repository.upsert_analysis_signal(
+                        connection,
+                        project_id,
+                        asset_uuid,
+                        signal_kind=signal_kind,
+                        schema_version=1,
+                        engine_name=engine_name,
+                        engine_version=engine_version,
+                        request_revision=_signal_revision(signal_kind, value),
+                        source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                        status=status,
+                        value=value if isinstance(value, dict) else None,
+                        duration_ms=_optional_float(signal_durations.get(signal_kind)),
+                        error_text=(
+                            str(error_text)
+                            if error_text
+                            else "Vision signal returned no result"
+                            if status != "ready"
+                            else None
+                        ),
+                    )
+                faces = row.get("faces")
+                if isinstance(faces, dict):
+                    repository.update_vision_metrics(
+                        connection,
+                        project_id,
+                        asset_uuid,
+                        face_count=int(faces.get("face_count") or 0),
+                        face_capture_quality=_optional_float(faces.get("best_capture_quality")),
+                        eyes_detected=int(faces.get("eyes_detected") or 0),
+                    )
+                errors += int(asset_has_error)
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=index,
+                    errors=errors,
+                    message=f"Apple Vision {index} из {len(assets)}",
                 )
         with database_connection(self.database_path) as connection:
             repository.update_job(
@@ -424,6 +560,25 @@ class PipelineCoordinator:
 
 def _float(value: object) -> float | None:
     return float(value) if value is not None else None
+
+
+def _optional_float(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _optional_string(value: object) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _signal_revision(signal_kind: str, value: object) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    if signal_kind == "faces":
+        landmark = value.get("landmark_revision")
+        quality = value.get("quality_revision")
+        return int(landmark) if isinstance(landmark, int) and landmark == quality else None
+    revision = value.get("revision")
+    return int(revision) if isinstance(revision, int) else None
 
 
 def _diversity_demotions(

@@ -382,6 +382,10 @@ def invalidate_asset_analysis(
         "DELETE FROM metrics WHERE project_id=? AND asset_uuid=?", (project_id, asset_uuid)
     )
     connection.execute(
+        "DELETE FROM analysis_signals WHERE project_id=? AND asset_uuid=?",
+        (project_id, asset_uuid),
+    )
+    connection.execute(
         "DELETE FROM decisions WHERE project_id=? AND asset_uuid=? AND manual_override=0",
         (project_id, asset_uuid),
     )
@@ -494,6 +498,82 @@ def update_vision_metrics(
         """,
         (face_count, face_capture_quality, eyes_detected, project_id, asset_uuid),
     )
+
+
+def upsert_analysis_signal(
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuid: str,
+    *,
+    signal_kind: str,
+    schema_version: int,
+    engine_name: str,
+    engine_version: str,
+    request_revision: int | None,
+    source_fingerprint: str | None,
+    status: str,
+    value: dict[str, object] | None,
+    duration_ms: float | None,
+    error_text: str | None,
+) -> None:
+    if status not in {"ready", "error", "unavailable"}:
+        raise ValueError(f"Некорректный signal status: {status}")
+    connection.execute(
+        """
+        INSERT INTO analysis_signals (
+            project_id, asset_uuid, signal_kind, schema_version,
+            engine_name, engine_version, request_revision, source_fingerprint,
+            status, value_json, duration_ms, error_text, calculated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, asset_uuid, signal_kind) DO UPDATE SET
+            schema_version=excluded.schema_version,
+            engine_name=excluded.engine_name,
+            engine_version=excluded.engine_version,
+            request_revision=excluded.request_revision,
+            source_fingerprint=excluded.source_fingerprint,
+            status=excluded.status,
+            value_json=excluded.value_json,
+            duration_ms=excluded.duration_ms,
+            error_text=excluded.error_text,
+            calculated_at=excluded.calculated_at
+        """,
+        (
+            project_id,
+            asset_uuid,
+            signal_kind,
+            schema_version,
+            engine_name,
+            engine_version,
+            request_revision,
+            source_fingerprint,
+            status,
+            json.dumps(value, sort_keys=True) if value is not None else None,
+            duration_ms,
+            error_text,
+            utc_now(),
+        ),
+    )
+
+
+def list_analysis_signals(
+    connection: sqlite3.Connection, project_id: str, asset_uuid: str | None = None
+) -> list[dict[str, object]]:
+    clause = " AND asset_uuid=?" if asset_uuid is not None else ""
+    parameters = (project_id, asset_uuid) if asset_uuid is not None else (project_id,)
+    rows = connection.execute(
+        f"""
+        SELECT * FROM analysis_signals
+        WHERE project_id=?{clause}
+        ORDER BY asset_uuid, signal_kind
+        """,
+        parameters,
+    ).fetchall()
+    result = []
+    for raw in rows:
+        row = dict(raw)
+        row["value"] = json.loads(str(row["value_json"])) if row.get("value_json") else None
+        result.append(row)
+    return result
 
 
 def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:

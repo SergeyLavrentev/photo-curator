@@ -13,7 +13,7 @@ from photo_curator.photos.publisher import PhotosPublisher, unique_album_name
 from photo_curator.photos.shared_copy import SharedCopyCoordinator
 from photo_curator.pipeline.coordinator import PipelineCoordinator
 from photo_curator.utils.subprocesses import CommandResult
-from tests.test_pipeline import build_pipeline
+from tests.test_pipeline import FakeNativeVisionEngine, build_pipeline
 
 
 class FakeNativeImporter:
@@ -64,7 +64,12 @@ def build_local_pipeline(tmp_path: Path):
             album=album,
             source_provenance="service_shared_copy",
         )
-    coordinator = PipelineCoordinator(database_path=paths.database, paths=paths, provider=provider)
+    coordinator = PipelineCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        vision_engine=FakeNativeVisionEngine(),
+    )
     coordinator.run(project_id)
     return paths, provider, project_id
 
