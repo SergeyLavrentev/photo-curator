@@ -655,6 +655,159 @@ def list_swipe_scores(connection: sqlite3.Connection, project_id: str) -> list[d
     return result
 
 
+def ensure_taste_profile(
+    connection: sqlite3.Connection, profile_id: str = "default", name: str = "Мой вкус"
+) -> dict[str, object]:
+    now = utc_now()
+    connection.execute(
+        """
+        INSERT INTO taste_profiles (
+            id, name, status, schema_version, created_at, updated_at
+        ) VALUES (?, ?, 'collecting', 1, ?, ?)
+        ON CONFLICT(id) DO NOTHING
+        """,
+        (profile_id, name, now, now),
+    )
+    return get_taste_profile(connection, profile_id)
+
+
+def get_taste_profile(
+    connection: sqlite3.Connection, profile_id: str = "default"
+) -> dict[str, object]:
+    row = connection.execute("SELECT * FROM taste_profiles WHERE id=?", (profile_id,)).fetchone()
+    if not row:
+        raise KeyError(profile_id)
+    result = dict(row)
+    result["evidence"] = json.loads(str(result["evidence_json"]))
+    return result
+
+
+def add_preference_example(
+    connection: sqlite3.Connection,
+    *,
+    profile_id: str,
+    project_id: str | None,
+    left_uuid: str,
+    right_uuid: str,
+    preferred_uuid: str,
+    split: str,
+    feature_schema: str,
+    left_feature_base64: str,
+    right_feature_base64: str,
+) -> str:
+    if split not in {"calibration", "held_out"}:
+        raise ValueError("split должен быть calibration или held_out")
+    if left_uuid == right_uuid or preferred_uuid not in {left_uuid, right_uuid}:
+        raise ValueError("Некорректная preference pair")
+    ensure_taste_profile(connection, profile_id)
+    duplicate = connection.execute(
+        """
+        SELECT id FROM preference_examples
+        WHERE profile_id=? AND ((left_uuid=? AND right_uuid=?) OR
+              (left_uuid=? AND right_uuid=?))
+        LIMIT 1
+        """,
+        (profile_id, left_uuid, right_uuid, right_uuid, left_uuid),
+    ).fetchone()
+    if duplicate:
+        raise ValueError("Эта пара уже была оценена")
+    example_id = new_id()
+    now = utc_now()
+    connection.execute(
+        """
+        INSERT INTO preference_examples (
+            id, profile_id, project_id, left_uuid, right_uuid, preferred_uuid,
+            split, feature_schema, left_feature_base64, right_feature_base64, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            example_id,
+            profile_id,
+            project_id,
+            left_uuid,
+            right_uuid,
+            preferred_uuid,
+            split,
+            feature_schema,
+            left_feature_base64,
+            right_feature_base64,
+            now,
+        ),
+    )
+    connection.execute(
+        """
+        UPDATE taste_profiles
+        SET status=CASE WHEN weights_base64 IS NULL THEN 'collecting' ELSE 'stale' END,
+            updated_at=?
+        WHERE id=?
+        """,
+        (now, profile_id),
+    )
+    return example_id
+
+
+def list_preference_examples(
+    connection: sqlite3.Connection, profile_id: str = "default"
+) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT * FROM preference_examples
+        WHERE profile_id=? ORDER BY created_at, id
+        """,
+        (profile_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_taste_model(
+    connection: sqlite3.Connection,
+    profile_id: str,
+    *,
+    feature_schema: str,
+    model_version: str,
+    weights_base64: str,
+    dimension: int,
+    training_examples: int,
+    evidence: dict[str, object],
+) -> None:
+    cursor = connection.execute(
+        """
+        UPDATE taste_profiles SET
+            status='ready', feature_schema=?, model_version=?, weights_base64=?,
+            dimension=?, training_examples=?, evidence_json=?, updated_at=?
+        WHERE id=?
+        """,
+        (
+            feature_schema,
+            model_version,
+            weights_base64,
+            dimension,
+            training_examples,
+            json.dumps(evidence, sort_keys=True),
+            utc_now(),
+            profile_id,
+        ),
+    )
+    if not cursor.rowcount:
+        raise KeyError(profile_id)
+
+
+def reset_taste_profile(connection: sqlite3.Connection, profile_id: str = "default") -> None:
+    connection.execute("DELETE FROM taste_profiles WHERE id=?", (profile_id,))
+
+
+def set_taste_profile_paused(
+    connection: sqlite3.Connection, paused: bool, profile_id: str = "default"
+) -> dict[str, object]:
+    profile = ensure_taste_profile(connection, profile_id)
+    status = "paused" if paused else "ready" if profile.get("weights_base64") else "collecting"
+    connection.execute(
+        "UPDATE taste_profiles SET status=?, updated_at=? WHERE id=?",
+        (status, utc_now(), profile_id),
+    )
+    return get_taste_profile(connection, profile_id)
+
+
 def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
     rows = connection.execute(
         """

@@ -20,6 +20,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from photo_curator import __version__
 from photo_curator.analysis.native_vision import NativeVisionEngine
+from photo_curator.analysis.taste import (
+    TasteProfileError,
+    capture_preference,
+    train_taste_profile,
+)
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import SCHEMA_VERSION, migrate
@@ -79,6 +84,18 @@ class SharedCopyPrepareRequest(BaseModel):
 
 class SharedCopyApplyRequest(BaseModel):
     confirmed: bool
+
+
+class TastePreferenceCreate(BaseModel):
+    project_id: str
+    left_uuid: str
+    right_uuid: str
+    preferred_uuid: str
+    split: Literal["calibration", "held_out"] = "calibration"
+
+
+class TasteProfileStatusPatch(BaseModel):
+    paused: bool
 
 
 def create_app(
@@ -240,6 +257,9 @@ def create_app(
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
+        with database_connection(app_paths.database) as connection:
+            profile = repository.ensure_taste_profile(connection)
+            preference_count = len(repository.list_preference_examples(connection))
         return templates.TemplateResponse(
             request,
             "settings.html",
@@ -247,6 +267,7 @@ def create_app(
                 request,
                 demo=demo,
                 shutdown_available=shutdown_callback is not None,
+                taste_profile=_public_taste_profile(profile, preference_count),
                 csrf_token=secrets_.csrf_token,
             ),
         )
@@ -257,6 +278,65 @@ def create_app(
             raise HTTPException(409, "Остановка доступна при запуске через macOS-приложение")
         background_tasks.add_task(shutdown_callback)
         return {"status": "stopping"}
+
+    @app.get("/api/taste-profile")
+    async def taste_profile_api() -> dict[str, object]:
+        with database_connection(app_paths.database) as connection:
+            profile = repository.ensure_taste_profile(connection)
+            count = len(repository.list_preference_examples(connection))
+        return _public_taste_profile(profile, count)
+
+    @app.post("/api/taste-profile/preferences", status_code=201)
+    async def taste_preference_api(payload: TastePreferenceCreate) -> dict[str, object]:
+        with database_connection(app_paths.database) as connection:
+            try:
+                example_id = capture_preference(
+                    connection,
+                    project_id=payload.project_id,
+                    left_uuid=payload.left_uuid,
+                    right_uuid=payload.right_uuid,
+                    preferred_uuid=payload.preferred_uuid,
+                    split=payload.split,
+                )
+            except (TasteProfileError, ValueError) as error:
+                raise HTTPException(409, str(error)) from error
+            profile = repository.get_taste_profile(connection)
+            count = len(repository.list_preference_examples(connection))
+        return {"example_id": example_id, "profile": _public_taste_profile(profile, count)}
+
+    @app.post("/api/taste-profile/train")
+    async def taste_train_api() -> dict[str, object]:
+        with database_connection(app_paths.database) as connection:
+            try:
+                profile = train_taste_profile(connection)
+            except TasteProfileError as error:
+                raise HTTPException(409, str(error)) from error
+            count = len(repository.list_preference_examples(connection))
+        return _public_taste_profile(profile, count)
+
+    @app.patch("/api/taste-profile/status")
+    async def taste_status_api(payload: TasteProfileStatusPatch) -> dict[str, object]:
+        with database_connection(app_paths.database) as connection:
+            profile = repository.set_taste_profile_paused(connection, payload.paused)
+            count = len(repository.list_preference_examples(connection))
+        return _public_taste_profile(profile, count)
+
+    @app.get("/api/taste-profile/export")
+    async def taste_export_api() -> dict[str, object]:
+        with database_connection(app_paths.database) as connection:
+            profile = repository.ensure_taste_profile(connection)
+            examples = repository.list_preference_examples(connection)
+        return {
+            "schema_version": 1,
+            "profile": profile,
+            "examples": examples,
+        }
+
+    @app.delete("/api/taste-profile")
+    async def taste_reset_api() -> dict[str, str]:
+        with database_connection(app_paths.database) as connection:
+            repository.reset_taste_profile(connection)
+        return {"status": "deleted"}
 
     @app.get("/shared/{album_id}/copy", response_class=HTMLResponse)
     async def shared_copy_page(
@@ -1053,6 +1133,21 @@ def _public_publish(publish: dict[str, object]) -> dict[str, object]:
 
 def _public_job(job: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in job.items() if key != "error_text"}
+
+
+def _public_taste_profile(profile: dict[str, object], preference_count: int) -> dict[str, object]:
+    return {
+        "id": profile["id"],
+        "name": profile["name"],
+        "status": profile["status"],
+        "schema_version": profile["schema_version"],
+        "feature_schema": profile.get("feature_schema"),
+        "model_version": profile.get("model_version"),
+        "training_examples": int(profile.get("training_examples") or 0),
+        "preference_count": preference_count,
+        "evidence": profile.get("evidence") or {},
+        "updated_at": profile["updated_at"],
+    }
 
 
 def _shared_copy_public(job: dict[str, object]) -> dict[str, object]:

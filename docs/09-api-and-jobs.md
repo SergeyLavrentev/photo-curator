@@ -38,7 +38,17 @@ POST   /api/projects/<id>/decisions/recalculate
 POST   /api/projects/<id>/publish/dry-run
 POST   /api/projects/<id>/publish/apply
 POST   /api/projects/<id>/cache/clean
+GET    /api/taste-profile
+POST   /api/taste-profile/preferences
+POST   /api/taste-profile/train
+PATCH  /api/taste-profile/status
+GET    /api/taste-profile/export
+DELETE /api/taste-profile
 ```
+
+Taste profile routes являются переходным service contract для будущего native client.
+Preference capture принимает только UUID уже проанализированных assets с совместимыми
+native feature prints. Export содержит локальную модель и examples; reset удаляет их все.
 
 `DELETE /api/projects/<id>` удаляет project state и preview-cache. Для последнего проекта,
 связанного с service-owned Shared snapshot, также удаляются snapshot и его copy-job.

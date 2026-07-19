@@ -106,11 +106,34 @@ uv run photo-curator vision-benchmark --project-id PROJECT_ID \
 Real-project pipeline сохраняет versioned Swipe Score отдельно от review decision. В нём
 есть generic Apple Vision aesthetics, relative rich Apple Photos signals, attention,
 best-in-series, portrait signal, technical penalty, confidence и model provenance.
-`personal_delta` пока равен нулю до реализации S4 Personal Taste Profile.
+Без обученного profile `personal_delta` равен нулю; после calibration он рассчитывается
+локальной моделью и остаётся видимым отдельно от generic score.
 
 Техническая резкость/экспозиция больше не является главным weighted score: она может
 понизить рекомендацию или защитить решение, но сильный визуальный кадр способен обогнать
 технически идеальный слабый кадр. Качество формулы остаётся гипотезой до S0 held-out report.
+
+### Personal Taste Profile
+
+Локальный profile обучается на явных A/B comparisons поверх native Vision feature prints.
+Feature vectors копируются в profile storage, поэтому накопленный вкус не пропадает при
+удалении старого проекта. Pairwise linear model добавляет ограниченный `personal_delta`
+от −20 до +20, а generic score всегда остаётся видимым отдельно.
+
+Profile API поддерживает capture, training, pause/resume, export и полное удаление:
+
+```text
+GET    /api/taste-profile
+POST   /api/taste-profile/preferences
+POST   /api/taste-profile/train
+PATCH  /api/taste-profile/status
+GET    /api/taste-profile/export
+DELETE /api/taste-profile
+```
+
+Минимум три calibration comparisons нужны для локального обучения; продуктовый quality
+gate требует больше примеров и отдельные held-out comparisons. Profile никогда не меняет
+duplicate/source/resolution protections.
 
 ### Human-labelled baseline acceptance
 

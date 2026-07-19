@@ -1,8 +1,8 @@
 # Модель данных SQLite
 
 > Это схема переходного baseline плюс V2 migrations. `analysis_signals` хранит native
-> Vision provenance, а `swipe_scores` — versioned generic ranking. S4 ещё должен добавить
-> pairwise preference examples и Personal Taste Profile.
+> Vision provenance, `swipe_scores` — versioned ranking, а schema v8 — локальные pairwise
+> examples и Personal Taste Profile. Реальный personalization uplift ещё не принят.
 
 ## V2 schema direction
 
@@ -32,6 +32,16 @@ decision engine; источником provenance является `analysis_sign
 personal delta, confidence, components, короткие reasons, model/request provenance и
 source fingerprint. Review disposition остаётся в `decisions`: пользовательское решение
 не смешивается с ranking model и не теряется при пересчёте score.
+
+## `taste_profiles` и `preference_examples` (schema v8)
+
+Profile хранит status, feature schema, model version, Float32 weights, training count и
+quality evidence. Каждая явная A/B пара копирует оба feature-print payload: preference
+переживает удаление исходного project/assets. `split` разделяет calibration и held-out;
+held-out examples не участвуют в обучении.
+
+Pause не удаляет данные, reset удаляет profile и все examples каскадно. Safety state,
+manual decisions и Photos metadata не входят в learned profile.
 
 ## Connection settings
 

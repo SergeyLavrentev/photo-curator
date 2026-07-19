@@ -1,3 +1,5 @@
+import base64
+import struct
 from pathlib import Path
 
 import pytest
@@ -29,7 +31,9 @@ class FakeNativeVisionEngine:
                         "revision": 2,
                         "element_count": 2,
                         "element_type": 1,
-                        "data_base64": "AAAAAA==",
+                        "data_base64": base64.b64encode(
+                            struct.pack("<ff", index / 11, 1 - index / 11)
+                        ).decode("ascii"),
                     },
                     "attention_saliency": {
                         "revision": 2,

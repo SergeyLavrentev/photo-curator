@@ -279,6 +279,24 @@ if (gallery) {
 
 document.querySelector(".dialog-close")?.addEventListener("click", () => document.querySelector("#preview-dialog").close());
 
+document.querySelector('[data-action="toggle-taste"]')?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const nextPaused = button.dataset.paused !== "true";
+  const profile = await api("/api/taste-profile/status", {
+    method: "PATCH",
+    body: JSON.stringify({ paused: nextPaused }),
+  });
+  button.dataset.paused = String(profile.status === "paused");
+  button.textContent = profile.status === "paused" ? "Включить" : "Приостановить";
+  document.querySelector("[data-taste-status]").textContent = profile.status;
+});
+
+document.querySelector('[data-action="reset-taste"]')?.addEventListener("click", async () => {
+  if (!window.confirm("Удалить все предпочтения и локальную модель вкуса?")) return;
+  await api("/api/taste-profile", { method: "DELETE" });
+  window.location.reload();
+});
+
 const duplicateList = document.querySelector(".duplicate-list");
 duplicateList?.addEventListener("click", async (event) => {
   const decision = event.target.closest("[data-duplicate-decision]");

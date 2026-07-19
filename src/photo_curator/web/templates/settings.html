@@ -7,6 +7,26 @@
     <p class="hero-copy">Backend работает только локально на этом Mac и доступен
       через <code>127.0.0.1</code>.</p>
 
+    <section class="settings-panel" aria-labelledby="taste-title" data-taste-profile>
+      <div>
+        <p class="eyebrow">Персонализация</p>
+        <h2 id="taste-title">Мой вкус</h2>
+        <p>Статус: <strong data-taste-status>{{ taste_profile.status }}</strong> ·
+          сравнений: <strong>{{ taste_profile.preference_count }}</strong> ·
+          обучающих: <strong>{{ taste_profile.training_examples }}</strong></p>
+        <p>Профиль хранится только на этом Mac. Его можно приостановить, экспортировать
+          или полностью удалить; safety-правила от него не зависят.</p>
+      </div>
+      <div class="button-row">
+        <button class="secondary" type="button" data-action="toggle-taste"
+                data-paused="{{ 'true' if taste_profile.status == 'paused' else 'false' }}">
+          {{ 'Включить' if taste_profile.status == 'paused' else 'Приостановить' }}
+        </button>
+        <a class="secondary button-link" href="/api/taste-profile/export" download>Экспортировать</a>
+        <button class="danger" type="button" data-action="reset-taste">Удалить профиль</button>
+      </div>
+    </section>
+
     <section class="settings-panel" aria-labelledby="backend-title">
       <div>
         <p class="eyebrow">Состояние</p>

@@ -1,5 +1,8 @@
 # Progress
 
+- 2026-07-20: реализован Personal Taste vertical slice и schema v8: явные A/B examples,
+  calibration/held-out split, local pairwise Float32 model, persistent personal delta,
+  pause/export/reset и API end-to-end. Реальный held-out per-user uplift ещё не доказан.
 - 2026-07-20: реализован Swipe Score v1 и schema v7: Vision aesthetics — generic
   baseline, rich Apple/attention/series/portrait signals — enrichment, technical quality —
   penalty/safety layer. Score, confidence, reasons и model provenance сохраняются отдельно
@@ -25,8 +28,8 @@
 ## Current milestone
 
 - Milestone: S0 — Truthful baseline and preference dataset
-- Status: S0 evaluation, S1 native runtime and S2 Swipe Score v1 implementation exist;
-  real labels, corpus benchmark and measured uplift are still required before S0–S2 acceptance
+- Status: S0 harness, S1 native runtime, S2 score and S4 taste implementation exist;
+  real labels and measured generic/personal uplift remain acceptance gates
 
 ## Product roadmap
 
@@ -75,6 +78,7 @@ schema v2 pairwise + Top-K score comparison    — implemented; real labels stil
 native Vision synthetic smoke                  — aesthetics 0.663; feature print 768; all signals OK
 native signal provenance                       — schema v6; 4 signals per analyzed asset
 Swipe Score v1 persistence                     — schema v7; technical-first weighting replaced
+Personal Taste model                           — schema v8; pairwise train/pause/export/reset
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
@@ -83,7 +87,7 @@ disk Best → Photos native PhotoKit publish       — implemented; dry-run + ex
 native Swift helper                              — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 105 passed
+pytest                                           — 109 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

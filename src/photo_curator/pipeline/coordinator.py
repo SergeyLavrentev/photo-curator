@@ -15,6 +15,7 @@ from photo_curator.analysis.image_loader import load_normalized
 from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
 from photo_curator.analysis.normalization import percentile_ranks
 from photo_curator.analysis.swipe_score import apple_score_percentiles, calculate_swipe_score
+from photo_curator.analysis.taste import TasteProfileError, load_taste_model
 from photo_curator.analysis.technical import technical_metrics
 from photo_curator.analysis.vision import analyze_faces, vision_available
 from photo_curator.db import repository
@@ -505,6 +506,11 @@ class PipelineCoordinator:
             assets = repository.list_assets(connection, project_id)
             duplicate_by_asset = repository.duplicate_context(connection, project_id)
             signal_by_asset = repository.analysis_signals_by_asset(connection, project_id)
+            try:
+                taste_model = load_taste_model(connection)
+            except TasteProfileError:
+                LOGGER.exception("Taste profile is invalid; generic ranking will be used")
+                taste_model = None
             project = repository.get_project(connection, project_id)
             settings = json.loads(str(project.get("settings_json") or "{}"))
             density = str(settings.get("selection_density") or "balanced")
@@ -516,6 +522,16 @@ class PipelineCoordinator:
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     signal_by_asset.get(str(asset["asset_uuid"]), {}),
                     apple_percentiles=apple_percentiles.get(str(asset["asset_uuid"]), {}),
+                    personal_delta=(
+                        taste_model.personal_delta(
+                            signal_by_asset.get(str(asset["asset_uuid"]), {}).get(
+                                "feature_print", {}
+                            )
+                        )
+                        if taste_model
+                        else 0.0
+                    ),
+                    taste_model_version=taste_model.model_version if taste_model else None,
                 )
                 for asset in assets
             ]

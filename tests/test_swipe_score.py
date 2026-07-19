@@ -89,7 +89,8 @@ def test_missing_aesthetics_is_neutral_and_lowers_confidence() -> None:
     native = calculate_swipe_score(_asset("native"), None, _signals(0.2))
     fallback = calculate_swipe_score(_asset("fallback"), None, {})
 
-    assert fallback.generic_score == 50
+    assert fallback.generic_score == 52
+    assert fallback.components["generic_aesthetics"] == 50
     assert fallback.confidence < native.confidence
     assert fallback.personal_delta == 0
 

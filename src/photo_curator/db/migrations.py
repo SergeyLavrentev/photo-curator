@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -260,6 +260,40 @@ CREATE INDEX swipe_scores_project_score
 ON swipe_scores(project_id, score DESC);
 """
 
+MIGRATION_8 = """
+CREATE TABLE taste_profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    feature_schema TEXT,
+    model_version TEXT,
+    weights_base64 TEXT,
+    dimension INTEGER,
+    training_examples INTEGER NOT NULL DEFAULT 0,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE preference_examples (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    project_id TEXT,
+    left_uuid TEXT NOT NULL,
+    right_uuid TEXT NOT NULL,
+    preferred_uuid TEXT NOT NULL,
+    split TEXT NOT NULL,
+    feature_schema TEXT NOT NULL,
+    left_feature_base64 TEXT NOT NULL,
+    right_feature_base64 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (profile_id) REFERENCES taste_profiles(id) ON DELETE CASCADE
+);
+CREATE INDEX preference_examples_profile_split
+ON preference_examples(profile_id, split, created_at);
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -294,4 +328,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 7:
         connection.executescript(MIGRATION_7)
         connection.execute("PRAGMA user_version = 7")
+        version = 7
+    if version < 8:
+        connection.executescript(MIGRATION_8)
+        connection.execute("PRAGMA user_version = 8")
     connection.commit()

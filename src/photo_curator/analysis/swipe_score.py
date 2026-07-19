@@ -70,6 +70,8 @@ def calculate_swipe_score(
     signals: dict[str, dict[str, object]],
     *,
     apple_percentiles: dict[str, float] | None = None,
+    personal_delta: float = 0.0,
+    taste_model_version: str | None = None,
 ) -> SwipeScoreResult:
     apple_percentiles = apple_percentiles or {}
     aesthetics = _signal_value(signals.get("aesthetics"))
@@ -121,7 +123,9 @@ def calculate_swipe_score(
         weight for _, weight in values_and_weights
     )
     utility_penalty = 8.0 if aesthetics is not None and aesthetics.get("is_utility") else 0.0
-    score = round(_clamp(weighted - penalty - utility_penalty))
+    generic_rank_score = _clamp(weighted - penalty - utility_penalty)
+    personal_delta = max(-20.0, min(20.0, float(personal_delta)))
+    score = round(_clamp(generic_rank_score + personal_delta))
 
     available = {kind for kind, signal in signals.items() if signal.get("status") == "ready"}
     confidence = 0.42
@@ -131,6 +135,7 @@ def calculate_swipe_score(
     confidence += 0.05 if "feature_print" in available else 0
     confidence += 0.05 if portrait_signal is not None and "faces" in available else 0
     confidence += 0.07 if duplicate is not None else 0
+    confidence += 0.05 if taste_model_version else 0
     confidence = min(0.98, confidence)
 
     components = {
@@ -140,7 +145,7 @@ def calculate_swipe_score(
         "moment_and_subject": round(moment, 2),
         "portrait_signal": round(portrait_signal if portrait_signal is not None else 50.0, 2),
         "best_in_series": round(series, 2),
-        "personal_taste": 50.0,
+        "personal_taste": round(_clamp(50.0 + personal_delta * 2.5), 2),
         "diversity_value": 50.0,
         "technical_penalty": round(penalty + utility_penalty, 2),
     }
@@ -149,16 +154,20 @@ def calculate_swipe_score(
         generic_source=generic_source,
         utility=bool(aesthetics and aesthetics.get("is_utility")),
         duplicate=duplicate,
+        personal_delta=personal_delta,
     )
+    model_versions = _model_versions(signals)
+    if taste_model_version:
+        model_versions["personal_taste"] = taste_model_version
     return SwipeScoreResult(
         schema_version=SWIPE_SCORE_SCHEMA_VERSION,
         score=score,
-        generic_score=round(generic, 2),
-        personal_delta=0.0,
+        generic_score=round(generic_rank_score, 2),
+        personal_delta=round(personal_delta, 2),
         confidence=round(confidence, 3),
         components=components,
         reasons=reasons,
-        model_versions=_model_versions(signals),
+        model_versions=model_versions,
     )
 
 
@@ -206,6 +215,7 @@ def _reasons(
     generic_source: str,
     utility: bool,
     duplicate: dict[str, object] | None,
+    personal_delta: float,
 ) -> list[dict[str, object]]:
     candidates = [
         (components["generic_aesthetics"], "strong_aesthetics"),
@@ -214,6 +224,8 @@ def _reasons(
         (components["moment_and_subject"], "strong_moment"),
     ]
     reasons: list[dict[str, object]] = []
+    if personal_delta >= 2:
+        reasons.append({"code": "personal_taste_match", "value": round(personal_delta, 1)})
     if duplicate and duplicate.get("is_leader"):
         reasons.append({"code": "best_in_series", "value": components["best_in_series"]})
     for value, code in sorted(candidates, reverse=True):
