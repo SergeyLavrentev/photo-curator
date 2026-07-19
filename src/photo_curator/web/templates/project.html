@@ -66,7 +66,7 @@
 
   <section aria-labelledby="pipeline-title">
     <div class="section-heading"><div><p class="eyebrow">Обработка</p><h2 id="pipeline-title">Ход анализа</h2></div>
-      <p data-live-status>Фактический прогресс</p></div>
+      <p data-live-status>Фактический прогресс<span class="mobile-scroll-copy"> · листайте этапы →</span></p></div>
     <ol class="pipeline pipeline-rail">
       {% for stage in stages %}
         <li class="stage {{ stage.status }}" data-stage="{{ stage.code }}">

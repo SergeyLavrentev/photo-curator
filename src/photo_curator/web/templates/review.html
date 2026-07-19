@@ -10,6 +10,7 @@
       <a class="{% if category == key %}active{% endif %}" href="?category={{ key }}&sort={{ sort }}">{{ label }}</a>
     {% endfor %}
   </nav>
+  <p class="horizontal-scroll-hint" aria-hidden="true">Листайте фильтры →</p>
   <form class="sort-form" method="get">
     <input type="hidden" name="category" value="{{ category }}">
     <label>Сортировка <select name="sort" onchange="this.form.submit()">

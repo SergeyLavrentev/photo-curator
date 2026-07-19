@@ -3,7 +3,7 @@
 ## Current milestone
 
 - Milestone: R7 — Acceptance and release audit
-- Status: Feature stages R0–R6 implemented; external visual and human-labelled gates remain
+- Status: Feature stages R0–R6 implemented; exact 390 px and human-labelled gates remain
 
 ## Product roadmap
 
@@ -33,12 +33,18 @@ score range                                  — 26–90
 5,000 synthetic rows                         — 19,059 / 12,497,500 pairs in 0.039 s
 60-photo labelled generated fixture          — passed; no cross-scene groups
 real 20-photo Best publish dry-run            — dry_run_ok, 10 UUIDs, apply not run
+real Chrome desktop + ~500 px workflow        — passed; gallery, preview, filters, pipeline rerun
+demo pipeline rerun from browser              — 5 selected / 3 review / 4 excluded / 2 series
+responsive navigation regression contract     — passed
 ```
 
-The in-app browser is currently blocked from `127.0.0.1` by enterprise network
-policy. Responsive screenshot acceptance is therefore not checked. A real 50–100
-photo human-labelled album remains the last external release-quality gate. The
-real macOS Photos Best dry-run passed; apply was intentionally not executed.
+The in-app browser remains blocked from `127.0.0.1` by enterprise network policy,
+but the application was opened manually in real Chrome and inspected through
+Computer Use at desktop width and a narrow window of approximately 500 px. The
+compact pipeline, gallery filters, score explanation dialog and full pipeline
+rerun passed. The exact 390 px screenshot gate and a real 50–100 photo
+human-labelled album remain external release-quality gates. The real macOS Photos
+Best dry-run passed; apply was intentionally not executed.
 
 ## Previous MVP evidence — retained for history only
 
@@ -66,7 +72,8 @@ the new roadmap complete and must not be used as release acceptance.
 ## Current external acceptance gate
 
 The root failure from the old 1,671-photo run is covered by sentinel and bounded
-candidate tests. Release acceptance still requires the two external R7 gates above.
+candidate tests. Release acceptance still requires exact 390 px visual evidence
+and the human-labelled real-world R7 fixture above.
 
 ## Safety invariants verified in code
 

@@ -84,6 +84,21 @@ def test_static_ui_contract_is_dark_compact_and_uses_one_pipeline_detail(tmp_pat
     assert dashboard.count("summary-card") == 4
 
 
+def test_mobile_ui_keeps_global_navigation_and_explains_horizontal_scroll(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        css = client.get("/static/app.css").text
+        dashboard = client.get("/projects/demo-project").text
+        review = client.get("/projects/demo-project/review?category=keep").text
+
+    assert ".brand-name" in css
+    assert ".topbar nav { display: flex" in css
+    assert "scroll-snap-type: x proximity" in css
+    assert "scrollbar-width: thin" in css
+    assert "листайте этапы" in dashboard
+    assert "Листайте фильтры" in review
+
+
 def test_cache_metrics_tolerate_atomic_file_replacement(tmp_path: Path, monkeypatch) -> None:
     preview = tmp_path / "preview.jpg"
     preview.write_bytes(b"jpeg")
