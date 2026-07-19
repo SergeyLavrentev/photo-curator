@@ -22,6 +22,11 @@ from photo_curator.acceptance import (
     load_manifest,
     load_score_snapshot,
 )
+from photo_curator.analysis.native_vision import (
+    NativeVisionEngine,
+    NativeVisionError,
+    aesthetics_score_snapshot,
+)
 from photo_curator.app import create_app
 from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
@@ -51,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
             "acceptance-template",
             "acceptance-score-export",
             "acceptance-evaluate",
+            "vision-benchmark",
         ],
     )
     parser.add_argument("--demo", action="store_true", help="Запустить synthetic demo")
@@ -74,6 +80,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Версия scorer для acceptance-score-export",
     )
     parser.add_argument("--output", type=Path, help="Записать template в файл вместо stdout")
+    parser.add_argument(
+        "--score-output",
+        type=Path,
+        help="Для vision-benchmark записать отдельный acceptance score snapshot",
+    )
+    parser.add_argument("--warmup", type=nonnegative_int, default=0)
+    parser.add_argument("--iterations", type=positive_int, default=1)
     parser.add_argument("--json", action="store_true", help="Вывести acceptance-отчёт как JSON")
     return parser
 
@@ -83,6 +96,20 @@ def valid_port(value: str) -> int:
     if not 0 <= port <= 65535:
         raise argparse.ArgumentTypeError("port должен быть от 0 до 65535")
     return port
+
+
+def nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("значение должно быть неотрицательным")
+    return parsed
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("значение должно быть положительным")
+    return parsed
 
 
 def choose_port(requested_port: int) -> int:
@@ -163,6 +190,43 @@ def run_acceptance_command(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def run_vision_benchmark_command(args: argparse.Namespace) -> int:
+    if not args.project_id:
+        raise NativeVisionError("Укажите --project-id")
+    paths = default_application_paths()
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        try:
+            get_project(connection, args.project_id)
+        except KeyError as error:
+            raise NativeVisionError(f"Проект не найден: {args.project_id}") from error
+        assets = [
+            (str(asset["asset_uuid"]), Path(str(asset["review_path"])))
+            for asset in list_assets(connection, args.project_id)
+            if asset.get("cache_state") == "ready" and asset.get("review_path")
+        ]
+    if not assets:
+        raise NativeVisionError("В проекте нет готовых preview для benchmark")
+    report = NativeVisionEngine(paths).analyze(
+        assets,
+        warmup_iterations=args.warmup,
+        measured_iterations=args.iterations,
+    )
+    rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    if args.output:
+        args.output.write_text(rendered, encoding="utf-8")
+        print(f"Vision benchmark: {args.output}")
+    else:
+        print(rendered, end="")
+    if args.score_output:
+        snapshot = aesthetics_score_snapshot(args.project_id, report)
+        args.score_output.write_text(
+            json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"Vision score snapshot: {args.score_output}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "version":
@@ -170,6 +234,13 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "doctor":
         raise SystemExit(print_doctor())
+    if args.command == "vision-benchmark":
+        try:
+            result = run_vision_benchmark_command(args)
+        except (NativeVisionError, OSError) as error:
+            print(f"Vision benchmark error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
     if args.command in {
         "acceptance-template",
         "acceptance-score-export",

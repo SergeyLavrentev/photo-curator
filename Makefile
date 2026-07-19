@@ -6,12 +6,13 @@ INSTALL_DIR ?= /Applications
 INSTALLED_APP := $(INSTALL_DIR)/PhotoCurator.app
 SIGN_IDENTITY ?= -
 
-.PHONY: help sync test lint app build install run stop verify-app uninstall clean
+.PHONY: help sync test lint vision-helper app build install run stop verify-app uninstall clean
 
 help:
 	@echo "Photo Curator"
 	@echo "  make sync        установить Python-зависимости"
 	@echo "  make test        запустить тесты"
+	@echo "  make vision-helper собрать нативный Apple Vision benchmark"
 	@echo "  make app         собрать и локально подписать .app"
 	@echo "  make install     установить в $(INSTALL_DIR) и запустить"
 	@echo "  make stop        завершить установленное приложение"
@@ -28,6 +29,14 @@ lint:
 	uv run ruff format --check .
 	uv run ruff check .
 	node --check src/photo_curator/web/static/app.js
+
+vision-helper:
+	mkdir -p "$(CURDIR)/build/native"
+	xcrun swiftc -swift-version 5 -O \
+	  -target "$$(uname -m)-apple-macosx13.0" \
+	  -framework Vision -framework CoreVideo \
+	  src/photo_curator/analysis/native/photo_curator_vision.swift \
+	  -o "$(CURDIR)/build/native/photo-curator-vision"
 
 app build:
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" packaging/macos/build_app.sh

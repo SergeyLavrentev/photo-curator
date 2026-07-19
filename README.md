@@ -85,6 +85,22 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
+### Native Apple Vision benchmark
+
+S1 helper собирается как отдельный Swift CLI и выполняет публичные Vision requests:
+aesthetics, feature print, attention saliency и face signals. Результат содержит request
+revisions, per-stage latency, platform capabilities и feature-print data.
+
+```bash
+make vision-helper
+uv run photo-curator vision-benchmark --project-id PROJECT_ID \
+  --warmup 1 --iterations 3 \
+  --output vision-benchmark.json --score-output vision-scores.json
+```
+
+`vision-scores.json` совместим с `acceptance-evaluate --scores`, поэтому Vision baseline
+сравнивается с technical-first scorer на неизменной held-out разметке.
+
 ### Human-labelled baseline acceptance
 
 Acceptance schema v2 измеряет safety/duplicates, pairwise preference, best-in-series и

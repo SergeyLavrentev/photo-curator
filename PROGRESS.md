@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: реализован первый S1 vertical slice: независимый Swift Apple Vision CLI,
+  публичные aesthetics/feature-print/saliency/face requests, capability и request revision
+  provenance, warmup/measured latency, Python runner, CLI export и acceptance score snapshot.
+  Synthetic real-framework smoke прошёл; corpus benchmark и DB/pipeline integration впереди.
 - 2026-07-20: S0 quality harness переведён на acceptance schema v2: held-out A/B
   preference accuracy, Top-K agreement, series leaders, safety metrics и versioned
   score snapshots для честного сравнения engine versions. Реальная human-разметка
@@ -61,6 +65,7 @@ responsive navigation regression contract     — passed
 home workflow                                  — album → density → analysis; technical details collapsed
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
 schema v2 pairwise + Top-K score comparison    — implemented; real labels still pending
+native Vision synthetic smoke                  — aesthetics 0.663; feature print 768; all signals OK
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
@@ -69,7 +74,7 @@ disk Best → Photos native PhotoKit publish       — implemented; dry-run + ex
 native Swift helper                              — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 97 passed
+pytest                                           — 99 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

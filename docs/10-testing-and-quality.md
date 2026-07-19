@@ -106,3 +106,15 @@ uv run photo-curator acceptance-score-export --project-id PROJECT_ID \
 uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
   --labels labels.json --scores baseline.json --json
 ```
+
+## S1 native Vision benchmark
+
+Swift helper должен собираться с deployment target macOS 13, а aesthetics capability
+включаться только на macOS 15+. Integration test запускает helper на синтетическом image
+и проверяет versioned JSON, aesthetics range, feature-print payload, saliency heatmap,
+request durations и отсутствие per-signal errors.
+
+Реальный benchmark выполняется с warmup и несколькими measured iterations. Отчёт хранит
+OS/architecture, capability map, mean/p95 stage durations и request revisions. Отдельный
+aesthetics score snapshot нормализует публичный диапазон Apple `-1...1` в `0...100` только
+для ranking/evaluation; исходное значение сохраняется в benchmark report.
