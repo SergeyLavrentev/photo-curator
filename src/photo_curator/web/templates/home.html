@@ -57,7 +57,7 @@
       <label>Обычный альбом
         <select name="album_id" required>
           {% for album in albums %}
-            <option value="{{ album.id }}">{{ album.full_path }} · {{ album.photo_count }} фото</option>
+            <option value="{{ album.id }}">{{ album.full_path }} · {{ album.photo_count }} фото{% if album.video_count %} · {{ album.video_count }} видео пропустим{% endif %}</option>
           {% endfor %}
         </select>
       </label>

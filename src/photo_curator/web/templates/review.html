@@ -6,7 +6,7 @@
   <nav class="project-nav" aria-label="Фильтры ревью">
     {% for key, label in [('keep', 'Отобрано'), ('review', 'Проверить'), ('reject', 'Исключено'),
       ('all', 'Все'), ('best', 'Лучшие'), ('duplicates', 'Серии'), ('favorite', 'Избранное'),
-      ('missing', 'Без превью'), ('errors', 'Ошибки')] %}
+      ('missing', 'Без превью'), ('errors', 'Ошибки'), ('resolution', 'Разрешение')] %}
       <a class="{% if category == key %}active{% endif %}" href="?category={{ key }}&sort={{ sort }}">{{ label }}</a>
     {% endfor %}
   </nav>

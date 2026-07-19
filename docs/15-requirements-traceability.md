@@ -7,8 +7,11 @@
 | No automatic deletion | Publisher boundary | Code review + no delete API tests |
 | No direct Photos DB writes | `photos/` contract | Static review, integration gate |
 | Visual pipeline | dashboard/Jinja/JS | Demo acceptance |
-| Resume | jobs/repository/coordinator | `test_pipeline.py` |
+| Truthful compact pipeline | server stage view + dashboard polling | aggregated stale/running job regression test |
+| Resume and visible retry | jobs/coordinator + dashboard actions | interrupted project UI/API test |
 | Preview cache | render resolver | orientation/cache tests |
+| Missing preview retry | preview resume endpoint + dashboard action | missing asset UI test |
+| Cache telemetry | project summary + compact safety row | dashboard UI test |
 | Lightweight analysis | Pillow/NumPy modules | metrics/hash tests |
 | Duplicate grouping | similarity/union-find | duplicate fixtures |
 | Protect high-res original | leader/validation | shared-like copy fixture |
@@ -17,6 +20,9 @@
 | Unique Best/Reject albums | publisher kind and naming | publisher tests |
 | Score 0–100 and reasons | decision engine and gallery | decision/UI tests |
 | Bounded candidate generation | hash bands, time windows, valid bursts | scale tests |
+| Resolution warning gallery | real resolution flags + filter | category regression test |
+| Human-labelled release metrics | `acceptance.py`, CLI manifest | evaluator unit + DB integration tests |
+| Manual Reject deletion semantics | conditional publish instructions | Best/Reject UI test |
 | Local web security | `web/security.py` | API/security tests |
 | Safe cache cleanup | `safe_paths.py` | traversal/symlink tests |
 | No heavy dependencies | `pyproject.toml` | dependency review |
@@ -32,3 +38,4 @@
 - M6: decisions/review.
 - M7: publish safety.
 - M8: hardening/documentation.
+- R7: external human-labelled album and exact responsive visual evidence.

@@ -2,7 +2,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from photo_curator.app import _directory_size, _last_access, create_app
+from photo_curator.app import _directory_size, _last_access, _stage_views, create_app
+from photo_curator.db.connection import database_connection
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.fake_provider import FakePhotosProvider
 from photo_curator.web.security import CSRF_COOKIE, SESSION_COOKIE, SessionSecrets
@@ -66,9 +67,15 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "Отобрано" in response.text
     assert "pipeline-rail" in response.text
     assert "active-stage-detail" in response.text
+    assert "data-active-stage-health" in response.text
+    assert "data-active-stage-rate" in response.text
+    assert "cache-facts" in response.text
+    assert "без preview" in response.text
+    assert "видео пропущено" in response.text
     assert "Готово" in response.text
     assert "Photos Library" in home.text
     assert "osxphotos" in home.text
+    assert "2 видео пропустим" in home.text
     assert '<meta name="csrf-token" content="csrf-secret">' in response.text
 
 
@@ -90,6 +97,7 @@ def test_mobile_ui_keeps_global_navigation_and_explains_horizontal_scroll(tmp_pa
         css = client.get("/static/app.css").text
         dashboard = client.get("/projects/demo-project").text
         review = client.get("/projects/demo-project/review?category=keep").text
+        javascript = client.get("/static/app.js").text
 
     assert ".brand-name" in css
     assert ".topbar nav { display: flex" in css
@@ -97,6 +105,57 @@ def test_mobile_ui_keeps_global_navigation_and_explains_horizontal_scroll(tmp_pa
     assert "scrollbar-width: thin" in css
     assert "листайте этапы" in dashboard
     assert "Листайте фильтры" in review
+    assert "category=resolution" in review
+    assert "payload.stages.forEach" in javascript
+
+
+def test_pipeline_api_exposes_truthful_aggregated_analysis_stage(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        payload = client.get("/api/projects/demo-project").json()
+
+    assert len(payload["stages"]) == 6
+    analysis = next(stage for stage in payload["stages"] if stage["code"] == "metrics")
+    assert analysis["status"] == "done"
+    assert analysis["processed"] == analysis["total"]
+    assert analysis["warnings"] >= 0
+    assert "throughput" in analysis
+
+
+def test_aggregated_analysis_prefers_current_running_state_over_stale_done_jobs() -> None:
+    jobs = [
+        {"stage": "metrics", "status": "done", "processed_items": 10, "total_items": 10},
+        {
+            "stage": "duplicates",
+            "status": "running",
+            "processed_items": 2,
+            "total_items": 10,
+            "warning_count": 1,
+        },
+        {"stage": "vision", "status": "done", "processed_items": 10, "total_items": 10},
+        {"stage": "decisions", "status": "error", "processed_items": 10, "total_items": 10},
+    ]
+
+    stages = _stage_views(jobs, {"total": 10, "reviewed": 0, "reject": 0}, None)
+    analysis = next(stage for stage in stages if stage["code"] == "metrics")
+
+    assert analysis["status"] == "running"
+    assert analysis["processed"] == 32
+    assert analysis["total"] == 40
+    assert analysis["warnings"] == 1
+
+
+def test_resolution_warning_gallery_filter_uses_real_resolution_flags(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        response = client.get("/projects/demo-project/review?category=resolution")
+
+    assert response.status_code == 200
+    assert "category=resolution" in response.text
+    assert any(
+        flag in response.text
+        for flag in ("lower_resolution_copy", "leader_lower_resolution", "resolution_inversion")
+    )
 
 
 def test_cache_metrics_tolerate_atomic_file_replacement(tmp_path: Path, monkeypatch) -> None:
@@ -117,6 +176,43 @@ def test_cache_metrics_tolerate_atomic_file_replacement(tmp_path: Path, monkeypa
     assert _directory_size(tmp_path) == 4
     calls = 0
     assert _last_access(tmp_path) != "—"
+
+
+def test_missing_preview_has_a_visible_retry_action(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        with database_connection(default_application_paths(tmp_path).database) as connection:
+            connection.execute(
+                "UPDATE assets SET cache_state='missing' "
+                "WHERE project_id='demo-project' AND asset_uuid='demo-001'"
+            )
+        dashboard = client.get("/projects/demo-project")
+        javascript = client.get("/static/app.js")
+
+    assert 'data-action="retry-missing"' in dashboard.text
+    assert "Повторить 1 missing" in dashboard.text
+    assert "/retry-missing" in javascript.text
+
+
+def test_interrupted_project_exposes_resume_and_active_stage_retry(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        with database_connection(default_application_paths(tmp_path).database) as connection:
+            connection.execute("UPDATE projects SET state='interrupted' WHERE id='demo-project'")
+            connection.execute(
+                "UPDATE jobs SET status='interrupted' "
+                "WHERE id=(SELECT id FROM jobs WHERE project_id='demo-project' "
+                "ORDER BY started_at DESC LIMIT 1)"
+            )
+        dashboard = client.get("/projects/demo-project")
+        javascript = client.get("/static/app.js")
+
+    assert 'data-action="pipeline-resume"' in dashboard.text
+    assert "Продолжить анализ" in dashboard.text
+    assert "Повторить этап" in dashboard.text
+    assert "/pipeline/${action}" in javascript.text
 
 
 def test_api_status_does_not_expose_local_paths(tmp_path: Path) -> None:
@@ -210,6 +306,18 @@ def test_duplicate_and_publish_pages_expose_manual_and_safety_controls(tmp_path:
     assert "Best-альбом" in publish.text
     assert "Оригиналы и исходный альбом не меняются" in publish.text
     assert "Reject — исключённые" in publish.text
+
+
+def test_reject_publish_explains_manual_photos_deletion_semantics(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        reject = client.get("/projects/demo-project/publish?kind=reject")
+        best = client.get("/projects/demo-project/publish?kind=best")
+
+    assert "Command + Delete" in reject.text
+    assert "Recently Deleted" in reject.text
+    assert "Delete</strong> убирает фото только из альбома" in reject.text
+    assert "Command + Delete" not in best.text
 
 
 def test_selected_preview_export_is_prepared_and_downloaded(tmp_path: Path) -> None:

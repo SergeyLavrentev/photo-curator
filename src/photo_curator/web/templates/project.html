@@ -7,7 +7,11 @@
     </div>
     <div class="pipeline-actions">
       <div class="button-row">
-        <button class="secondary" data-action="pipeline-start">Анализировать заново</button>
+        {% if project.state in ['interrupted', 'error'] %}
+          <button class="secondary" data-action="pipeline-resume">Продолжить анализ</button>
+        {% else %}
+          <button class="secondary" data-action="pipeline-start">Анализировать заново</button>
+        {% endif %}
         <a class="primary button-link" href="/projects/{{ project.id }}/review?category=keep">Смотреть отбор</a>
       </div>
       <p class="form-status" data-pipeline-status role="status"></p>
@@ -85,13 +89,22 @@
     <div class="active-stage-detail" aria-live="polite">
       <strong data-active-stage>{{ active.stage.name }}</strong>
       <span data-active-stage-message>{{ active.stage.message }}</span>
-      <span data-active-stage-count>{{ active.stage.processed }} / {{ active.stage.total }}</span>
+      <div class="active-stage-metrics">
+        <span data-active-stage-count>{{ active.stage.processed }} / {{ active.stage.total }}</span>
+        <span data-active-stage-health>⚠ {{ active.stage.warnings }} · ✕ {{ active.stage.errors }}</span>
+        <span data-active-stage-rate>{{ active.stage.elapsed }} · {{ active.stage.throughput }}</span>
+        {% if active.stage.retryable and active.stage.status in ['error', 'warning', 'interrupted'] %}<button class="text-button" data-retry-stage="{{ active.stage.code }}">Повторить этап</button>{% endif %}
+      </div>
     </div>
   </section>
 
   <section class="safety-panel">
     <div><p class="eyebrow">Локальные данные</p><h2>Оригиналы не меняются</h2></div>
     <div><p>Удаляются только локальные превью проекта; решения сохраняются.</p>
-      <button class="danger-outline" data-action="cache-clean">Очистить превью</button></div>
+      <p class="cache-facts"><span>{{ summary.cache_size }} cache</span><span>{{ summary.ready }} preview</span><span>{{ summary.missing }} без preview</span><span>{{ summary.videos_skipped }} видео пропущено</span><span>доступ {{ summary.cache_last_access }}</span></p>
+      <div class="button-row">
+        {% if summary.missing %}<button class="secondary" data-action="retry-missing">Повторить {{ summary.missing }} missing</button>{% endif %}
+        <button class="danger-outline" data-action="cache-clean">Очистить превью</button>
+      </div></div>
   </section>
 {% endblock %}

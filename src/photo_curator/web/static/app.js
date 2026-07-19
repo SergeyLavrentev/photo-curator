@@ -36,15 +36,16 @@ newProjectForm?.addEventListener("submit", async (event) => {
   }
 });
 
-document.querySelector('[data-action="pipeline-start"]')?.addEventListener("click", async (event) => {
+document.querySelector('[data-action="pipeline-start"], [data-action="pipeline-resume"]')?.addEventListener("click", async (event) => {
   const root = document.querySelector("[data-project-id]");
   const button = event.currentTarget;
   const status = document.querySelector("[data-pipeline-status]");
+  const action = button.dataset.action === "pipeline-resume" ? "resume" : "start";
   button.disabled = true;
   if (status) status.textContent = "Запускаем анализ…";
   try {
-    await api(`/api/projects/${root.dataset.projectId}/pipeline/start`, { method: "POST" });
-    if (status) status.textContent = "Анализ запущен";
+    await api(`/api/projects/${root.dataset.projectId}/pipeline/${action}`, { method: "POST" });
+    if (status) status.textContent = action === "resume" ? "Анализ продолжается" : "Анализ запущен";
     pollProject(root, button);
   } catch (error) {
     button.disabled = false;
@@ -56,7 +57,6 @@ const projectRoot = document.querySelector("[data-project-state][data-project-id
 if (projectRoot?.dataset.projectState === "running") pollProject(projectRoot);
 
 async function pollProject(root, startButton = null) {
-  const stageOrder = ["inventory", "previews", "metrics", "duplicates", "vision", "decisions"];
   let previousState = root.dataset.projectState;
   while (true) {
     await new Promise((resolve) => window.setTimeout(resolve, 900));
@@ -70,19 +70,17 @@ async function pollProject(root, startButton = null) {
     root.dataset.projectState = state;
     document.querySelector("[data-project-state-label]").textContent = state;
     const latest = new Map(payload.jobs.map((job) => [job.stage, job]));
-    stageOrder.forEach((code) => {
-      const targetCode = ["duplicates", "vision", "decisions"].includes(code) ? "metrics" : code;
-      const row = document.querySelector(`[data-stage="${targetCode}"]`);
-      const job = latest.get(code);
-      if (!row || !job) return;
-      row.className = `stage ${job.status}`;
+    payload.stages.forEach((stage) => {
+      const row = document.querySelector(`[data-stage="${stage.code}"]`);
+      if (!row) return;
+      row.className = `stage ${stage.status}`;
       const statusLabels = { pending: "Ожидает", running: "В работе", done: "Готово", warning: "Внимание", error: "Ошибка", interrupted: "Прервано" };
-      row.querySelector(".stage-status").textContent = statusLabels[job.status] || job.status;
-      row.querySelector("[data-stage-message]").textContent = job.current_message || "Ожидает";
-      row.querySelector("[data-stage-count]").textContent = `${job.processed_items} / ${job.total_items}`;
-      const percent = job.total_items ? Math.min(100, Math.round(job.processed_items / job.total_items * 100)) : 0;
-      row.querySelector(".progress").setAttribute("aria-valuenow", String(percent));
-      row.querySelector(".progress span").style.width = `${percent}%`;
+      row.querySelector(".stage-number").textContent = stage.status === "done" ? "✓" : stage.number;
+      row.querySelector(".stage-status").textContent = statusLabels[stage.status] || stage.status_label;
+      row.querySelector("[data-stage-message]").textContent = stage.message;
+      row.querySelector("[data-stage-count]").textContent = `${stage.processed} / ${stage.total}`;
+      row.querySelector(".progress").setAttribute("aria-valuenow", String(stage.progress));
+      row.querySelector(".progress span").style.width = `${stage.progress}%`;
     });
     const active = [...latest.values()].find((job) => job.status === "running");
     const activeRow = active ? document.querySelector(`[data-stage="${["duplicates", "vision", "decisions"].includes(active.stage) ? "metrics" : active.stage}"]`) : null;
@@ -90,6 +88,8 @@ async function pollProject(root, startButton = null) {
       document.querySelector("[data-active-stage]").textContent = activeRow?.querySelector("h3")?.textContent || active.stage;
       document.querySelector("[data-active-stage-message]").textContent = active.current_message || "В работе";
       document.querySelector("[data-active-stage-count]").textContent = `${active.processed_items} / ${active.total_items}`;
+      document.querySelector("[data-active-stage-health]").textContent = `⚠ ${active.warning_count || 0} · ✕ ${active.error_count || 0}`;
+      document.querySelector("[data-active-stage-rate]").textContent = jobRateLabel(active);
     }
     document.querySelector("[data-live-status]").textContent = active?.current_message || `Статус: ${state}`;
     if (["ready", "error", "interrupted"].includes(state)) {
@@ -99,6 +99,16 @@ async function pollProject(root, startButton = null) {
     }
     previousState = state;
   }
+}
+
+function jobRateLabel(job) {
+  const started = Date.parse(job.started_at || "");
+  const finished = Date.parse(job.finished_at || "") || Date.now();
+  if (!Number.isFinite(started)) return "— · —";
+  const elapsed = Math.max(0, (finished - started) / 1000);
+  const duration = elapsed < 60 ? `${elapsed.toFixed(1)} с` : `${Math.floor(elapsed / 60)} мин ${Math.round(elapsed % 60)} с`;
+  const throughput = elapsed > 0 && job.processed_items ? `${(job.processed_items / elapsed).toFixed(1)}/с` : "—";
+  return `${duration} · ${throughput}`;
 }
 
 document.querySelectorAll("[data-retry-stage]").forEach((button) => {
@@ -113,6 +123,21 @@ document.querySelector('[data-action="cache-clean"]')?.addEventListener("click",
   const root = document.querySelector("[data-project-id]");
   await api(`/api/projects/${root.dataset.projectId}/cache/clean`, { method: "POST" });
   window.location.reload();
+});
+
+document.querySelector('[data-action="retry-missing"]')?.addEventListener("click", async (event) => {
+  const root = document.querySelector("[data-project-id]");
+  const button = event.currentTarget;
+  const status = document.querySelector("[data-pipeline-status]");
+  button.disabled = true;
+  try {
+    await api(`/api/projects/${root.dataset.projectId}/retry-missing`, { method: "POST" });
+    if (status) status.textContent = "Повторяем недоступные preview…";
+    pollProject(root, button);
+  } catch (error) {
+    button.disabled = false;
+    if (status) status.textContent = `Не удалось повторить preview: ${error.message}`;
+  }
 });
 
 const gallery = document.querySelector(".gallery");

@@ -1,8 +1,15 @@
 # Contents
 
-## Main specification
+## Current product contract
 
-- `CODEX_PROJECT_SPEC.md` — consolidated source of truth.
+- `ROADMAP.md` — current product outcome, stages and release gates.
+- `PROGRESS.md` — evidence-backed current status.
+- `decisions/ADR-0006-curated-selection-first.md` — transition from reject-first to curated selection.
+
+## Historical specification
+
+- `CODEX_PROJECT_SPEC.md` — original MVP specification. Its safety constraints remain
+  binding; its reject-first product model is superseded by the current roadmap.
 
 ## Product and architecture
 

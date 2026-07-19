@@ -37,7 +37,8 @@ real Chrome desktop + ~500 px workflow        — passed; gallery, preview, filt
 demo pipeline rerun from browser              — 5 selected / 3 review / 4 excluded / 2 series
 responsive navigation regression contract     — passed
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
-pytest                                         — 73 passed
+spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
+pytest                                         — 79 passed
 ruff format / check                            — passed
 ```
 

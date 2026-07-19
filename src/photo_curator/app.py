@@ -380,10 +380,17 @@ def create_app(
     @app.get("/api/projects/{project_id}")
     async def project_api(project_id: str) -> dict[str, object]:
         project, summary, jobs = _project_data(app_paths.database, project_id)
+        with database_connection(app_paths.database) as connection:
+            latest_publish = repository.latest_publish(connection, project_id)
         project.pop("library_path", None)
         project.pop("database_path", None)
         project["settings"] = json.loads(str(project.pop("settings_json", "{}")))
-        return {"project": project, "summary": summary, "jobs": [_public_job(job) for job in jobs]}
+        return {
+            "project": project,
+            "summary": summary,
+            "jobs": [_public_job(job) for job in jobs],
+            "stages": _stage_views(jobs, summary, latest_publish),
+        }
 
     @app.delete("/api/projects/{project_id}", status_code=204)
     async def delete_project_api(project_id: str):
@@ -792,7 +799,10 @@ def _stage_view(number: int, job: dict[str, object], label: str) -> dict[str, ob
 
 def _combined_status(jobs: list[dict[str, object]]) -> str:
     statuses = [str(job.get("status")) for job in jobs if job]
-    for status in ("error", "running", "interrupted", "warning"):
+    # Stages are sequential. A running job belongs to the current attempt, while
+    # an error in a later stage can be retained from the previous attempt until
+    # that stage is recreated.
+    for status in ("running", "error", "interrupted", "warning"):
         if status in statuses:
             return status
     return "done" if statuses and all(status == "done" for status in statuses) else "pending"
@@ -883,9 +893,14 @@ def _filter_assets(assets: list[dict[str, object]], category: str) -> list[dict[
         return [asset for asset in assets if asset.get("cache_state") == "missing"]
     if category == "errors":
         return [asset for asset in assets if "error" in str(asset.get("cache_state"))]
-    flag = "best_candidate" if category == "best" else "low_resolution"
-    if category in {"best", "resolution"}:
-        return [asset for asset in assets if flag in asset.get("flags", [])]
+    if category == "best":
+        return [asset for asset in assets if "best_candidate" in asset.get("flags", [])]
+    if category == "resolution":
+        return [
+            asset
+            for asset in assets
+            if any("resolution" in str(flag) for flag in asset.get("flags", []))
+        ]
     return assets
 
 
