@@ -36,9 +36,12 @@ JavaScript, FastAPI, a browser or a localhost port.
 
 ## State and IPC
 
-Mutable state has one owner. Native and Python processes exchange versioned JSONL messages
-containing immutable inputs, progress events and result payloads. Workers cannot receive
-arbitrary filesystem paths, mutate Photos, publish albums or write the project database.
+Mutable state has one owner. During migration the bundled Python coordinator remains that
+owner and the SwiftUI client exchanges correlated, versioned JSONL messages with it over
+stdin/stdout. The transport exposes domain operations and opaque asset identifiers, never
+arbitrary filesystem paths. Photos publication is still a separate plan → explicit approval
+→ apply operation. When coordinator/storage move to Swift, Python enrichment workers become
+stateless and lose database and publish capabilities.
 
 Every analysis record includes:
 

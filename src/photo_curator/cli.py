@@ -32,6 +32,7 @@ from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
 from photo_curator.db.repository import get_project, list_assets, list_duplicate_groups
 from photo_curator.logging_setup import configure_logging
+from photo_curator.native_worker import run_native_worker
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.doctor import run_doctor
 from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
             "acceptance-score-export",
             "acceptance-evaluate",
             "vision-benchmark",
+            "native-worker",
         ],
     )
     parser.add_argument("--demo", action="store_true", help="Запустить synthetic demo")
@@ -241,6 +243,11 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Vision benchmark error: {error}", file=sys.stderr)
             result = 2
         raise SystemExit(result)
+    if args.command == "native-worker":
+        paths = default_application_paths()
+        paths.ensure()
+        configure_logging(paths.log_file)
+        raise SystemExit(run_native_worker(paths))
     if args.command in {
         "acceptance-template",
         "acceptance-score-export",

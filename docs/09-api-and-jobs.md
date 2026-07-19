@@ -1,9 +1,22 @@
 # API и background jobs
 
 > Этот HTTP contract описывает текущий переходный web baseline. В целевом V2 нативный
-> UI вызывает `ProjectStore` и `AnalysisCoordinator` внутри приложения; localhost API
-> отсутствует. Python enrichment, пока он нужен, использует ограниченный versioned JSONL
-> IPC без прав на publish или mutable project state.
+> UI вызывает bundled coordinator через stdin/stdout JSONL; localhost API отсутствует.
+> На переходном этапе этот доверенный worker владеет project state и выполняет только явно
+> подтверждённый publish. После переноса coordinator в Swift Python enrichment станет
+> stateless и потеряет права на project DB и Photos.
+
+## Native JSONL contract
+
+```json
+{"schema_version":1,"id":"request-1","method":"status","params":{}}
+{"schema_version":1,"id":"request-1","result":{"status":"ready"}}
+```
+
+Methods: `status`, `albums`, `projects`, `create_project`, `start_analysis`, `project`,
+`assets`, `decision`, `taste_profile`, `taste_preference`, `taste_train`, `taste_status`,
+`taste_reset`, `publish_dry_run`, `publish_apply`, `shutdown`. Requests are serialized by
+the native client, responses retain the correlation id, and stdout contains no logs.
 
 ## HTML routes
 

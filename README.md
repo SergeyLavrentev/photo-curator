@@ -8,10 +8,9 @@
 
 Новый продуктовый план и критерии готовности находятся в [`ROADMAP.md`](ROADMAP.md).
 
-> Текущая Python/web-реализация — работающий переходный baseline для inventory,
-> previews, duplicates, review и safe publish. Целевая V2 — нативное SwiftUI/AppKit
-> приложение с Vision/Core ML и без браузера/localhost. Новый ranking и native GUI
-> ещё не считаются реализованными.
+> Python/web-реализация остаётся переходным диагностическим baseline. Product logic уже
+> доступна нативному клиенту через локальный stdin/stdout JSONL worker без браузера,
+> HTTP и localhost; полноценный SwiftUI workflow ещё не считается реализованным.
 
 ## Быстрый запуск
 
@@ -84,6 +83,20 @@ uv run pytest --cov=photo_curator
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+### Native worker transport
+
+SwiftUI-клиент запускает встроенный coordinator как дочерний процесс и общается с ним
+только по versioned JSONL через stdin/stdout:
+
+```bash
+uv run photo-curator native-worker
+```
+
+Каждый запрос содержит `schema_version`, correlation `id`, `method` и `params`.
+Worker предоставляет albums/projects, запуск и progress анализа, ranked assets, ручные
+decisions, Personal Taste и безопасный publish plan/apply. Это доверенная локальная
+граница приложения, а не сетевой API; stdout зарезервирован только под protocol frames.
 
 ### Native Apple Vision benchmark
 

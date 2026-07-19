@@ -1,5 +1,8 @@
 # Progress
 
+- 2026-07-20: добавлена первая часть S5 boundary: versioned correlated JSONL worker
+  через stdin/stdout без HTTP/localhost. Он предоставляет нативному клиенту albums,
+  projects, progress, ranked assets, decisions, Personal Taste и approval-gated publish.
 - 2026-07-20: реализован Personal Taste vertical slice и schema v8: явные A/B examples,
   calibration/held-out split, local pairwise Float32 model, persistent personal delta,
   pause/export/reset и API end-to-end. Реальный held-out per-user uplift ещё не доказан.
@@ -79,6 +82,7 @@ native Vision synthetic smoke                  — aesthetics 0.663; feature pri
 native signal provenance                       — schema v6; 4 signals per analyzed asset
 Swipe Score v1 persistence                     — schema v7; technical-first weighting replaced
 Personal Taste model                           — schema v8; pairwise train/pause/export/reset
+native JSONL coordinator transport             — schema v1; HTTP/localhost не используется
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
@@ -87,7 +91,7 @@ disk Best → Photos native PhotoKit publish       — implemented; dry-run + ex
 native Swift helper                              — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 109 passed
+pytest                                           — 111 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow
