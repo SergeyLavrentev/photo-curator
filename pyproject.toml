@@ -33,6 +33,7 @@ dev = [
 [tool.uv]
 dev-dependencies = [
   "httpx",
+  "pyinstaller>=6.14,<7",
   "pytest",
   "pytest-cov",
   "ruff",

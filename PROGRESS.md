@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: добавлен self-contained macOS `.app`: AppKit launcher, управление backend
+  из Dock/menu bar и веб-настроек, остановка при `⌘Q`, сборка/установка через Makefile,
+  локальная code signing и проверка bundle.
+
 ## Current milestone
 
 - Milestone: R7 — Acceptance and release audit

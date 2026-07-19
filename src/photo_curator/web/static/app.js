@@ -14,6 +14,21 @@ async function api(url, options = {}) {
   return data;
 }
 
+document.querySelector('[data-action="shutdown-backend"]')?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const status = document.querySelector("[data-shutdown-status]");
+  if (!window.confirm("Остановить локальный backend Photo Curator?")) return;
+  button.disabled = true;
+  status.textContent = "Останавливаем backend…";
+  try {
+    await api("/api/system/shutdown", { method: "POST" });
+    status.textContent = "Backend остановлен. Его можно снова запустить из меню приложения macOS.";
+  } catch (error) {
+    button.disabled = false;
+    status.textContent = error.message;
+  }
+});
+
 const newProjectForm = document.querySelector("#new-project-form");
 newProjectForm?.addEventListener("submit", async (event) => {
   event.preventDefault();

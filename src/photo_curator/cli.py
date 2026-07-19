@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import socket
 import sys
 import threading
@@ -27,6 +29,10 @@ from photo_curator.paths import default_application_paths
 from photo_curator.photos.doctor import run_doctor
 from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
 from photo_curator.web.security import SessionSecrets
+
+
+def request_process_shutdown() -> None:
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -137,7 +143,12 @@ def main(argv: list[str] | None = None) -> None:
     configure_logging(paths.log_file)
     port = choose_port(args.port)
     secrets_ = SessionSecrets.generate()
-    app = create_app(demo=args.demo, paths=paths, session_secrets=secrets_)
+    app = create_app(
+        demo=args.demo,
+        paths=paths,
+        session_secrets=secrets_,
+        shutdown_callback=request_process_shutdown,
+    )
     url = f"http://127.0.0.1:{port}/?token={secrets_.startup_token}"
     print(f"Photo Curator запущен: {url}", flush=True)
     if not args.no_browser:

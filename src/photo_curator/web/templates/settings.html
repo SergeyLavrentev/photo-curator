@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Настройки — Photo Curator{% endblock %}
+{% block content %}
+  <section class="settings-page">
+    <p class="eyebrow">Photo Curator для macOS</p>
+    <h1>Настройки</h1>
+    <p class="hero-copy">Backend работает только локально на этом Mac и доступен
+      через <code>127.0.0.1</code>.</p>
+
+    <section class="settings-panel" aria-labelledby="backend-title">
+      <div>
+        <p class="eyebrow">Состояние</p>
+        <h2 id="backend-title">Backend запущен</h2>
+        <p>После остановки эта вкладка перестанет отвечать. Запустить сервис снова
+          можно из меню Photo Curator в строке меню macOS или повторным открытием приложения.</p>
+      </div>
+      <button class="danger" type="button" data-action="shutdown-backend"
+              {% if not shutdown_available %}disabled{% endif %}>Остановить backend</button>
+    </section>
+    {% if not shutdown_available %}
+      <aside class="notice warning"><span aria-hidden="true">!</span><p>
+        Управляемая остановка недоступна в этом режиме запуска.</p></aside>
+    {% endif %}
+    <p class="form-status" data-shutdown-status role="status"></p>
+  </section>
+{% endblock %}

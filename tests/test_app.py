@@ -49,6 +49,31 @@ def test_startup_token_sets_strict_cookie_and_cleans_url(tmp_path: Path) -> None
     assert "startup-secret" not in response.headers["location"]
 
 
+def test_settings_can_request_managed_backend_shutdown(tmp_path: Path) -> None:
+    calls: list[str] = []
+    app = create_app(
+        demo=True,
+        paths=default_application_paths(tmp_path),
+        session_secrets=SessionSecrets("startup-secret", "session-secret", "csrf-secret"),
+        shutdown_callback=lambda: calls.append("shutdown"),
+    )
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        client.cookies.set(CSRF_COOKIE, "csrf-secret")
+        page = client.get("/settings")
+        response = client.post(
+            "/api/system/shutdown",
+            headers={"X-CSRF-Token": "csrf-secret"},
+        )
+
+    assert page.status_code == 200
+    assert "Backend запущен" in page.text
+    assert "Остановить backend" in page.text
+    assert response.status_code == 202
+    assert response.json() == {"status": "stopping"}
+    assert calls == ["shutdown"]
+
+
 def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     with TestClient(make_app(tmp_path)) as client:
         client.cookies.set(SESSION_COOKIE, "session-secret")

@@ -5,12 +5,13 @@ import json
 import secrets
 import stat
 import zipfile
+from collections.abc import Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -85,6 +86,7 @@ def create_app(
     paths: ApplicationPaths | None = None,
     session_secrets: SessionSecrets | None = None,
     provider: PhotosProvider | None = None,
+    shutdown_callback: Callable[[], None] | None = None,
 ) -> FastAPI:
     app_paths = paths or default_application_paths()
     secrets_ = session_secrets or SessionSecrets.generate()
@@ -152,6 +154,7 @@ def create_app(
     app.state.publisher = publisher
     app.state.shared_copier = shared_copier
     app.state.session_secrets = secrets_
+    app.state.shutdown_callback = shutdown_callback
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "testserver"],
@@ -232,6 +235,26 @@ def create_app(
             "doctor.html",
             _context(request, demo=demo, checks=checks),
         )
+
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page(request: Request):
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            _context(
+                request,
+                demo=demo,
+                shutdown_available=shutdown_callback is not None,
+                csrf_token=secrets_.csrf_token,
+            ),
+        )
+
+    @app.post("/api/system/shutdown", status_code=202)
+    async def shutdown_backend(background_tasks: BackgroundTasks) -> dict[str, str]:
+        if shutdown_callback is None:
+            raise HTTPException(409, "Остановка доступна при запуске через macOS-приложение")
+        background_tasks.add_task(shutdown_callback)
+        return {"status": "stopping"}
 
     @app.get("/shared/{album_id}/copy", response_class=HTMLResponse)
     async def shared_copy_page(
