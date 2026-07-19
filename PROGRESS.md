@@ -36,10 +36,13 @@ real 20-photo Best publish dry-run            — dry_run_ok, 10 UUIDs, apply no
 real Chrome desktop + ~500 px workflow        — passed; gallery, preview, filters, pipeline rerun
 demo pipeline rerun from browser              — 5 selected / 3 review / 4 excluded / 2 series
 responsive navigation regression contract     — passed
+390 px overflow contract                       — batch toolbar, series grid and pagination fixed
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
 pytest                                         — 79 passed
 ruff format / check                            — passed
+local PhotoCurator data roots                  — absent after current demo audit
+service-created PhotoCurator albums            — none in current Photos library
 ```
 
 The in-app browser remains blocked from `127.0.0.1` by enterprise network policy,

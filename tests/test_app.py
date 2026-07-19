@@ -103,6 +103,10 @@ def test_mobile_ui_keeps_global_navigation_and_explains_horizontal_scroll(tmp_pa
     assert ".topbar nav { display: flex" in css
     assert "scroll-snap-type: x proximity" in css
     assert "scrollbar-width: thin" in css
+    assert ".review-toolbar { top: 52px; grid-template-columns: repeat(4, minmax(0, 1fr)); }" in css
+    assert ".review-toolbar span { grid-column: 1 / -1; }" in css
+    assert ".duplicate-members { grid-template-columns: repeat(2, minmax(0, 1fr)); }" in css
+    assert ".pagination { align-items: flex-start; flex-wrap: wrap; }" in css
     assert "листайте этапы" in dashboard
     assert "Листайте фильтры" in review
     assert "category=resolution" in review

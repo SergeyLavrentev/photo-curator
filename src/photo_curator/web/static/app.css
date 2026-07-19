@@ -23,6 +23,7 @@ footer { padding: 18px 4vw; border-top: 1px solid var(--line); color: var(--mute
 .hero { margin-bottom: 22px; } .hero.compact { align-items: center; }
 .eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 h1 { margin: 0; font-size: clamp(30px, 5vw, 48px); letter-spacing: -.035em; line-height: 1; }
+h1, h2, h3 { overflow-wrap: anywhere; }
 .hero-copy { max-width: 680px; margin: 10px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
 h2 { margin: 0; font-size: 22px; } section + section { margin-top: 34px; }
 .section-heading { margin-bottom: 12px; } .section-heading > p { margin: 0; color: var(--muted); font-size: 12px; }
@@ -113,6 +114,7 @@ input, select, textarea { width: 100%; padding: 9px 10px; border: 1px solid var(
   .hero, .page-heading, .section-heading, .safety-panel { align-items: start; flex-direction: column; }
   .project-grid, .new-project, .environment-grid, .publish-counts, .publish-layout { grid-template-columns: 1fr; }
   .gallery { grid-template-columns: repeat(2, 1fr); }
+  .duplicate-members { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .project-nav, .pipeline { scrollbar-color: var(--muted) transparent; scrollbar-width: thin; scroll-snap-type: x proximity; overscroll-behavior-inline: contain; }
   .project-nav { margin-bottom: 5px; padding-bottom: 7px; }
   .project-nav a, .pipeline .stage { scroll-snap-align: start; }
@@ -122,5 +124,9 @@ input, select, textarea { width: 100%; padding: 9px 10px; border: 1px solid var(
   .active-stage-detail { grid-template-columns: 1fr; gap: 5px; }
   .active-stage-metrics { flex-wrap: wrap; gap: 4px 10px; white-space: normal; }
   .distribution-card { grid-template-columns: 1fr; }
+  .review-toolbar { top: 52px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .review-toolbar span { grid-column: 1 / -1; }
+  .review-toolbar button { min-width: 0; padding-inline: 3px; font-size: 9px; white-space: nowrap; }
+  .pagination { align-items: flex-start; flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
