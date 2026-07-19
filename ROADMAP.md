@@ -73,9 +73,13 @@ selections; Favorites, edited frames and validated series leaders remain protect
 Acceptance: a labelled 50–100 photo fixture measures duplicate precision, series
 leader accuracy and false exclusions.
 
-Implemented automated baseline: a generated labelled 60-photo fixture covers exact,
-recompressed, resized, blurred, dark and separated scenes. Human-labelled travel
-album acceptance remains an R7 release gate.
+Release thresholds: pairwise duplicate precision ≥ 90%, duplicate recall ≥ 80%,
+series leader accuracy ≥ 80% and false exclusion rate ≤ 5%. The checked-in
+acceptance evaluator rejects incomplete labels and produces text or JSON evidence.
+
+Implemented automated baseline: a generated labelled 80-photo fixture covers exact,
+recompressed, resized, cropped, blurred, dark, overexposed and separated scenes.
+Human-labelled travel album acceptance remains an R7 release gate.
 
 ## R4 — clear dark UI
 
@@ -121,6 +125,8 @@ album `osxphotos` dry-run with 10 selected UUIDs. Apply was intentionally not ru
 - Maintain a generated unit fixture for exact, recompressed, resized, cropped,
   blurred, dark, overexposed and unrelated images.
 - Maintain a labelled real-world acceptance album of 50–100 expendable assets.
+- Export and evaluate the human labels reproducibly with `acceptance-template` and
+  `acceptance-evaluate`; never treat an unfilled template as evidence.
 - Run performance acceptance at 100, 2,000 and 5,000 inventory rows.
 - Verify tests, lint, dark UI screenshots, restart/resume and macOS publish dry-run.
 - Update `PROGRESS.md` only from verified evidence.

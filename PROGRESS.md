@@ -31,11 +31,14 @@ curated result                               — 3 selected / 16 review / 1 excl
 score range                                  — 26–90
 2,000 synthetic rows                         — 5,454 / 1,999,000 pairs in 0.013 s
 5,000 synthetic rows                         — 19,059 / 12,497,500 pairs in 0.039 s
-60-photo labelled generated fixture          — passed; no cross-scene groups
+80-photo labelled generated fixture          — exact/resized/cropped/blur/dark/overexposed passed
 real 20-photo Best publish dry-run            — dry_run_ok, 10 UUIDs, apply not run
 real Chrome desktop + ~500 px workflow        — passed; gallery, preview, filters, pipeline rerun
 demo pipeline rerun from browser              — 5 selected / 3 review / 4 excluded / 2 series
 responsive navigation regression contract     — passed
+human-labelled manifest + metric evaluator     — implemented; real labels still pending
+pytest                                         — 73 passed
+ruff format / check                            — passed
 ```
 
 The in-app browser remains blocked from `127.0.0.1` by enterprise network policy,

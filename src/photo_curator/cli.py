@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import sys
 import threading
 import webbrowser
+from pathlib import Path
 
 import uvicorn
 
 from photo_curator import __version__
+from photo_curator.acceptance import (
+    AcceptanceManifestError,
+    build_manifest_template,
+    evaluate_acceptance,
+    format_report,
+    load_manifest,
+)
 from photo_curator.app import create_app
+from photo_curator.db.connection import database_connection
+from photo_curator.db.migrations import migrate
+from photo_curator.db.repository import get_project, list_assets, list_duplicate_groups
 from photo_curator.logging_setup import configure_logging
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.doctor import run_doctor
@@ -22,10 +34,18 @@ def build_parser() -> argparse.ArgumentParser:
         prog="photo-curator",
         description="Безопасный локальный помощник для ревью Apple Photos",
     )
-    parser.add_argument("command", nargs="?", choices=["doctor", "version"])
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["doctor", "version", "acceptance-template", "acceptance-evaluate"],
+    )
     parser.add_argument("--demo", action="store_true", help="Запустить synthetic demo")
     parser.add_argument("--no-browser", action="store_true", help="Не открывать браузер")
     parser.add_argument("--port", type=valid_port, default=0, help="Loopback port; 0 — выбрать")
+    parser.add_argument("--project-id", help="ID проекта для acceptance")
+    parser.add_argument("--labels", type=Path, help="JSON manifest с человеческой разметкой")
+    parser.add_argument("--output", type=Path, help="Записать template в файл вместо stdout")
+    parser.add_argument("--json", action="store_true", help="Вывести acceptance-отчёт как JSON")
     return parser
 
 
@@ -57,6 +77,46 @@ def print_doctor() -> int:
     return 1 if any(check.status == "ERROR" for check in checks) else 0
 
 
+def run_acceptance_command(args: argparse.Namespace) -> int:
+    if not args.project_id:
+        raise AcceptanceManifestError("Укажите --project-id")
+    paths = default_application_paths()
+    if not paths.database.is_file():
+        raise AcceptanceManifestError("База Photo Curator не найдена")
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        try:
+            get_project(connection, args.project_id)
+        except KeyError as error:
+            raise AcceptanceManifestError(f"Проект не найден: {args.project_id}") from error
+        assets = list_assets(connection, args.project_id)
+        if args.command == "acceptance-template":
+            payload = build_manifest_template(args.project_id, assets)
+            rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+            if args.output:
+                try:
+                    args.output.write_text(rendered, encoding="utf-8")
+                except OSError as error:
+                    raise AcceptanceManifestError(
+                        f"Не удалось записать template: {error}"
+                    ) from error
+                print(f"Acceptance template: {args.output}")
+            else:
+                print(rendered, end="")
+            return 0
+        if not args.labels:
+            raise AcceptanceManifestError("Укажите --labels")
+        manifest = load_manifest(args.labels)
+        report = evaluate_acceptance(
+            manifest,
+            assets,
+            list_duplicate_groups(connection, args.project_id),
+            project_id=args.project_id,
+        )
+    print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else format_report(report))
+    return 0 if report["passed"] else 1
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "version":
@@ -64,6 +124,13 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "doctor":
         raise SystemExit(print_doctor())
+    if args.command in {"acceptance-template", "acceptance-evaluate"}:
+        try:
+            result = run_acceptance_command(args)
+        except AcceptanceManifestError as error:
+            print(f"Acceptance error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
 
     paths = default_application_paths()
     paths.ensure()

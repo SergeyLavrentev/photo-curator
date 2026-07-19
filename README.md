@@ -48,6 +48,31 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
+### Human-labelled acceptance
+
+Для R7 используется отдельный manifest, связанный с уже проанализированным проектом.
+Команда создаёт шаблон с UUID и именами файлов, но не копирует фотографии:
+
+```bash
+uv run photo-curator acceptance-template --project-id PROJECT_ID \
+  --output human-labels.json
+```
+
+Для каждого фото человек заполняет `expected_disposition` (`keep`, `review` или
+`reject`). Кадры одной серии получают одинаковый `duplicate_group`; ровно один из
+них отмечается `expected_leader: true`. После этого отчёт строится одной командой:
+
+```bash
+uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
+  --labels human-labels.json
+```
+
+Release-fixture должен содержать 50–100 фото и хотя бы одну размеченную серию.
+Пороговые значения записаны прямо в manifest: duplicate precision ≥ 90%, recall ≥
+80%, точность лидера серии ≥ 80%, доля ложных исключений ≤ 5%. Ключ `--json`
+выдаёт машинно-читаемый отчёт. Exit code `0` означает PASS, `1` — измеренный FAIL,
+`2` — некорректную или неполную разметку.
+
 Полное ТЗ находится в `CODEX_PROJECT_SPEC.md`, тематические документы — в `docs/`,
 архитектурные решения — в `decisions/`. Инструкции для разработчика и текущий статус:
 `DEVELOPMENT.md` и `PROGRESS.md`.

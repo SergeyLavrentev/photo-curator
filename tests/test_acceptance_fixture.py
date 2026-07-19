@@ -19,7 +19,7 @@ def _scene(index: int) -> Image.Image:
     return image
 
 
-def test_labelled_sixty_photo_fixture_keeps_series_separate(tmp_path: Path) -> None:
+def test_labelled_eighty_photo_fixture_keeps_series_separate(tmp_path: Path) -> None:
     rows = []
     labels = {}
     for scene in range(10):
@@ -29,8 +29,12 @@ def test_labelled_sixty_photo_fixture_keeps_series_separate(tmp_path: Path) -> N
             "exact": original.copy(),
             "recompressed": original.copy(),
             "resized": original.resize((160, 120), Image.Resampling.LANCZOS),
+            "cropped": original.crop((40, 30, 300, 220)).resize(
+                (320, 240), Image.Resampling.LANCZOS
+            ),
             "blurred": original.filter(ImageFilter.GaussianBlur(8)),
             "dark": ImageEnhance.Brightness(original).enhance(0.16),
+            "overexposed": ImageEnhance.Brightness(original).enhance(3.0),
         }
         for offset, (kind, image) in enumerate(variants.items()):
             uuid = f"scene-{scene:02d}-{kind}"
@@ -70,7 +74,7 @@ def test_labelled_sixty_photo_fixture_keeps_series_separate(tmp_path: Path) -> N
     pairs = list(_candidate_pairs(rows))
     groups = find_duplicate_groups(rows, candidate_pairs=pairs)
 
-    assert len(rows) == 60
+    assert len(rows) == 80
     assert len(pairs) < len(rows) * (len(rows) - 1) // 2
     assert len(groups) >= 10
     assert all(
@@ -84,5 +88,9 @@ def test_labelled_sixty_photo_fixture_keeps_series_separate(tmp_path: Path) -> N
         sharp = next(row for row in rows if row["asset_uuid"] == f"scene-{scene:02d}-original")
         blurred = next(row for row in rows if row["asset_uuid"] == f"scene-{scene:02d}-blurred")
         dark = next(row for row in rows if row["asset_uuid"] == f"scene-{scene:02d}-dark")
+        overexposed = next(
+            row for row in rows if row["asset_uuid"] == f"scene-{scene:02d}-overexposed"
+        )
         assert float(sharp["laplacian_variance"]) > float(blurred["laplacian_variance"])
         assert float(dark["luma_mean"]) < float(sharp["luma_mean"])
+        assert float(overexposed["white_clipped_ratio"]) > float(sharp["white_clipped_ratio"])
