@@ -1,23 +1,19 @@
 {% extends "base.html" %}
-{% block title %}Публикация — {{ project.name }}{% endblock %}
+{% block title %}Сохранить результат — {{ project.name }}{% endblock %}
 {% block content %}
-  <section class="page-heading"><div><p class="eyebrow">{{ project.name }}</p><h1>Reject-альбом</h1></div>
-    <a class="secondary button-link" href="/projects/{{ project.id }}">← Pipeline</a></section>
-  <section class="publish-layout" data-project-id="{{ project.id }}">
-    <article class="publish-card"><p class="eyebrow">Кандидаты</p><strong>{{ summary.reject }}</strong><span>final rejects</span></article>
+  <section class="page-heading"><div><p class="eyebrow">{{ project.name }}</p><h1>Сохранить в Photos</h1></div>
+    <a class="secondary button-link" href="/projects/{{ project.id }}">← Результат</a></section>
+  <nav class="project-nav" aria-label="Тип результата">
+    <a class="{% if publish_kind == 'best' %}active{% endif %}" href="?kind=best">Best — отобранные</a>
+    <a class="{% if publish_kind == 'reject' %}active{% endif %}" href="?kind=reject">Reject — исключённые</a>
+  </nav>
+  <section class="publish-layout" data-project-id="{{ project.id }}" data-publish-kind="{{ publish_kind }}">
+    <article class="publish-card"><p class="eyebrow">{% if publish_kind == 'best' %}Отобрано{% else %}Исключено{% endif %}</p><strong>{{ summary.keep if publish_kind == 'best' else summary.reject }}</strong><span>кадров для {{ 'Best' if publish_kind == 'best' else 'Reject' }}-альбома</span></article>
     <article class="publish-card"><p class="eyebrow">Source drift</p><strong>{{ validation.removed_uuids | length if validation else 0 }}</strong><span>исключено</span></article>
     <article class="publish-card"><p class="eyebrow">Blockers</p><strong>{{ validation.blockers | length if validation else 1 }}</strong><span>до dry-run</span></article>
   </section>
-  <section class="publish-counts" aria-label="Состав reject-набора">
-    {% for label, value in [('Auto reject', publish_counts.auto_reject), ('Manual reject', publish_counts.manual_reject),
-      ('Duplicate losers', publish_counts.duplicate_losers), ('Favorite', publish_counts.favorites),
-      ('Edited', publish_counts.edited), ('Resolution', publish_counts.resolution),
-      ('Missing', publish_counts.missing), ('Не просмотрено', publish_counts.unreviewed)] %}
-      <article><span>{{ label }}</span><strong>{{ value }}</strong></article>
-    {% endfor %}
-  </section>
   <section class="publish-panel">
-    <h2>Проверка безопасности</h2>
+    <h2>{{ 'Best' if publish_kind == 'best' else 'Reject' }}-альбом Apple Photos</h2>
     {% if validation %}
       {% for blocker in validation.blockers %}<p class="validation blocker">✕ {{ blocker }}</p>{% endfor %}
       {% for warning in validation.warnings %}<p class="validation warning">⚠ {{ warning }}</p>{% endfor %}
@@ -25,15 +21,19 @@
     {% endif %}
     <button class="secondary" data-action="publish-dry-run" {% if not validation or validation.blockers %}disabled{% endif %}>1. Выполнить dry-run</button>
   </section>
+  <section class="publish-panel"><h2>Локальная копия для просмотра</h2>
+    <p>ZIP содержит локальные review-превью отобранных кадров. Оригиналы не копируются и не меняются.</p>
+    <button class="secondary" data-action="export-selected">Скачать ZIP</button>
+  </section>
   {% if publish %}
     <section class="publish-panel"><h2>Последняя попытка</h2><p>Статус: <strong>{{ publish.status }}</strong></p>
       <p>Альбом: {{ publish.album_name }}</p>
       <p>Dry-run return code: {{ publish.dry_run_return_code if publish.dry_run_return_code is not none else '—' }}.
         Полный audit сохранён только в локальной SQLite.</p>
       <label class="confirmation"><input type="checkbox" id="publish-confirm"> Я понимаю: будет создан новый обычный альбом, фотографии не удаляются.</label>
-      <button class="primary" data-action="publish-apply" data-publish-id="{{ publish.id }}" {% if publish.status != 'dry_run_ok' %}disabled{% endif %}>2. Создать Reject-альбом</button>
+      <button class="primary" data-action="publish-apply" data-publish-id="{{ publish.id }}" {% if publish.status != 'dry_run_ok' %}disabled{% endif %}>2. Создать {{ 'Best' if publish_kind == 'best' else 'Reject' }}-альбом</button>
     </section>
   {% endif %}
-  <section class="safety-panel"><div><p class="eyebrow">После публикации</p><h2>Удаление только вручную</h2></div>
-    <ol><li>Откройте созданный Reject-альбом.</li><li>Ещё раз просмотрите фото.</li><li>Command + Delete удаляет их из всей личной медиатеки.</li><li>При ошибке восстановите из Recently Deleted.</li></ol></section>
+  <section class="safety-panel"><div><p class="eyebrow">Безопасный результат</p><h2>Создаётся новый {{ 'Best' if publish_kind == 'best' else 'Reject' }}-альбом</h2></div>
+    <p>Оригиналы и исходный альбом не меняются. Даже Reject-альбом ничего не удаляет автоматически.</p></section>
 {% endblock %}

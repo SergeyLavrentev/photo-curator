@@ -1,10 +1,12 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
 from photo_curator.analysis.hashes import dhash, hamming_distance, phash, render_equivalence_hash
 from photo_curator.analysis.normalization import percentile_ranks, robust_stats
 from photo_curator.analysis.technical import technical_metrics
+from photo_curator.analysis.vision import analyze_faces, vision_available
 from photo_curator.photos.osxphotos_provider import _score_dict
 
 
@@ -64,3 +66,14 @@ def test_single_optional_score_is_neutral_and_dataclass_is_supported() -> None:
         "overall": 0.9,
         "curation": 0.4,
     }
+
+
+def test_local_vision_face_analysis_is_capability_gated(tmp_path: Path) -> None:
+    image_path = tmp_path / "plain.jpg"
+    Image.new("RGB", (160, 120), "#345d78").save(image_path)
+
+    result = analyze_faces(image_path)
+
+    assert result.face_count == 0
+    assert result.eyes_detected == 0
+    assert vision_available() in {True, False}

@@ -48,6 +48,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         "previews",
         "metrics",
         "duplicates",
+        "vision",
         "decisions",
     }
     assert all(job["status"] in {"done", "warning"} for job in jobs)
@@ -162,3 +163,20 @@ def test_inventory_snapshot_tracks_render_metadata_video_count_and_removed_asset
     with database_connection(paths.database) as connection:
         removed = repository.get_asset(connection, project_id, "demo-012")
     assert removed["no_longer_exists"] == 1
+
+
+def test_startup_interruption_updates_both_job_and_project_state(tmp_path: Path) -> None:
+    paths, _, _, project_id = build_pipeline(tmp_path)
+    with database_connection(paths.database) as connection:
+        repository.create_job(connection, project_id, "inventory", 12)
+        repository.set_project_state(connection, project_id, "running")
+
+    with database_connection(paths.database) as connection:
+        count = repository.mark_running_jobs_interrupted(connection)
+
+    with database_connection(paths.database) as connection:
+        project = repository.get_project(connection, project_id)
+        jobs = repository.latest_jobs(connection, project_id)
+    assert count == 1
+    assert project["state"] == "interrupted"
+    assert jobs[0]["status"] == "interrupted"

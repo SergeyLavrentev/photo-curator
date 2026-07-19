@@ -120,11 +120,39 @@ def test_apply_requires_new_dry_run_after_source_drift(tmp_path: Path) -> None:
         executable="/usr/bin/true",
     )
     dry_run = publisher.dry_run(project_id)
-    reject_uuid = Path(str(dry_run["uuid_file"])).read_text(encoding="utf-8").strip()
+    reject_uuid = Path(str(dry_run["uuid_file"])).read_text(encoding="utf-8").splitlines()[0]
     provider._assets = [asset for asset in provider._assets if asset.uuid != reject_uuid]
 
     with pytest.raises(ValueError, match="новый dry-run"):
         publisher.apply(str(dry_run["id"]))
+
+
+def test_best_album_publish_contains_selected_assets(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+
+    def runner(args: list[str]) -> CommandResult:
+        output = "--uuid-from-file --add-to-album --dry-run" if "--help" in args else "ok"
+        return CommandResult(args, 0, output, "")
+
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        runner=runner,
+        executable="/usr/bin/true",
+    )
+    result = publisher.dry_run(project_id, "best")
+    with database_connection(paths.database) as connection:
+        selected = {
+            str(asset["asset_uuid"])
+            for asset in repository.list_assets(connection, project_id)
+            if asset["final_disposition"] == "keep"
+        }
+
+    assert result["kind"] == "best"
+    assert " — Best — " in str(result["album_name"])
+    assert set(Path(str(result["uuid_file"])).read_text().splitlines()) == selected
 
 
 def test_resolution_inversion_blocks_publish_until_explicit_manual_confirmation(

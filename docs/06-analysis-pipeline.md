@@ -2,7 +2,7 @@
 
 ## Принцип
 
-MVP использует лёгкий, локальный и объяснимый анализ. Он не пытается решать все субъективные задачи фотографии. Основной automatic reject — уверенный проигравший в duplicate-группе. Технические и эстетические сомнения направляются в review.
+Pipeline использует локальный и объяснимый анализ. Его цель — ранжированная подборка, а не только список удаления. Технические сигналы, серии и доступный Apple Vision объединяются в оценку 0–100.
 
 ## Preview normalization
 
@@ -50,7 +50,8 @@ SHA-256 normalized 256×256 RGB pixels. Это равенство нормали
 - equal render-equivalence hash;
 - strict pHash distance;
 - relaxed pHash + short capture-time window;
-- burst key.
+- только валидный burst key; `0`, `"0"` и пустые значения считаются отсутствующими;
+- band buckets ограничены соседями, temporal bucket — 40 ближайшими кадрами.
 
 ## Pair confirmation
 
@@ -63,7 +64,7 @@ SHA-256 normalized 256×256 RGB pixels. Это равенство нормали
 
 ## Grouping
 
-Union-find connected components. Проверить similarity каждого member к chosen leader. Chaining с плохим leader similarity → `ambiguous`.
+Union-find на подтвержденных парах, затем обязательная проверка каждого member непосредственно с chosen leader. Слабые A-B-C chains разбиваются на отдельные группы.
 
 ## Leader ranking
 
@@ -79,6 +80,11 @@ Union-find connected components. Проверить similarity каждого me
 
 Низкоразрешённая импортированная копия не должна автоматически вытеснять полноразмерный original. `resolution_inversion` блокирует publish до ручного решения.
 
+## Локальный Apple Vision
+
+Capability-gated этап определяет лица, face capture quality и наличие landmarks глаз.
+При недоступности framework этап честно помечается warning; cloud fallback отсутствует.
+
 ## Decisions
 
 ```text
@@ -87,12 +93,15 @@ review
 reject
 ```
 
-Default automatic reject:
+Пользовательские названия: `Отобрано / Проверить / Исключено`. Оценка хранится в
+structured reason вместе с component breakdown. Пороги зависят от density preset.
+
+Default automatic excluded:
 
 - render-equivalent duplicate loser;
 - high-confidence near-duplicate loser при отсутствии protections и warnings.
 
-Default technical defect → review.
+Clearly weak technical defect может стать Excluded; пограничный или неоднозначный → Review.
 
 ## Optional Apple scores
 
@@ -100,9 +109,7 @@ Default technical defect → review.
 
 ## Deferred analysis
 
-До optional native Vision helper отложить:
-
-- closed eyes;
+- надёжная классификация closed eyes (текущий слой видит landmarks, но не объявляет состояние);
 - semantic composition;
 - pose/occlusion analysis;
 - face identity;

@@ -58,13 +58,12 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "Черногория" in home.text
     assert response.status_code == 200
     assert "Черногория" in response.text
-    assert "Ход обработки" in response.text
-    assert "Поиск дубликатов" in response.text
+    assert "Ход анализа" in response.text
+    assert "Серий / дублей" in response.text
     assert "Проверка среды" in response.text
-    assert "Ручное ревью" in response.text
-    assert "Публикация Reject-альбома" in response.text
-    assert "Видео пропущено" in response.text
-    assert "Cache accessed" in response.text
+    assert "Проверка результата" in response.text
+    assert "Альбом с результатом" in response.text
+    assert "Отобрано" in response.text
     assert "Photos Library" in home.text
     assert "osxphotos" in home.text
     assert '<meta name="csrf-token" content="csrf-secret">' in response.text
@@ -177,9 +176,26 @@ def test_duplicate_and_publish_pages_expose_manual_and_safety_controls(tmp_path:
     assert "similarity" in duplicates.text
     assert "sharpness" in duplicates.text
     assert publish.status_code == 200
-    assert "Auto reject" in publish.text
-    assert "Manual reject" in publish.text
-    assert "Не просмотрено" in publish.text
+    assert "Сохранить в Photos" in publish.text
+    assert "Best-альбом" in publish.text
+    assert "Оригиналы и исходный альбом не меняются" in publish.text
+    assert "Reject — исключённые" in publish.text
+
+
+def test_selected_preview_export_is_prepared_and_downloaded(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        client.cookies.set(CSRF_COOKIE, "csrf-secret")
+        prepared = client.post(
+            "/api/projects/demo-project/export/selected",
+            headers={"X-CSRF-Token": "csrf-secret"},
+        )
+        downloaded = client.get(prepared.json()["url"])
+
+    assert prepared.status_code == 200
+    assert prepared.json()["count"] >= 1
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"] == "application/zip"
 
 
 class BrokenPhotosProvider(FakePhotosProvider):

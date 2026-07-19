@@ -125,7 +125,7 @@ class OSXPhotosProvider:
             has_adjustments=bool(getattr(photo, "hasadjustments", False)),
             is_live_photo=bool(getattr(photo, "live_photo", False)),
             is_burst=bool(getattr(photo, "burst", False)),
-            burst_key=getattr(photo, "burst_key", None),
+            burst_key=_optional_text(getattr(photo, "burst_key", None)),
             burst_default_pick=bool(getattr(photo, "burst_default_pick", False)),
             is_missing=bool(getattr(photo, "ismissing", False)),
             is_photo=bool(getattr(photo, "isphoto", True)),
@@ -138,6 +138,13 @@ class OSXPhotosProvider:
 
 def _path_or_none(value: Any) -> Path | None:
     return Path(value) if value else None
+
+
+def _optional_text(value: Any) -> str | None:
+    """Normalize osxphotos' numeric/empty sentinels to missing metadata."""
+    if value in (None, False, 0, "", "0"):
+        return None
+    return str(value)
 
 
 def _iso(value: datetime | None) -> str | None:

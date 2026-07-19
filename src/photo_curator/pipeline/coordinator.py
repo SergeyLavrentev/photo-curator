@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -11,6 +12,7 @@ from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_
 from photo_curator.analysis.image_loader import load_normalized
 from photo_curator.analysis.normalization import percentile_ranks
 from photo_curator.analysis.technical import technical_metrics
+from photo_curator.analysis.vision import analyze_faces, vision_available
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
@@ -21,7 +23,7 @@ from photo_curator.pipeline.previews import build_previews, source_fingerprint
 
 LOGGER = logging.getLogger(__name__)
 
-STAGES = ("inventory", "previews", "metrics", "duplicates", "decisions")
+STAGES = ("inventory", "previews", "metrics", "duplicates", "vision", "decisions")
 PREVIEW_LIMIT = Semaphore(2)
 
 
@@ -54,6 +56,8 @@ class PipelineCoordinator:
     def run(self, project_id: str, *, from_stage: str | None = None) -> None:
         start_index = STAGES.index(from_stage) if from_stage else 0
         try:
+            with database_connection(self.database_path) as connection:
+                repository.set_project_state(connection, project_id, "running")
             for stage in STAGES[start_index:]:
                 LOGGER.info("Stage started project=%s stage=%s", project_id, stage)
                 getattr(self, f"_stage_{stage}")(project_id)
@@ -279,25 +283,98 @@ class PipelineCoordinator:
     def _stage_duplicates(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
             assets = repository.list_assets(connection, project_id)
-            job_id = repository.create_job(connection, project_id, "duplicates", len(assets))
-        groups = find_duplicate_groups(assets)
+            job_id = repository.create_job(connection, project_id, "duplicates", 0)
+
+        def report_progress(processed: int, total: int) -> None:
+            with database_connection(self.database_path) as connection:
+                connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (total, job_id))
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=processed,
+                    message=f"Сравнение {processed} из {total} пар",
+                )
+
+        groups = find_duplicate_groups(assets, progress=report_progress)
         with database_connection(self.database_path) as connection:
             repository.replace_duplicate_groups(connection, project_id, groups)
+            total = connection.execute(
+                "SELECT total_items FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()["total_items"]
             repository.update_job(
                 connection,
                 job_id,
                 status="done",
-                processed=len(assets),
+                processed=total,
                 message=f"Найдено групп: {len(groups)}",
+            )
+
+    def _stage_vision(self, project_id: str) -> None:
+        with database_connection(self.database_path) as connection:
+            assets = [
+                asset
+                for asset in repository.list_assets(connection, project_id)
+                if asset.get("cache_state") == "ready" and asset.get("phash")
+            ]
+            job_id = repository.create_job(connection, project_id, "vision", len(assets))
+        if not vision_available():
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="warning",
+                    processed=0,
+                    warnings=1,
+                    message="Apple Vision недоступен; используется технический рейтинг",
+                )
+            return
+        errors = 0
+        for index, asset in enumerate(assets, start=1):
+            try:
+                result = analyze_faces(Path(str(asset["review_path"])))
+                with database_connection(self.database_path) as connection:
+                    repository.update_vision_metrics(
+                        connection,
+                        project_id,
+                        str(asset["asset_uuid"]),
+                        face_count=result.face_count,
+                        face_capture_quality=result.face_capture_quality,
+                        eyes_detected=result.eyes_detected,
+                    )
+            except Exception:
+                errors += 1
+                LOGGER.exception("Vision analysis failed for %s", asset["asset_uuid"])
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=index,
+                    errors=errors,
+                    message=f"Лица и глаза {index} из {len(assets)}",
+                )
+        with database_connection(self.database_path) as connection:
+            repository.update_job(
+                connection,
+                job_id,
+                status="warning" if errors else "done",
+                processed=len(assets),
+                errors=errors,
             )
 
     def _stage_decisions(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
             assets = repository.list_assets(connection, project_id)
             duplicate_by_asset = repository.duplicate_context(connection, project_id)
+            project = repository.get_project(connection, project_id)
+            settings = json.loads(str(project.get("settings_json") or "{}"))
+            density = str(settings.get("selection_density") or "balanced")
             job_id = repository.create_job(connection, project_id, "decisions", len(assets))
             for index, asset in enumerate(assets, start=1):
-                decision = decide_asset(asset, duplicate_by_asset.get(str(asset["asset_uuid"])))
+                decision = decide_asset(
+                    asset,
+                    duplicate_by_asset.get(str(asset["asset_uuid"])),
+                    density,
+                )
                 repository.upsert_decision(
                     connection,
                     project_id,

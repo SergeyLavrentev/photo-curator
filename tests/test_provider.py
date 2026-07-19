@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.doctor import run_doctor
 from photo_curator.photos.fake_provider import FakePhotosProvider
-from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
+from photo_curator.photos.osxphotos_provider import OSXPhotosProvider, _optional_text
 
 
 def test_fake_provider_passes_doctor_metadata_and_render_read_gate(tmp_path: Path) -> None:
@@ -46,3 +46,8 @@ def test_real_provider_contains_single_asset_metadata_failure() -> None:
     broken = assets[1]
     assert broken.is_missing is True
     assert broken.provider_error == "ValueError"
+
+
+def test_osxphotos_empty_burst_sentinels_are_not_persisted_as_real_keys() -> None:
+    assert [_optional_text(value) for value in (None, False, 0, "", "0")] == [None] * 5
+    assert _optional_text("burst-42") == "burst-42"

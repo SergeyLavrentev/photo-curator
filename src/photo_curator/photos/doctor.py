@@ -8,6 +8,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from photo_curator.analysis.vision import vision_available
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.render_resolver import resolve_source_render
@@ -47,6 +48,12 @@ def run_doctor(provider: PhotosProvider | None, paths: ApplicationPaths) -> list
         _directory_check("log_dir", "Logs", paths.log_dir),
         _loopback_check(),
         _photos_process_check(),
+        DoctorCheck(
+            "apple_vision",
+            "Apple Vision (лица и глаза)",
+            "OK" if vision_available() else "WARNING",
+            "локально доступен" if vision_available() else "недоступен; этап будет пропущен",
+        ),
     ]
     try:
         version = importlib.metadata.version("osxphotos")

@@ -3,18 +3,20 @@
 | Requirement | Implementation area | Validation |
 |---|---|---|
 | Regular albums only | `photos/provider.py`, album UI | Provider tests + manual browser test |
-| Shared intake is manual | UI warning, intake docs | UX acceptance |
+| Shared intake is guided | source capability UI and intake docs | provider/UI tests |
 | No automatic deletion | Publisher boundary | Code review + no delete API tests |
 | No direct Photos DB writes | `photos/` contract | Static review, integration gate |
 | Visual pipeline | dashboard/Jinja/JS | Demo acceptance |
-| Resume | jobs/repository/coordinator | `test_pipeline_resume.py` |
+| Resume | jobs/repository/coordinator | `test_pipeline.py` |
 | Preview cache | render resolver | orientation/cache tests |
 | Lightweight analysis | Pillow/NumPy modules | metrics/hash tests |
 | Duplicate grouping | similarity/union-find | duplicate fixtures |
 | Protect high-res original | leader/validation | shared-like copy fixture |
 | Manual override persistence | decisions/repository | restart/reanalysis test |
 | Dry-run before apply | publisher state machine | publisher mocks |
-| Unique Reject album | publisher naming | unit test |
+| Unique Best/Reject albums | publisher kind and naming | publisher tests |
+| Score 0–100 and reasons | decision engine and gallery | decision/UI tests |
+| Bounded candidate generation | hash bands, time windows, valid bursts | scale tests |
 | Local web security | `web/security.py` | API/security tests |
 | Safe cache cleanup | `safe_paths.py` | traversal/symlink tests |
 | No heavy dependencies | `pyproject.toml` | dependency review |

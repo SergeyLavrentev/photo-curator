@@ -59,17 +59,23 @@ class PhotosPublisher:
                 self._capability = False
         return self._capability
 
-    def validate(self, project_id: str) -> PublishValidation:
+    def validate(self, project_id: str, kind: str = "reject") -> PublishValidation:
+        if kind not in {"best", "reject"}:
+            raise ValueError("Неизвестный тип альбома")
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)
             assets = repository.list_assets(connection, project_id)
             groups = repository.list_duplicate_groups(connection, project_id)
-        rejects = [asset for asset in assets if asset.get("final_disposition") == "reject"]
+        candidates = [
+            asset
+            for asset in assets
+            if asset.get("final_disposition") == ("keep" if kind == "best" else "reject")
+        ]
         try:
             refreshed = {
                 asset.uuid: asset
                 for asset in self.provider.refresh_assets(
-                    [str(asset["asset_uuid"]) for asset in rejects]
+                    [str(asset["asset_uuid"]) for asset in candidates]
                 )
             }
             current_library = self.provider.get_current_library()
@@ -80,7 +86,7 @@ class PhotosPublisher:
         accepted, removed, blockers, warnings = [], [], [], []
         if current_library.fingerprint != project["library_fingerprint"]:
             warnings.append("Photos Library fingerprint изменился после инвентаризации")
-        for row in rejects:
+        for row in candidates:
             uuid = str(row["asset_uuid"])
             current = refreshed.get(uuid)
             try:
@@ -90,6 +96,12 @@ class PhotosPublisher:
                 break
             if not current or not still_in_album:
                 removed.append(uuid)
+                continue
+            if kind == "best":
+                if row.get("cache_state") != "ready":
+                    blockers.append(f"{uuid}: preview отсутствует")
+                    continue
+                accepted.append(uuid)
                 continue
             flags = set(row.get("flags") or [])
             manual = bool(row.get("manual_override"))
@@ -106,7 +118,7 @@ class PhotosPublisher:
                 warnings.append(f"{uuid}: manual reject не отмечен reviewed")
             accepted.append(uuid)
         by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
-        for group in groups:
+        for group in groups if kind == "reject" else []:
             members = [by_uuid.get(str(member["asset_uuid"])) for member in group["members"]]
             members = [member for member in members if member]
             max_pixels = max(
@@ -135,21 +147,25 @@ class PhotosPublisher:
                     else:
                         blockers.append(message)
         if not accepted:
-            blockers.append("Нет подтверждённых reject-assets")
+            blockers.append(
+                "Нет отобранных фотографий"
+                if kind == "best"
+                else "Нет подтверждённых reject-assets"
+            )
         if not self.capability_available:
             blockers.append("osxphotos CLI недоступен")
         return PublishValidation(sorted(accepted), sorted(removed), blockers, warnings)
 
-    def dry_run(self, project_id: str) -> dict[str, object]:
-        validation = self.validate(project_id)
+    def dry_run(self, project_id: str, kind: str = "reject") -> dict[str, object]:
+        validation = self.validate(project_id, kind)
         if validation.blockers:
             raise ValueError("; ".join(validation.blockers))
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)
-        album_name = self._next_album_name(project_id, str(project["album_name"]))
+        album_name = self._next_album_name(project_id, str(project["album_name"]), kind)
         publish_dir = self.paths.cache_dir / project_id / "publish"
         publish_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        uuid_file = publish_dir / f"reject-uuids-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.txt"
+        uuid_file = publish_dir / f"{kind}-uuids-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.txt"
         uuid_file.write_text("\n".join(validation.asset_uuids) + "\n", encoding="utf-8")
         with database_connection(self.database_path) as connection:
             publish_id = repository.create_publish(
@@ -158,6 +174,7 @@ class PhotosPublisher:
                 album_name=album_name,
                 asset_count=len(validation.asset_uuids),
                 uuid_file=str(uuid_file),
+                kind=kind,
             )
         result = self.runner(self._command(uuid_file, album_name, dry_run=True))
         LOGGER.info(
@@ -178,8 +195,8 @@ class PhotosPublisher:
             publish = repository.get_publish(connection, publish_id)
         return publish
 
-    def _next_album_name(self, project_id: str, source_album: str) -> str:
-        base = unique_album_name(source_album)
+    def _next_album_name(self, project_id: str, source_album: str, kind: str) -> str:
+        base = unique_album_name(source_album, kind=kind)
         with database_connection(self.database_path) as connection:
             existing = {
                 str(row[0])
@@ -205,7 +222,7 @@ class PhotosPublisher:
         uuid_file = Path(str(publish["uuid_file"]))
         if not uuid_file.is_file():
             raise ValueError("UUID file отсутствует")
-        validation = self.validate(str(publish["project_id"]))
+        validation = self.validate(str(publish["project_id"]), str(publish.get("kind") or "reject"))
         prepared = sorted(
             line for line in uuid_file.read_text(encoding="utf-8").splitlines() if line
         )
@@ -246,11 +263,14 @@ class PhotosPublisher:
         return args
 
 
-def unique_album_name(source_album: str, now: datetime | None = None) -> str:
+def unique_album_name(
+    source_album: str, now: datetime | None = None, *, kind: str = "reject"
+) -> str:
     now = now or datetime.now()
     source = re.sub(r"[/:\n\r\t]+", " — ", source_album).strip(" —") or "Album"
     timestamp = now.strftime("%Y%m%d-%H%M%S")
-    suffix = f" — Reject — {timestamp}"
+    label = "Best" if kind == "best" else "Reject"
+    suffix = f" — {label} — {timestamp}"
     prefix = "PhotoCurator — "
     max_source = max(1, 120 - len(prefix) - len(suffix))
     return f"{prefix}{source[:max_source]}{suffix}"

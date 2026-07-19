@@ -1,28 +1,27 @@
 {% extends "base.html" %}
 {% block title %}Ревью — {{ project.name }}{% endblock %}
 {% block content %}
-  <section class="page-heading"><div><p class="eyebrow">{{ project.name }}</p><h1>Ревью</h1></div>
-    <a class="secondary button-link" href="/projects/{{ project.id }}">← Pipeline</a></section>
+  <section class="page-heading"><div><p class="eyebrow">{{ project.name }}</p><h1>Галерея отбора</h1></div>
+    <a class="secondary button-link" href="/projects/{{ project.id }}">← Результат</a></section>
   <nav class="project-nav" aria-label="Фильтры ревью">
-    {% for key, label in [('all', 'Все'), ('keep', 'Оставить'), ('review', 'На проверку'),
-      ('reject', 'Удалить'), ('duplicates', 'Дубликаты'), ('best', 'Лучшие'),
-      ('favorite', 'Favorite'), ('missing', 'Missing preview'), ('errors', 'Ошибки'),
-      ('resolution', 'Низкое разрешение')] %}
+    {% for key, label in [('keep', 'Отобрано'), ('review', 'Проверить'), ('reject', 'Исключено'),
+      ('all', 'Все'), ('best', 'Лучшие'), ('duplicates', 'Серии'), ('favorite', 'Избранное'),
+      ('missing', 'Без превью'), ('errors', 'Ошибки')] %}
       <a class="{% if category == key %}active{% endif %}" href="?category={{ key }}&sort={{ sort }}">{{ label }}</a>
     {% endfor %}
   </nav>
   <form class="sort-form" method="get">
     <input type="hidden" name="category" value="{{ category }}">
     <label>Сортировка <select name="sort" onchange="this.form.submit()">
-      {% for key, label in [('taken_at', 'Дата'), ('technical_quality', 'Качество'), ('filename', 'Имя файла'), ('resolution', 'Разрешение')] %}
+      {% for key, label in [('technical_quality', 'Оценка'), ('taken_at', 'Дата'), ('filename', 'Имя файла'), ('resolution', 'Разрешение')] %}
         <option value="{{ key }}" {% if sort == key %}selected{% endif %}>{{ label }}</option>
       {% endfor %}
     </select></label>
   </form>
   <div class="review-toolbar">
     <span><strong id="selected-count">0</strong> выбрано</span>
-    <button data-batch-decision="keep">K · Оставить</button><button data-batch-decision="review">R · Проверить</button>
-    <button data-batch-decision="reject">X · Удалить</button><button data-batch-decision="clear">C · Сбросить</button>
+    <button data-batch-decision="keep">K · Отобрать</button><button data-batch-decision="review">R · Проверить</button>
+    <button data-batch-decision="reject">X · Исключить</button><button data-batch-decision="clear">C · Авто</button>
   </div>
   <section class="gallery" data-project-id="{{ project.id }}" aria-label="Фотографии">
     {% for asset in assets %}
@@ -30,8 +29,9 @@
                data-asset-uuid="{{ asset.asset_uuid }}" data-disposition="{{ asset.final_disposition }}"
                data-flags="{{ asset.flags | join(' ') }}"
                data-reasons="{% for reason in asset.reasons %}{{ reason.code }}{% if reason.kind %} ({{ reason.kind }}{% if reason.confidence is not none %}, {{ '%.0f' | format(reason.confidence * 100) }}%{% endif %}){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}"
-               data-quality="{{ '%.2f' | format(asset.technical_quality or 0) }}"
+               data-quality="{{ asset.selection_score or 0 }}"
                data-sharpness="{{ '%.2f' | format(asset.sharpness_percentile or 0) }}"
+               data-components="резкость {{ asset.score_components.sharpness | default('—') }} · свет {{ asset.score_components.exposure | default('—') }} · контраст {{ asset.score_components.contrast | default('—') }} · штраф {{ asset.score_components.penalty | default(0) }}"
                data-note="{{ asset.manual_note or '' }}" tabindex="0">
         <label class="select-box"><input type="checkbox" aria-label="Выбрать {{ asset.current_filename or asset.asset_uuid }}"></label>
         {% if asset.cache_state == 'ready' %}
@@ -39,9 +39,10 @@
             <img loading="lazy" src="/media/{{ project.id }}/thumbnail/{{ asset.asset_uuid }}" alt="{{ asset.current_filename or 'Фото' }}">
           </button>
         {% else %}<div class="missing-image">Preview недоступно</div>{% endif %}
-        <div class="asset-body"><div class="asset-title"><strong>{{ asset.current_filename }}</strong><span class="decision-badge">{{ asset.final_disposition or 'pending' }}</span></div>
+        <div class="asset-body"><div class="asset-title"><strong>{{ asset.current_filename }}</strong><span class="decision-badge">{{ disposition_labels.get(asset.final_disposition, 'Ожидает') }}</span></div>
           <p>{{ asset.width }}×{{ asset.height }}{% if asset.favorite %} · ★ Favorite{% endif %}{% if asset.has_adjustments %} · Edited{% endif %}</p>
-          <div class="flag-list">{% for flag in asset.flags[:4] %}<span>{{ flag }}</span>{% endfor %}</div>
+          <div class="score-line"><span>Оценка 0–100</span><strong>{{ asset.selection_score or '—' }}</strong></div>
+          <div class="flag-list">{% for flag in asset.flags[:3] %}<span>{{ flag_labels.get(flag, flag) }}</span>{% endfor %}</div>
           <div class="decision-buttons"><button data-decision="keep" title="K">K</button><button data-decision="review" title="R">R</button><button data-decision="reject" title="X">X</button><button data-decision="clear" title="C">C</button></div>
         </div>
       </article>

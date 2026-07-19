@@ -102,6 +102,9 @@ CREATE TABLE metrics (
     normalized_pixel_hash TEXT,
     histogram_json TEXT,
     technical_quality REAL,
+    face_count INTEGER,
+    face_capture_quality REAL,
+    eyes_detected INTEGER,
     calculated_at TEXT NOT NULL,
     PRIMARY KEY (project_id, asset_uuid),
     FOREIGN KEY (project_id, asset_uuid)
@@ -149,6 +152,9 @@ CREATE TABLE duplicate_members (
 ```
 
 ## `decisions`
+
+`reasons_json` содержит запись `selection_score` с overall 0–100 и component
+breakdown; отдельные колонки не добавляются, чтобы manual override schema оставалась совместимой.
 
 ```sql
 CREATE TABLE decisions (
@@ -199,6 +205,7 @@ CREATE TABLE publishes (
     album_name TEXT NOT NULL,
     asset_count INTEGER NOT NULL,
     uuid_file TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'reject',
     dry_run_stdout TEXT,
     dry_run_stderr TEXT,
     dry_run_return_code INTEGER,

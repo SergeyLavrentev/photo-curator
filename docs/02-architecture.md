@@ -13,8 +13,9 @@ flowchart TD
     AN --> DB[(SQLite Project State)]
     DB --> UI[Local FastAPI/Jinja UI]
     UI --> PUB[PhotosPublisher]
-    PUB --> RA[Temporary Reject Album]
-    RA -->|ручной Command+Delete| PL
+    PUB --> BA[Curated Best Album]
+    PUB --> RA[Optional Reject Album]
+    BA --> PL
 ```
 
 ## Component boundaries
@@ -44,11 +45,11 @@ HTML/UI/API. Не обращается к `osxphotos` напрямую, толь
 1. Project фиксирует library и album snapshot.
 2. Inventory сохраняет metadata и доступные render candidates.
 3. PreviewBuilder создаёт normalized review/thumbnail JPEG.
-4. TechnicalAnalyzer и SimilarityAnalyzer сохраняют metrics.
+4. TechnicalAnalyzer, SimilarityAnalyzer и локальный Apple Vision сохраняют metrics.
 5. Duplicate stage строит connected components и leaders.
 6. DecisionEngine создаёт auto decisions, не затрагивая manual overrides.
 7. UI выполняет human review.
-8. Publisher revalidates source и создаёт UUID file.
+8. Publisher revalidates source и создаёт UUID file для Best или Reject.
 9. Dry-run предшествует apply.
 
 ## Failure containment

@@ -21,7 +21,7 @@
 - project name;
 - Start Analysis.
 
-Shared collections показывать disabled.
+Shared collections показывать отдельно с инструкцией локального импорта, не как мёртвый disabled option.
 
 ## Pipeline visualizer
 
@@ -29,29 +29,23 @@ Shared collections показывать disabled.
 [Проверка] → [Inventory] → [Preview] → [Analysis] → [Review] → [Publish]
 ```
 
-Stage card:
+Компактная строка этапа:
 
 - pending/running/done/warning/error/interrupted;
 - progress bar;
 - processed/total;
 - warnings/errors;
-- elapsed time;
-- throughput;
 - current message;
 - retry/details.
 
 Не показывать speculative ETA.
 
-## Summary cards
+## Ключевые счетчики
 
-- total photos;
-- previews ready/missing;
-- keep/review/reject;
-- duplicate groups;
-- exact/near duplicates;
-- Favorites protected;
-- resolution warnings;
-- best candidates.
+- Отобрано;
+- Проверить;
+- Исключено;
+- Серии и дубликаты.
 
 ## Review gallery
 
@@ -59,9 +53,9 @@ Stage card:
 - lazy thumbnails;
 - category/filter/sort;
 - multi-select и range-select;
-- batch Keep/Review/Reject;
+- batch Отобрано/Проверить/Исключено;
 - large preview;
-- reasons/evidence/metrics;
+- оценка 0–100, русские reasons, breakdown и evidence;
 - manual note;
 - clear override;
 - open in Photos.

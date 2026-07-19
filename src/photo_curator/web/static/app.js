@@ -23,7 +23,11 @@ newProjectForm?.addEventListener("submit", async (event) => {
     status.textContent = "Создаём проект…";
     const result = await api("/api/projects", {
       method: "POST",
-      body: JSON.stringify({ name: form.get("name"), album_id: form.get("album_id") }),
+      body: JSON.stringify({
+        name: form.get("name"),
+        album_id: form.get("album_id"),
+        selection_density: form.get("selection_density"),
+      }),
     });
     window.location.assign(result.url);
   } catch (error) {
@@ -39,8 +43,8 @@ document.querySelector('[data-action="pipeline-start"]')?.addEventListener("clic
   if (status) status.textContent = "Запускаем анализ…";
   try {
     await api(`/api/projects/${root.dataset.projectId}/pipeline/start`, { method: "POST" });
-    sessionStorage.setItem("photo-curator-running", `${root.dataset.projectId}:0`);
-    window.location.reload();
+    if (status) status.textContent = "Анализ запущен";
+    pollProject(root, button);
   } catch (error) {
     button.disabled = false;
     if (status) status.textContent = `Не удалось запустить анализ: ${error.message}`;
@@ -48,17 +52,43 @@ document.querySelector('[data-action="pipeline-start"]')?.addEventListener("clic
 });
 
 const projectRoot = document.querySelector("[data-project-state][data-project-id]");
-if (projectRoot) {
-  const tracked = sessionStorage.getItem("photo-curator-running") || "";
-  const [trackedProject, trackedAttempts = "0"] = tracked.split(":");
-  const attempts = Number(trackedAttempts);
-  if (projectRoot.dataset.projectState === "running" || trackedProject === projectRoot.dataset.projectId) {
-    if (projectRoot.dataset.projectState === "error" || (projectRoot.dataset.projectState === "ready" && attempts >= 2)) {
-      sessionStorage.removeItem("photo-curator-running");
-    } else {
-      sessionStorage.setItem("photo-curator-running", `${projectRoot.dataset.projectId}:${attempts + 1}`);
-      window.setTimeout(() => window.location.reload(), 1000);
+if (projectRoot?.dataset.projectState === "running") pollProject(projectRoot);
+
+async function pollProject(root, startButton = null) {
+  const stageOrder = ["inventory", "previews", "metrics", "duplicates", "vision", "decisions"];
+  let previousState = root.dataset.projectState;
+  while (true) {
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    let payload;
+    try { payload = await api(`/api/projects/${root.dataset.projectId}`); }
+    catch (error) {
+      document.querySelector("[data-live-status]").textContent = `Связь потеряна: ${error.message}`;
+      continue;
     }
+    const state = payload.project.state;
+    root.dataset.projectState = state;
+    document.querySelector("[data-project-state-label]").textContent = state;
+    const latest = new Map(payload.jobs.map((job) => [job.stage, job]));
+    stageOrder.forEach((code) => {
+      const targetCode = ["duplicates", "vision", "decisions"].includes(code) ? "metrics" : code;
+      const row = document.querySelector(`[data-stage="${targetCode}"]`);
+      const job = latest.get(code);
+      if (!row || !job) return;
+      row.className = `stage ${job.status}`;
+      row.querySelector("[data-stage-message]").textContent = job.current_message || "Ожидает";
+      row.querySelector("[data-stage-count]").textContent = `${job.processed_items} / ${job.total_items}`;
+      const percent = job.total_items ? Math.min(100, Math.round(job.processed_items / job.total_items * 100)) : 0;
+      row.querySelector(".progress").setAttribute("aria-valuenow", String(percent));
+      row.querySelector(".progress span").style.width = `${percent}%`;
+    });
+    const active = [...latest.values()].find((job) => job.status === "running");
+    document.querySelector("[data-live-status]").textContent = active?.current_message || `Статус: ${state}`;
+    if (["ready", "error", "interrupted"].includes(state)) {
+      if (startButton) startButton.disabled = false;
+      if (state === "ready" && previousState !== "ready") window.location.reload();
+      return;
+    }
+    previousState = state;
   }
 }
 
@@ -95,7 +125,8 @@ if (gallery) {
     });
     card.dataset.disposition = value || "pending";
     card.className = `asset-card disposition-${value || "pending"}`;
-    card.querySelector(".decision-badge").textContent = value || "pending";
+    const labels = { keep: "Отобрано", review: "Проверить", reject: "Исключено" };
+    card.querySelector(".decision-badge").textContent = labels[value] || "Авто";
   }
 
   gallery.addEventListener("click", async (event) => {
@@ -117,7 +148,7 @@ if (gallery) {
       previewCard = imageButton.closest(".asset-card");
       dialog.querySelector("img").src = imageButton.dataset.previewUrl;
       dialog.querySelector(".preview-evidence").textContent =
-        `${previewCard.dataset.reasons || "Нет дополнительных причин"} · quality ${previewCard.dataset.quality} · sharpness ${previewCard.dataset.sharpness}`;
+        `Оценка ${previewCard.dataset.quality}/100 · ${previewCard.dataset.components} · ${previewCard.dataset.reasons || "без дополнительных предупреждений"}`;
       dialog.querySelector("textarea").value = previewCard.dataset.note || "";
       dialog.showModal();
     }
@@ -135,7 +166,8 @@ if (gallery) {
       cards.forEach((card) => {
         card.dataset.disposition = disposition || "pending";
         card.className = `asset-card disposition-${disposition || "pending"}`;
-        card.querySelector(".decision-badge").textContent = disposition || "pending";
+        const labels = { keep: "Отобрано", review: "Проверить", reject: "Исключено" };
+        card.querySelector(".decision-badge").textContent = labels[disposition] || "Авто";
       });
     });
   });
@@ -198,8 +230,20 @@ duplicateList?.addEventListener("click", async (event) => {
 
 document.querySelector('[data-action="publish-dry-run"]')?.addEventListener("click", async () => {
   const root = document.querySelector("[data-project-id]");
-  await api(`/api/projects/${root.dataset.projectId}/publish/dry-run`, { method: "POST" });
+  const suffix = root.dataset.publishKind === "best" ? "/best" : "";
+  await api(`/api/projects/${root.dataset.projectId}/publish${suffix}/dry-run`, { method: "POST" });
   window.location.reload();
+});
+
+document.querySelector('[data-action="export-selected"]')?.addEventListener("click", async (event) => {
+  const root = document.querySelector("[data-project-id]");
+  event.currentTarget.disabled = true;
+  try {
+    const result = await api(`/api/projects/${root.dataset.projectId}/export/selected`, { method: "POST" });
+    window.location.assign(result.url);
+  } finally {
+    event.currentTarget.disabled = false;
+  }
 });
 
 document.querySelector('[data-action="publish-apply"]')?.addEventListener("click", async (event) => {

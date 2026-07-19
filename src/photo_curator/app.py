@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import secrets
 import stat
+import zipfile
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +42,7 @@ templates = Jinja2Templates(directory=PACKAGE_ROOT / "web" / "templates")
 class ProjectCreate(BaseModel):
     album_id: str
     name: str = Field(min_length=1, max_length=120)
+    selection_density: Literal["compact", "balanced", "broad"] = "balanced"
 
 
 class DecisionPatch(BaseModel):
@@ -203,8 +205,14 @@ def create_app(
     async def project_dashboard(request: Request, project_id: str):
         project, summary, jobs = _project_data(app_paths.database, project_id)
         with database_connection(app_paths.database) as connection:
-            distribution = _quality_distribution(repository.list_assets(connection, project_id))
+            all_assets = repository.list_assets(connection, project_id)
+            distribution = _quality_distribution(all_assets)
             latest_publish = repository.latest_publish(connection, project_id)
+        selected_preview = sorted(
+            (asset for asset in all_assets if asset.get("final_disposition") == "keep"),
+            key=lambda asset: int(asset.get("selection_score") or 0),
+            reverse=True,
+        )[:10]
         project_cache = app_paths.cache_dir / project_id
         summary["cache_size"] = _human_size(_directory_size(project_cache))
         summary["cache_last_access"] = _last_access(project_cache)
@@ -217,6 +225,7 @@ def create_app(
                 project=project,
                 summary=summary,
                 distribution=distribution,
+                selected_preview=selected_preview,
                 stages=_stage_views(jobs, summary, latest_publish),
                 csrf_token=secrets_.csrf_token,
             ),
@@ -273,11 +282,15 @@ def create_app(
         )
 
     @app.get("/projects/{project_id}/publish", response_class=HTMLResponse)
-    async def publish_page(request: Request, project_id: str):
+    async def publish_page(
+        request: Request,
+        project_id: str,
+        kind: Literal["best", "reject"] = "best",
+    ):
         project, summary, _ = _project_data(app_paths.database, project_id)
-        validation = publisher.validate(project_id) if publisher else None
+        validation = publisher.validate(project_id, kind) if publisher else None
         with database_connection(app_paths.database) as connection:
-            latest = repository.latest_publish(connection, project_id)
+            latest = repository.latest_publish(connection, project_id, kind)
             publish_counts = repository.publish_summary(connection, project_id)
         return templates.TemplateResponse(
             request,
@@ -290,6 +303,7 @@ def create_app(
                 validation=validation,
                 publish=latest,
                 publish_counts=publish_counts,
+                publish_kind=kind,
                 csrf_token=secrets_.csrf_token,
             ),
         )
@@ -354,6 +368,7 @@ def create_app(
                 name=name,
                 library=selected_provider.get_current_library(),
                 album=album,
+                selection_density=payload.selection_density,
             )
         return {"id": project_id, "url": f"/projects/{project_id}"}
 
@@ -492,6 +507,49 @@ def create_app(
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
 
+    @app.post("/api/projects/{project_id}/publish/best/dry-run")
+    async def publish_best_dry_run(project_id: str) -> dict[str, object]:
+        if not publisher:
+            raise HTTPException(503, "Publisher unavailable")
+        try:
+            return _public_publish(publisher.dry_run(project_id, "best"))
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.post("/api/projects/{project_id}/export/selected")
+    async def export_selected(project_id: str) -> dict[str, object]:
+        with database_connection(app_paths.database) as connection:
+            assets = [
+                asset
+                for asset in repository.list_assets(connection, project_id)
+                if asset.get("final_disposition") == "keep" and asset.get("review_path")
+            ]
+        if not assets:
+            raise HTTPException(409, "Нет доступных отобранных превью")
+        export_dir = app_paths.cache_dir / project_id / "export"
+        export_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        archive = export_dir / "selected-review-previews.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            for index, asset in enumerate(assets, start=1):
+                source = ensure_within(Path(str(asset["review_path"])), app_paths.cache_dir)
+                if source.is_file():
+                    output.write(source, f"{index:04d}-{source.name}")
+        return {
+            "count": len(assets),
+            "url": f"/downloads/{project_id}/selected-review-previews.zip",
+        }
+
+    @app.get("/downloads/{project_id}/selected-review-previews.zip")
+    async def download_selected(project_id: str):
+        _ensure_project_exists(app_paths.database, project_id)
+        archive = ensure_within(
+            app_paths.cache_dir / project_id / "export" / "selected-review-previews.zip",
+            app_paths.cache_dir,
+        )
+        if not archive.is_file():
+            raise HTTPException(404, "Сначала подготовьте экспорт")
+        return FileResponse(archive, filename=f"PhotoCurator-{project_id}-Selected.zip")
+
     @app.post("/api/projects/{project_id}/publish/apply")
     async def publish_apply(project_id: str, payload: PublishApplyRequest) -> dict[str, object]:
         if not payload.confirmed:
@@ -528,7 +586,32 @@ def create_app(
 
 
 def _context(request: Request, **values: object) -> dict[str, object]:
-    return {"request": request, "version": __version__, **values}
+    return {
+        "request": request,
+        "version": __version__,
+        "disposition_labels": {
+            "keep": "Отобрано",
+            "review": "Проверить",
+            "reject": "Исключено",
+        },
+        "flag_labels": {
+            "possible_blur": "возможный смаз",
+            "underexposed": "слишком темно",
+            "overexposed": "пересвет",
+            "low_contrast": "низкий контраст",
+            "exact_duplicate": "точная копия",
+            "near_duplicate": "похожий кадр",
+            "duplicate_leader": "лучший в серии",
+            "duplicate_loser": "слабее в серии",
+            "favorite_protected": "избранное Photos",
+            "edited_protected": "отредактировано",
+            "best_candidate": "лучшее",
+            "missing_preview": "нет превью",
+            "analysis_error": "ошибка анализа",
+            "ambiguous_duplicate": "неуверенная серия",
+        },
+        **values,
+    }
 
 
 def _try_real_provider() -> PhotosProvider | None:
@@ -594,7 +677,9 @@ def _stage_views(
     publish: dict[str, object] | None,
 ) -> list[dict[str, object]]:
     latest = {str(job["stage"]): job for job in jobs}
-    analysis_jobs = [latest.get(code, {}) for code in ("metrics", "duplicates", "decisions")]
+    analysis_jobs = [
+        latest.get(code, {}) for code in ("metrics", "duplicates", "vision", "decisions")
+    ]
     analysis_status = _combined_status(analysis_jobs)
     analysis = {
         "stage": "metrics",
@@ -603,7 +688,7 @@ def _stage_views(
         "total_items": sum(int(job.get("total_items") or 0) for job in analysis_jobs),
         "warning_count": sum(int(job.get("warning_count") or 0) for job in analysis_jobs),
         "error_count": sum(int(job.get("error_count") or 0) for job in analysis_jobs),
-        "current_message": "Метрики, hashes, поиск дубликатов и решения",
+        "current_message": "Качество, серии, лица и итоговый отбор",
         "started_at": next((job.get("started_at") for job in analysis_jobs if job), None),
         "finished_at": next(
             (job.get("finished_at") for job in reversed(analysis_jobs) if job), None
@@ -654,8 +739,8 @@ def _stage_views(
         "inventory": "Инвентаризация",
         "previews": "Подготовка preview",
         "metrics": "Анализ · Поиск дубликатов",
-        "review": "Ручное ревью",
-        "publish": "Публикация Reject-альбома",
+        "review": "Проверка результата",
+        "publish": "Альбом с результатом",
     }
     return [
         _stage_view(index, stage, labels[str(stage["stage"])])

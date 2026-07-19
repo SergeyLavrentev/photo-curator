@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from itertools import combinations
 from pathlib import Path
 
 from PIL import Image
@@ -54,11 +53,17 @@ def find_duplicate_groups(
     strict_phash_distance: int = 4,
     relaxed_phash_distance: int = 10,
     time_window_seconds: int = 120,
+    candidate_pairs: list[tuple[dict[str, object], dict[str, object]]] | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> list[DuplicateGroupResult]:
     candidates = [asset for asset in assets if asset.get("phash")]
     union = UnionFind([str(asset["asset_uuid"]) for asset in candidates])
     pair_evidence: dict[frozenset[str], dict[str, object]] = {}
-    for left, right in _candidate_pairs(candidates):
+    pairs = candidate_pairs if candidate_pairs is not None else list(_candidate_pairs(candidates))
+    total = len(pairs)
+    if progress:
+        progress(0, total)
+    for index, (left, right) in enumerate(pairs, start=1):
         evidence = _confirm_pair(
             left,
             right,
@@ -70,14 +75,17 @@ def find_duplicate_groups(
             left_uuid, right_uuid = str(left["asset_uuid"]), str(right["asset_uuid"])
             union.union(left_uuid, right_uuid)
             pair_evidence[frozenset((left_uuid, right_uuid))] = evidence
+        if progress and (index % 100 == 0 or index == total):
+            progress(index, total)
 
     by_root: dict[str, list[dict[str, object]]] = {}
     for asset in candidates:
         by_root.setdefault(union.find(str(asset["asset_uuid"])), []).append(asset)
+    coherent_groups = []
+    for members in by_root.values():
+        coherent_groups.extend(_split_into_leader_coherent_groups(members, pair_evidence))
     groups = []
-    for index, members in enumerate(
-        (group for group in by_root.values() if len(group) > 1), start=1
-    ):
+    for index, members in enumerate(coherent_groups, start=1):
         groups.append(_build_group(index, members, pair_evidence, relaxed_phash_distance))
     return groups
 
@@ -85,25 +93,93 @@ def find_duplicate_groups(
 def _candidate_pairs(
     assets: list[dict[str, object]],
 ) -> Iterator[tuple[dict[str, object], dict[str, object]]]:
-    if len(assets) <= 3000:
-        yield from combinations(assets, 2)
-        return
     by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
     candidate_ids: set[tuple[str, str]] = set()
-    bands: dict[tuple[int, str], list[str]] = {}
+    bands: dict[tuple[int, int], list[str]] = {}
+    exact_renders: dict[str, list[str]] = {}
     bursts: dict[str, list[str]] = {}
     for asset in assets:
         uuid = str(asset["asset_uuid"])
-        hash_value = str(asset["phash"])
-        for band in range(4):
-            bands.setdefault((band, hash_value[band * 4 : band * 4 + 4]), []).append(uuid)
-        if asset.get("burst_key"):
+        for band, value in enumerate(_phash_bands(str(asset["phash"]))):
+            bands.setdefault((band, value), []).append(uuid)
+        if render_hash := asset.get("normalized_pixel_hash"):
+            exact_renders.setdefault(str(render_hash), []).append(uuid)
+        if _valid_burst_key(asset.get("burst_key")):
             bursts.setdefault(str(asset["burst_key"]), []).append(uuid)
-    for bucket in [*bands.values(), *bursts.values()]:
-        for left, right in combinations(sorted(bucket), 2):
-            candidate_ids.add((left, right))
+    for bucket in bands.values():
+        ordered = sorted(bucket, key=lambda uuid: int(str(by_uuid[uuid]["phash"]), 16))
+        for index, left in enumerate(ordered):
+            for right in ordered[index + 1 : index + 25]:
+                candidate_ids.add(tuple(sorted((left, right))))
+    for bucket in [*exact_renders.values(), *bursts.values()]:
+        left = max(bucket, key=lambda uuid: _leader_key(by_uuid[uuid]))
+        for right in sorted(uuid for uuid in bucket if uuid != left):
+            candidate_ids.add(tuple(sorted((left, right))))
+
+    # Visually related shots are normally close in capture time. Add every pair
+    # inside the relaxed 120 second window without opening the full N^2 search.
+    dated = sorted(
+        (timestamp, str(asset["asset_uuid"]))
+        for asset in assets
+        if (timestamp := _timestamp(asset.get("taken_at"))) is not None
+    )
+    for index, (left_time, left_uuid) in enumerate(dated):
+        for right_time, right_uuid in dated[index + 1 : index + 41]:
+            if (right_time - left_time).total_seconds() > 120:
+                break
+            candidate_ids.add(tuple(sorted((left_uuid, right_uuid))))
     for left, right in sorted(candidate_ids):
         yield by_uuid[left], by_uuid[right]
+
+
+def _phash_bands(value: str) -> tuple[int, ...]:
+    """Partition a 64-bit pHash into five disjoint candidate-reduction bands."""
+    try:
+        bits = f"{int(value, 16):064b}"
+    except ValueError:
+        return ()
+    widths = (13, 13, 13, 13, 12)
+    offset = 0
+    result = []
+    for width in widths:
+        result.append(int(bits[offset : offset + width], 2))
+        offset += width
+    return tuple(result)
+
+
+def _valid_burst_key(value: object) -> bool:
+    return value not in (None, False, 0, "", "0")
+
+
+def _timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _split_into_leader_coherent_groups(
+    members: list[dict[str, object]],
+    evidence: dict[frozenset[str], dict[str, object]],
+) -> list[list[dict[str, object]]]:
+    """Prevent weak A-B-C chains from becoming one misleading photo series."""
+    remaining = sorted(members, key=_leader_key, reverse=True)
+    groups = []
+    while remaining:
+        leader = remaining.pop(0)
+        leader_uuid = str(leader["asset_uuid"])
+        direct = [
+            asset
+            for asset in remaining
+            if frozenset((leader_uuid, str(asset["asset_uuid"]))) in evidence
+        ]
+        if direct:
+            groups.append([leader, *direct])
+            direct_ids = {str(asset["asset_uuid"]) for asset in direct}
+            remaining = [asset for asset in remaining if str(asset["asset_uuid"]) not in direct_ids]
+    return groups
 
 
 def _confirm_pair(
@@ -144,6 +220,8 @@ def _confirm_pair(
         and dhash_distance <= 12
         and histogram >= 0.72
         and (pixel_mae is None or pixel_mae <= 0.18)
+        and time_delta is not None
+        and time_delta <= time_window_seconds
     )
     relaxed = cheap_relaxed and dhash_distance <= 18 and (pixel_mae is None or pixel_mae <= 0.22)
     burst_confirmed = burst and dhash_distance <= 24 and histogram >= 0.60

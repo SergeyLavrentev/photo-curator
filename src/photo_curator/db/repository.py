@@ -11,6 +11,12 @@ from photo_curator.utils.timestamps import utc_now
 
 
 def mark_running_jobs_interrupted(connection: sqlite3.Connection) -> int:
+    project_ids = [
+        str(row["project_id"])
+        for row in connection.execute(
+            "SELECT DISTINCT project_id FROM jobs WHERE status='running'"
+        ).fetchall()
+    ]
     cursor = connection.execute(
         """
         UPDATE jobs
@@ -18,6 +24,11 @@ def mark_running_jobs_interrupted(connection: sqlite3.Connection) -> int:
         WHERE status = 'running'
         """
     )
+    if project_ids:
+        connection.executemany(
+            "UPDATE projects SET state='interrupted', updated_at=? WHERE id=?",
+            [(utc_now(), project_id) for project_id in project_ids],
+        )
     return cursor.rowcount
 
 
@@ -40,6 +51,7 @@ def create_project(
     library: PhotoLibrary,
     album: PhotoAlbum,
     project_id: str | None = None,
+    selection_density: str = "balanced",
 ) -> str:
     project_id = project_id or new_id()
     now = utc_now()
@@ -65,7 +77,11 @@ def create_project(
                 f"{album.id}|{album.photo_count}|{album.video_count}".encode()
             ).hexdigest(),
             json.dumps(
-                {"photo_count": album.photo_count, "video_count": album.video_count},
+                {
+                    "photo_count": album.photo_count,
+                    "video_count": album.video_count,
+                    "selection_density": selection_density,
+                },
                 sort_keys=True,
             ),
             now,
@@ -126,7 +142,7 @@ def upsert_assets(
                 int(asset.has_adjustments),
                 int(asset.is_live_photo),
                 int(asset.is_burst),
-                asset.burst_key,
+                _normalized_burst_key(asset.burst_key),
                 int(asset.burst_default_pick),
                 int(asset.is_missing),
                 0,
@@ -183,6 +199,12 @@ def upsert_assets(
         rows,
     )
     return len(rows)
+
+
+def _normalized_burst_key(value: object) -> str | None:
+    if value in (None, False, 0, "", "0"):
+        return None
+    return str(value)
 
 
 def update_asset_preview(
@@ -271,6 +293,9 @@ METRIC_COLUMNS = [
     "normalized_pixel_hash",
     "histogram_json",
     "technical_quality",
+    "face_count",
+    "face_capture_quality",
+    "eyes_detected",
 ]
 
 
@@ -321,6 +346,24 @@ def update_metric_percentiles(
             )
             for uuid, data in values.items()
         ],
+    )
+
+
+def update_vision_metrics(
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuid: str,
+    *,
+    face_count: int,
+    face_capture_quality: float | None,
+    eyes_detected: int,
+) -> None:
+    connection.execute(
+        """
+        UPDATE metrics SET face_count=?, face_capture_quality=?, eyes_detected=?
+        WHERE project_id=? AND asset_uuid=?
+        """,
+        (face_count, face_capture_quality, eyes_detected, project_id, asset_uuid),
     )
 
 
@@ -739,15 +782,16 @@ def create_publish(
     album_name: str,
     asset_count: int,
     uuid_file: str,
+    kind: str = "reject",
 ) -> str:
     publish_id = new_id()
     connection.execute(
         """
         INSERT INTO publishes (
-            id, project_id, album_name, asset_count, uuid_file, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, 'prepared', ?)
+            id, project_id, album_name, asset_count, uuid_file, kind, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'prepared', ?)
         """,
-        (publish_id, project_id, album_name, asset_count, uuid_file, utc_now()),
+        (publish_id, project_id, album_name, asset_count, uuid_file, kind, utc_now()),
     )
     return publish_id
 
@@ -806,10 +850,14 @@ def get_publish(connection: sqlite3.Connection, publish_id: str) -> dict[str, ob
     return dict(row)
 
 
-def latest_publish(connection: sqlite3.Connection, project_id: str) -> dict[str, object] | None:
+def latest_publish(
+    connection: sqlite3.Connection, project_id: str, kind: str | None = None
+) -> dict[str, object] | None:
+    kind_clause = " AND kind=?" if kind else ""
+    parameters = (project_id, kind) if kind else (project_id,)
     row = connection.execute(
-        "SELECT * FROM publishes WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
-        (project_id,),
+        f"SELECT * FROM publishes WHERE project_id=?{kind_clause} ORDER BY created_at DESC LIMIT 1",
+        parameters,
     ).fetchone()
     return dict(row) if row else None
 
@@ -824,4 +872,9 @@ def _decode_asset_row(row: dict[str, object]) -> dict[str, object]:
     ):
         raw = row.get(source)
         row[target] = json.loads(str(raw)) if raw else default
+    score_reason = next(
+        (reason for reason in row["reasons"] if reason.get("code") == "selection_score"), {}
+    )
+    row["selection_score"] = score_reason.get("score")
+    row["score_components"] = score_reason.get("components", {})
     return row

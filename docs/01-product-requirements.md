@@ -2,7 +2,7 @@
 
 ## Product statement
 
-Photo Curator помогает пользователю безопасно очистить обычный альбом Apple Photos от дублей и явного брака, сохраняя полный контроль человека над финальным удалением.
+Photo Curator превращает большой обычный альбом Apple Photos в объяснимую подборку лучших кадров, сохраняя полный контроль человека.
 
 ## Primary persona
 
@@ -18,12 +18,11 @@ Photo Curator помогает пользователю безопасно оч�
 2. Создаёт обычный рабочий альбом.
 3. Запускает Photo Curator и выбирает этот альбом.
 4. Наблюдает pipeline и видит предупреждения.
-5. Просматривает `review`, duplicate groups и proposed rejects.
+5. Просматривает `Selected / Review / Excluded`, оценки и серии.
 6. Исправляет решения и leaders.
 7. Выполняет publish dry-run.
-8. Создаёт временный Reject-альбом.
-9. Ещё раз проверяет его в Photos.
-10. Выполняет `Command+Delete` вручную.
+8. Создаёт новый Best-альбом.
+9. При необходимости отдельно создаёт Reject-альбом.
 
 ## Functional requirements
 
@@ -32,10 +31,10 @@ Photo Curator помогает пользователю безопасно оч�
 - Preview cache без permanent originals.
 - Technical metrics и perceptual similarity.
 - Duplicate groups с объяснимым leader selection.
-- `keep/review/reject`, flags, confidence, structured reasons.
+- `Selected/Review/Excluded`, оценка 0–100, flags, confidence и structured reasons.
 - Manual override, batch actions, keyboard shortcuts.
-- Pipeline visualizer и summary cards.
-- Capability-gated dry-run/apply временного Reject-альбома.
+- Компактный строковый pipeline и галерея результата.
+- Capability-gated dry-run/apply Best- и опционального Reject-альбома.
 - Doctor, logging, cache cleanup и source drift validation.
 
 ## Non-functional requirements
@@ -52,7 +51,7 @@ Photo Curator помогает пользователю безопасно оч�
 
 - Прямой анализ Shared Albums.
 - Автоматическое удаление.
-- Closed-eyes и semantic composition в MVP.
+- Распознавание личности и semantic composition.
 - Видео и RAW quality.
 - Face recognition identities.
 - Облачные API.
@@ -65,4 +64,4 @@ Photo Curator помогает пользователю безопасно оч�
 - Higher-resolution originals не проигрывают импортированным shared-копиям без явного ручного решения.
 - Неоднозначные случаи направляются в review.
 - Приложение не удаляет и не меняет metadata.
-- Финальный Reject-альбом содержит только подтверждённые final rejects.
+- Финальный Best-альбом содержит только текущие final selected.

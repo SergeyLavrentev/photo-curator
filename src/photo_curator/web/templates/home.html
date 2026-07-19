@@ -11,10 +11,14 @@
     <a class="primary button-link" href="/doctor">Проверить среду</a>
   </section>
 
-  <aside class="notice" aria-label="Важно о Shared Albums">
+  <aside class="notice" aria-label="Важно об общих альбомах">
     <span aria-hidden="true">i</span>
-    <p><strong>Shared Album сначала нужно импортировать.</strong> Приложение работает только
-      с обычным альбомом личной медиатеки и никогда не удаляет фотографии.</p>
+    <div><strong>Общие альбомы видны, но Photos не даёт приложению надёжно читать оригиналы напрямую.</strong>
+      <p>Создайте локальную рабочую копию в Photos: откройте общий альбом → выберите фото → «Сохранить в медиатеку» → добавьте их в новый обычный альбом. Затем выберите его ниже.</p>
+      {% if shared_albums %}<details><summary>Найдено общих альбомов: {{ shared_albums | length }}</summary>
+        <ul>{% for album in shared_albums %}<li>{{ album.full_path }} · {{ album.photo_count }} фото</li>{% endfor %}</ul>
+      </details>{% endif %}
+    </div>
   </aside>
   <section class="environment-grid" aria-label="Текущая среда">
     {% for label, value in [('Photos Library', environment.library), ('Photos DB', environment.database_version),
@@ -55,9 +59,13 @@
           {% for album in albums %}
             <option value="{{ album.id }}">{{ album.full_path }} · {{ album.photo_count }} фото</option>
           {% endfor %}
-          {% for album in shared_albums %}
-            <option disabled>{{ album.full_path }} · Shared Album — сначала импортируйте</option>
-          {% endfor %}
+        </select>
+      </label>
+      <label>Размер итоговой подборки
+        <select name="selection_density">
+          <option value="balanced">Сбалансированная</option>
+          <option value="compact">Компактная — только сильнейшие</option>
+          <option value="broad">Широкая — больше кадров</option>
         </select>
       </label>
       <button class="primary" type="submit" {% if not albums %}disabled{% endif %}>Создать проект</button>

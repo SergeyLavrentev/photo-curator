@@ -1,4 +1,7 @@
-# Photo Curator для Apple Photos — полное техническое задание MVP
+# Photo Curator для Apple Photos — историческое техническое задание MVP
+
+> Reject-first продуктовая модель этого документа заменена [`ROADMAP.md`](ROADMAP.md)
+> и ADR-0006. Ограничения безопасности остаются обязательными.
 
 ## 0. Инструкция агенту Codex
 

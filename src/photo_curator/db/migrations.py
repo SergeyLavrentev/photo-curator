@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -176,6 +176,16 @@ CREATE TABLE publishes (
 );
 """
 
+MIGRATION_2 = """
+ALTER TABLE publishes ADD COLUMN kind TEXT NOT NULL DEFAULT 'reject';
+"""
+
+MIGRATION_3 = """
+ALTER TABLE metrics ADD COLUMN face_count INTEGER;
+ALTER TABLE metrics ADD COLUMN face_capture_quality REAL;
+ALTER TABLE metrics ADD COLUMN eyes_detected INTEGER;
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -186,4 +196,12 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 1:
         connection.executescript(MIGRATION_1)
         connection.execute("PRAGMA user_version = 1")
-        connection.commit()
+        version = 1
+    if version < 2:
+        connection.executescript(MIGRATION_2)
+        connection.execute("PRAGMA user_version = 2")
+        version = 2
+    if version < 3:
+        connection.executescript(MIGRATION_3)
+        connection.execute("PRAGMA user_version = 3")
+    connection.commit()
