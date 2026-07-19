@@ -209,9 +209,15 @@ def run_native_worker(
     input_stream: TextIO = sys.stdin,
     output_stream: TextIO = sys.stdout,
     worker: NativeWorker | None = None,
+    demo: bool = False,
 ) -> int:
     if worker is None:
-        base = OSXPhotosProvider()
+        if demo:
+            from photo_curator.photos.fake_provider import FakePhotosProvider
+
+            base = FakePhotosProvider(paths.cache_dir / "demo-sources")
+        else:
+            base = OSXPhotosProvider()
         provider = LocalAlbumsProvider(base, paths.data_dir / "local_albums")
         worker = NativeWorker(paths, provider=provider)
     for raw_line in input_stream:

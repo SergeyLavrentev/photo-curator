@@ -7,13 +7,20 @@ project_root = Path(SPECPATH).parents[1]
 
 photo_data = collect_data_files("photo_curator") + copy_metadata("photo-curator")
 osxphotos_data, osxphotos_binaries, osxphotos_hidden = collect_all("osxphotos")
+utitools_data = collect_data_files("utitools")
+photoscript_data = collect_data_files("photoscript")
+osxmetadata_data = collect_data_files("osxmetadata")
 
 analysis = Analysis(
     [str(project_root / "src/photo_curator/__main__.py")],
     pathex=[str(project_root / "src")],
     binaries=osxphotos_binaries,
-    datas=photo_data + osxphotos_data,
-    hiddenimports=collect_submodules("photo_curator") + osxphotos_hidden,
+    datas=photo_data + osxphotos_data + utitools_data + photoscript_data + osxmetadata_data,
+    hiddenimports=(
+        collect_submodules("photo_curator")
+        + osxphotos_hidden
+        + collect_submodules("bitstring")
+    ),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

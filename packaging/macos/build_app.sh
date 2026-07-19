@@ -44,8 +44,11 @@ xcrun swiftc \
   -parse-as-library \
   -O \
   -target "$(uname -m)-apple-macosx13.0" \
+  -framework SwiftUI \
   -framework AppKit \
-  "$SCRIPT_DIR/PhotoCuratorLauncher.swift" \
+  "$SCRIPT_DIR/NativeWorkerClient.swift" \
+  "$SCRIPT_DIR/PhotoCuratorModels.swift" \
+  "$SCRIPT_DIR/PhotoCuratorApp.swift" \
   -o "$CONTENTS/MacOS/PhotoCurator"
 
 cp "$SCRIPT_DIR/Info.plist" "$CONTENTS/Info.plist"

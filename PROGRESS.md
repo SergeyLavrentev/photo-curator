@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: первый S5 native workflow заменил browser launcher: SwiftUI
+  NavigationSplitView, четыре явных шага, native progress, LazyVGrid review, компактные
+  score/reasons, ручные decisions и подтверждение publish. Runtime не открывает порт;
+  packaged demo provider добавлен для воспроизводимого GUI acceptance. Реальный source
+  всё ещё идёт через osxphotos и остаётся migration gap до S6 PhotoKit intake.
 - 2026-07-20: добавлена первая часть S5 boundary: versioned correlated JSONL worker
   через stdin/stdout без HTTP/localhost. Он предоставляет нативному клиенту albums,
   projects, progress, ranked assets, decisions, Personal Taste и approval-gated publish.
@@ -88,10 +93,10 @@ ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
 local album provider → project API               — covered end-to-end in tests
 disk Best → Photos native PhotoKit publish       — implemented; dry-run + explicit approval gated
-native Swift helper                              — compiles on this Mac; real apply not run
+native SwiftUI app + Vision helper               — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 111 passed
+pytest                                           — 115 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> None:
         paths = default_application_paths()
         paths.ensure()
         configure_logging(paths.log_file)
-        raise SystemExit(run_native_worker(paths))
+        raise SystemExit(run_native_worker(paths, demo=args.demo))
     if args.command in {
         "acceptance-template",
         "acceptance-score-export",

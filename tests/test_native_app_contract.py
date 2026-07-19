@@ -1,0 +1,35 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> None:
+    app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
+    worker = (ROOT / "packaging/macos/NativeWorkerClient.swift").read_text()
+
+    assert "NavigationSplitView" in app
+    assert "LazyVGrid" in app
+    assert "worker.request(method:" in app
+    assert '"native-worker", "--demo"' in worker
+    assert "PHOTO_CURATOR_NATIVE_DEMO" in worker
+    assert "NSWorkspace.shared.open" not in app + worker
+    assert "localhost" not in app + worker
+    assert "127.0.0.1" not in app + worker
+
+
+def test_native_workflow_keeps_publish_behind_dry_run_and_confirmation() -> None:
+    app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
+
+    assert app.index('call("publish_dry_run"') < app.index('call("publish_apply"')
+    assert '"confirmed": true' in app
+    assert "confirmationDialog" in app
+
+
+def test_frozen_worker_includes_osxphotos_uti_runtime_data() -> None:
+    spec = (ROOT / "packaging/macos/backend.spec").read_text()
+
+    assert 'collect_data_files("utitools")' in spec
+    assert "osxphotos_data + utitools_data" in spec
+    assert 'collect_data_files("photoscript")' in spec
+    assert 'collect_data_files("osxmetadata")' in spec
+    assert 'collect_submodules("bitstring")' in spec

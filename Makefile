@@ -47,6 +47,9 @@ verify-app:
 	/usr/bin/plutil -lint "$(APP)/Contents/Info.plist"
 	test -x "$(APP)/Contents/MacOS/PhotoCurator"
 	test -x "$(APP)/Contents/Resources/backend/photo-curator-backend"
+	test -f "$(APP)/Contents/Resources/backend/_internal/utitools/uti.csv"
+	test -f "$(APP)/Contents/Resources/backend/_internal/photoscript/photoscript.applescript"
+	test -f "$(APP)/Contents/Resources/backend/_internal/osxmetadata/attribute_data/image_attributes.json"
 	test -x "$(APP)/Contents/Resources/native/photo-curator-vision"
 
 install: app

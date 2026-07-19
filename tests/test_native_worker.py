@@ -57,3 +57,20 @@ def test_jsonl_worker_protocol_is_versioned_correlated_and_stops_cleanly(tmp_pat
     assert responses[0]["result"]["worker_schema_version"] == 1
     assert responses[1]["error"]["type"] == "NativeWorkerError"
     assert responses[2]["result"] == {"status": "bye"}
+
+
+def test_jsonl_worker_can_boot_with_packaged_demo_provider(tmp_path: Path) -> None:
+    paths, _, _, _ = build_pipeline(tmp_path)
+    requests = [
+        {"schema_version": 1, "id": "albums", "method": "albums", "params": {}},
+        {"schema_version": 1, "id": "bye", "method": "shutdown", "params": {}},
+    ]
+    input_stream = io.StringIO("".join(json.dumps(request) + "\n" for request in requests))
+    output_stream = io.StringIO()
+
+    assert (
+        run_native_worker(paths, input_stream=input_stream, output_stream=output_stream, demo=True)
+        == 0
+    )
+    response = json.loads(output_stream.getvalue().splitlines()[0])
+    assert response["result"]["regular"][0]["photo_count"] == 12
