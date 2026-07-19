@@ -32,12 +32,13 @@ score range                                  — 26–90
 2,000 synthetic rows                         — 5,454 / 1,999,000 pairs in 0.013 s
 5,000 synthetic rows                         — 19,059 / 12,497,500 pairs in 0.039 s
 60-photo labelled generated fixture          — passed; no cross-scene groups
+real 20-photo Best publish dry-run            — dry_run_ok, 10 UUIDs, apply not run
 ```
 
 The in-app browser is currently blocked from `127.0.0.1` by enterprise network
 policy. Responsive screenshot acceptance is therefore not checked. A real 50–100
-photo human-labelled album and a real macOS Photos publish dry-run also remain
-release gates; neither is represented as complete.
+photo human-labelled album remains the last external release-quality gate. The
+real macOS Photos Best dry-run passed; apply was intentionally not executed.
 
 ## Previous MVP evidence — retained for history only
 

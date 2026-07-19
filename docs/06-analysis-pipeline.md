@@ -94,7 +94,8 @@ reject
 ```
 
 Пользовательские названия: `Отобрано / Проверить / Исключено`. Оценка хранится в
-structured reason вместе с component breakdown. Пороги зависят от density preset.
+structured reason вместе с component breakdown, включая series rank и selection
+confidence. Пороги зависят от density preset.
 
 Default automatic excluded:
 
@@ -102,6 +103,10 @@ Default automatic excluded:
 - high-confidence near-duplicate loser при отсутствии protections и warnings.
 
 Clearly weak technical defect может стать Excluded; пограничный или неоднозначный → Review.
+
+После первичного scoring temporal diversity pass оставляет не более трёх обычных
+auto-selected кадров в 120-секундной сцене. Favorites, edited assets и подтверждённые
+leaders защищены; остальные переходят в Review с причиной `diversity_limit`.
 
 ## Optional Apple scores
 

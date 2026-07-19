@@ -67,6 +67,9 @@ manual changes survive reanalysis.
   never require cloud image APIs.
 - Preserve diversity so one scene cannot dominate the final gallery.
 
+Implementation: a 120-second temporal scene keeps at most three ordinary automatic
+selections; Favorites, edited frames and validated series leaders remain protected.
+
 Acceptance: a labelled 50–100 photo fixture measures duplicate precision, series
 leader accuracy and false exclusions.
 
@@ -94,7 +97,8 @@ works at 390 px, and all statuses remain understandable without colour alone.
   when the installed macOS/osxphotos capabilities can export them safely.
 - Otherwise present an explicit import-to-library instruction instead of a dead
   disabled selector.
-- Record provenance and warn when shared copies have reduced resolution/metadata.
+- Record `regular_album` / `manual_shared_copy` provenance and warn when shared
+  copies may have reduced resolution or metadata.
 
 Acceptance: the user always understands whether a source is analyzed directly,
 copied locally, or requires manual import.
@@ -108,6 +112,9 @@ copied locally, or requires manual import.
 - Offer a local ZIP of review renders; never label it as an original-file export.
 
 Acceptance: Best and Reject publishing are independently previewed, confirmed and audited.
+
+Verified on macOS: a temporary 20-photo real project produced a successful Best
+album `osxphotos` dry-run with 10 selected UUIDs. Apply was intentionally not run.
 
 ## R7 — acceptance and release
 

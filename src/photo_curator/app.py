@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import secrets
 import stat
 import zipfile
@@ -43,6 +44,7 @@ class ProjectCreate(BaseModel):
     album_id: str
     name: str = Field(min_length=1, max_length=120)
     selection_density: Literal["compact", "balanced", "broad"] = "balanced"
+    source_provenance: Literal["regular_album", "manual_shared_copy"] = "regular_album"
 
 
 class DecisionPatch(BaseModel):
@@ -216,6 +218,7 @@ def create_app(
         project_cache = app_paths.cache_dir / project_id
         summary["cache_size"] = _human_size(_directory_size(project_cache))
         summary["cache_last_access"] = _last_access(project_cache)
+        project_settings = json.loads(str(project.get("settings_json") or "{}"))
         return templates.TemplateResponse(
             request,
             "project.html",
@@ -226,6 +229,7 @@ def create_app(
                 summary=summary,
                 distribution=distribution,
                 selected_preview=selected_preview,
+                project_settings=project_settings,
                 stages=_stage_views(jobs, summary, latest_publish),
                 csrf_token=secrets_.csrf_token,
             ),
@@ -369,6 +373,7 @@ def create_app(
                 library=selected_provider.get_current_library(),
                 album=album,
                 selection_density=payload.selection_density,
+                source_provenance=payload.source_provenance,
             )
         return {"id": project_id, "url": f"/projects/{project_id}"}
 
@@ -377,6 +382,7 @@ def create_app(
         project, summary, jobs = _project_data(app_paths.database, project_id)
         project.pop("library_path", None)
         project.pop("database_path", None)
+        project["settings"] = json.loads(str(project.pop("settings_json", "{}")))
         return {"project": project, "summary": summary, "jobs": [_public_job(job) for job in jobs]}
 
     @app.delete("/api/projects/{project_id}", status_code=204)
@@ -609,6 +615,7 @@ def _context(request: Request, **values: object) -> dict[str, object]:
             "missing_preview": "нет превью",
             "analysis_error": "ошибка анализа",
             "ambiguous_duplicate": "неуверенная серия",
+            "diversity_limit": "похожая сцена уже представлена",
         },
         **values,
     }
@@ -755,11 +762,21 @@ def _stage_view(number: int, job: dict[str, object], label: str) -> dict[str, ob
         int(processed / total * 100) if total else (100 if job.get("status") == "done" else 0)
     )
     elapsed = _elapsed_seconds(job.get("started_at"), job.get("finished_at"))
+    status = str(job.get("status", "pending"))
     return {
         "number": number,
         "code": job.get("stage"),
         "name": label,
-        "status": job.get("status", "pending"),
+        "status": status,
+        "status_label": {
+            "pending": "Ожидает",
+            "running": "В работе",
+            "active": "Доступно",
+            "done": "Готово",
+            "warning": "Внимание",
+            "error": "Ошибка",
+            "interrupted": "Прервано",
+        }.get(status, status),
         "progress": min(progress, 100),
         "processed": processed,
         "total": total,

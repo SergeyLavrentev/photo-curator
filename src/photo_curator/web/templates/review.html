@@ -31,7 +31,7 @@
                data-reasons="{% for reason in asset.reasons %}{{ reason.code }}{% if reason.kind %} ({{ reason.kind }}{% if reason.confidence is not none %}, {{ '%.0f' | format(reason.confidence * 100) }}%{% endif %}){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}"
                data-quality="{{ asset.selection_score or 0 }}"
                data-sharpness="{{ '%.2f' | format(asset.sharpness_percentile or 0) }}"
-               data-components="резкость {{ asset.score_components.sharpness | default('—') }} · свет {{ asset.score_components.exposure | default('—') }} · контраст {{ asset.score_components.contrast | default('—') }} · штраф {{ asset.score_components.penalty | default(0) }}"
+               data-components="резкость {{ asset.score_components.sharpness | default('—') }} · свет {{ asset.score_components.exposure | default('—') }} · контраст {{ asset.score_components.contrast | default('—') }} · серия {{ asset.score_components.series_rank | default(0) }} · уверенность {{ asset.score_components.selection_confidence | default('—') }} · штраф {{ asset.score_components.penalty | default(0) }}"
                data-note="{{ asset.manual_note or '' }}" tabindex="0">
         <label class="select-box"><input type="checkbox" aria-label="Выбрать {{ asset.current_filename or asset.asset_uuid }}"></label>
         {% if asset.cache_state == 'ready' %}

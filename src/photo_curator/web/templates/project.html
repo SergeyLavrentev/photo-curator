@@ -21,6 +21,14 @@
     <a href="/projects/{{ project.id }}/publish">Сохранить в Photos</a>
   </nav>
 
+  {% if project_settings.source_provenance == 'manual_shared_copy' %}
+    <aside class="notice warning">
+      <span aria-hidden="true">!</span><p><strong>Источник — локальная копия Shared Album.</strong>
+      У таких файлов могут быть уменьшены разрешение и исходные метаданные. Сравнивайте
+      лидеров серий перед созданием Best-альбома.</p>
+    </aside>
+  {% endif %}
+
   <section aria-labelledby="summary-title">
     <div class="section-heading"><div><p class="eyebrow">Итог анализа</p><h2 id="summary-title">Ваш отбор</h2></div></div>
     <div class="summary-grid">
@@ -59,10 +67,10 @@
   <section aria-labelledby="pipeline-title">
     <div class="section-heading"><div><p class="eyebrow">Обработка</p><h2 id="pipeline-title">Ход анализа</h2></div>
       <p data-live-status>Фактический прогресс</p></div>
-    <ol class="pipeline">
+    <ol class="pipeline pipeline-rail">
       {% for stage in stages %}
         <li class="stage {{ stage.status }}" data-stage="{{ stage.code }}">
-          <div class="stage-topline"><span class="stage-number">{% if stage.status == 'done' %}✓{% else %}{{ stage.number }}{% endif %}</span><span class="stage-status">{{ stage.status }}</span></div>
+          <div class="stage-topline"><span class="stage-number">{% if stage.status == 'done' %}✓{% else %}{{ stage.number }}{% endif %}</span><span class="stage-status">{{ stage.status_label }}</span></div>
           <h3>{{ stage.name }}</h3><p data-stage-message>{{ stage.message }}</p>
           <div class="stage-meta"><span data-stage-count>{{ stage.processed }} / {{ stage.total }}</span><span>⚠ {{ stage.warnings }} · ✕ {{ stage.errors }}</span></div>
           <div class="stage-meta"><span>{{ stage.elapsed }}</span><span>{{ stage.throughput }}</span></div>
@@ -71,6 +79,14 @@
         </li>
       {% endfor %}
     </ol>
+    {% set active = namespace(stage=none) %}
+    {% for stage in stages %}{% if stage.status in ['running', 'error', 'warning', 'interrupted'] and active.stage is none %}{% set active.stage = stage %}{% endif %}{% endfor %}
+    {% if active.stage is none %}{% set active.stage = stages[-1] if project.state == 'ready' else stages[0] %}{% endif %}
+    <div class="active-stage-detail" aria-live="polite">
+      <strong data-active-stage>{{ active.stage.name }}</strong>
+      <span data-active-stage-message>{{ active.stage.message }}</span>
+      <span data-active-stage-count>{{ active.stage.processed }} / {{ active.stage.total }}</span>
+    </div>
   </section>
 
   <section class="safety-panel">

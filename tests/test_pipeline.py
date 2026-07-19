@@ -180,3 +180,21 @@ def test_startup_interruption_updates_both_job_and_project_state(tmp_path: Path)
     assert count == 1
     assert project["state"] == "interrupted"
     assert jobs[0]["status"] == "interrupted"
+
+
+def test_resume_from_duplicates_reuses_previews_and_metrics(tmp_path: Path) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        before = repository.get_asset(connection, project_id, "demo-001")
+    preview_mtime = Path(str(before["review_path"])).stat().st_mtime_ns
+    calculated_at = before["calculated_at"]
+
+    coordinator.run(project_id, from_stage="duplicates")
+
+    with database_connection(paths.database) as connection:
+        after = repository.get_asset(connection, project_id, "demo-001")
+    assert Path(str(after["review_path"])).stat().st_mtime_ns == preview_mtime
+    assert after["calculated_at"] == calculated_at
+    assert after["selection_score"] is not None
+    assert after["score_components"]["selection_confidence"] >= 0

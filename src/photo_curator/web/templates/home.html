@@ -68,6 +68,12 @@
           <option value="broad">Широкая — больше кадров</option>
         </select>
       </label>
+      <label>Происхождение
+        <select name="source_provenance">
+          <option value="regular_album">Обычный альбом Photos</option>
+          <option value="manual_shared_copy">Локальная копия Shared Album</option>
+        </select>
+      </label>
       <button class="primary" type="submit" {% if not albums %}disabled{% endif %}>Создать проект</button>
       <p class="form-status" role="status"></p>
     </form>

@@ -4,6 +4,7 @@ from pathlib import Path
 from PIL import Image
 
 from photo_curator.analysis.decision_engine import decide_asset
+from photo_curator.pipeline.coordinator import _diversity_demotions
 from photo_curator.pipeline.duplicates import _candidate_pairs, find_duplicate_groups
 
 
@@ -85,6 +86,33 @@ def test_selection_density_changes_the_size_of_the_auto_selection() -> None:
 
     assert decide_asset(borderline, None, "compact").disposition == "review"
     assert decide_asset(borderline, None, "broad").disposition == "keep"
+
+
+def test_score_breakdown_exposes_series_rank_and_selection_confidence() -> None:
+    leader = decide_asset(
+        asset("leader"),
+        {
+            "kind": "near",
+            "confidence": 0.93,
+            "quality_margin": 0.0,
+            "is_leader": True,
+            "flags": [],
+        },
+    )
+    loser = decide_asset(
+        asset("loser"),
+        {
+            "kind": "near",
+            "confidence": 0.93,
+            "quality_margin": 0.2,
+            "is_leader": False,
+            "flags": [],
+        },
+    )
+
+    assert leader.components["series_rank"] == 100
+    assert loser.components["series_rank"] < leader.components["series_rank"]
+    assert leader.components["selection_confidence"] == 93
 
 
 def test_near_duplicate_requires_both_confidence_and_quality_margin() -> None:
@@ -200,3 +228,19 @@ def test_large_same_phash_bucket_stays_bounded() -> None:
     ]
 
     assert len(list(_candidate_pairs(assets))) < 50_000
+
+
+def test_temporal_diversity_keeps_only_three_unprotected_frames_per_scene() -> None:
+    assets = []
+    decisions = []
+    for index in range(5):
+        row = asset(f"frame-{index}")
+        row["taken_at"] = f"2026-01-01T10:00:{index:02d}+00:00"
+        row["technical_quality"] = 0.9 - index * 0.02
+        row["sharpness_percentile"] = 0.9 - index * 0.02
+        assets.append(row)
+        decisions.append(decide_asset(row, None))
+
+    demoted = _diversity_demotions(assets, decisions)
+
+    assert demoted == {"frame-3", "frame-4"}

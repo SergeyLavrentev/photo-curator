@@ -52,6 +52,7 @@ def create_project(
     album: PhotoAlbum,
     project_id: str | None = None,
     selection_density: str = "balanced",
+    source_provenance: str = "regular_album",
 ) -> str:
     project_id = project_id or new_id()
     now = utc_now()
@@ -81,6 +82,7 @@ def create_project(
                     "photo_count": album.photo_count,
                     "video_count": album.video_count,
                     "selection_density": selection_density,
+                    "source_provenance": source_provenance,
                 },
                 sort_keys=True,
             ),

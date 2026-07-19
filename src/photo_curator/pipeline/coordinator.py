@@ -4,10 +4,12 @@ import json
 import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from threading import Lock, Semaphore
 
-from photo_curator.analysis.decision_engine import decide_asset
+from photo_curator.analysis.decision_engine import DecisionResult, decide_asset
 from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_equivalence_hash
 from photo_curator.analysis.image_loader import load_normalized
 from photo_curator.analysis.normalization import percentile_ranks
@@ -369,12 +371,23 @@ class PipelineCoordinator:
             settings = json.loads(str(project.get("settings_json") or "{}"))
             density = str(settings.get("selection_density") or "balanced")
             job_id = repository.create_job(connection, project_id, "decisions", len(assets))
-            for index, asset in enumerate(assets, start=1):
-                decision = decide_asset(
+            decisions = [
+                decide_asset(
                     asset,
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
                 )
+                for asset in assets
+            ]
+            demoted = _diversity_demotions(assets, decisions)
+            for index, (asset, decision) in enumerate(zip(assets, decisions, strict=True), start=1):
+                if str(asset["asset_uuid"]) in demoted:
+                    decision = replace(
+                        decision,
+                        disposition="review",
+                        flags=sorted({*decision.flags, "diversity_limit"}),
+                        reasons=[*decision.reasons, {"code": "diversity_limit"}],
+                    )
                 repository.upsert_decision(
                     connection,
                     project_id,
@@ -393,7 +406,7 @@ class PipelineCoordinator:
             eligible = [
                 asset
                 for asset in repository.list_assets(connection, project_id)
-                if asset.get("final_disposition") != "reject"
+                if asset.get("final_disposition") == "keep"
                 and asset.get("technical_quality") is not None
             ]
             best_count = max(1, round(len(eligible) * 0.1)) if eligible else 0
@@ -411,3 +424,41 @@ class PipelineCoordinator:
 
 def _float(value: object) -> float | None:
     return float(value) if value is not None else None
+
+
+def _diversity_demotions(
+    assets: list[dict[str, object]], decisions: list[DecisionResult]
+) -> set[str]:
+    candidates = []
+    for asset, decision in zip(assets, decisions, strict=True):
+        if decision.disposition != "keep":
+            continue
+        if asset.get("favorite") or asset.get("has_adjustments"):
+            continue
+        if "duplicate_leader" in decision.flags:
+            continue
+        try:
+            taken_at = datetime.fromisoformat(str(asset.get("taken_at")))
+        except (TypeError, ValueError):
+            continue
+        candidates.append((taken_at, asset, decision))
+    candidates.sort(key=lambda item: item[0])
+    scenes: list[list[tuple[datetime, dict[str, object], DecisionResult]]] = []
+    for candidate in candidates:
+        if not scenes or (candidate[0] - scenes[-1][0][0]).total_seconds() > 120:
+            scenes.append([candidate])
+        else:
+            scenes[-1].append(candidate)
+    demoted = set()
+    for scene in scenes:
+        ranked = sorted(
+            scene,
+            key=lambda item: (
+                int(item[2].score),
+                int(item[1].get("width") or 0) * int(item[1].get("height") or 0),
+                str(item[1]["asset_uuid"]),
+            ),
+            reverse=True,
+        )
+        demoted.update(str(item[1]["asset_uuid"]) for item in ranked[3:])
+    return demoted

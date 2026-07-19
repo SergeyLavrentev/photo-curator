@@ -27,6 +27,7 @@ newProjectForm?.addEventListener("submit", async (event) => {
         name: form.get("name"),
         album_id: form.get("album_id"),
         selection_density: form.get("selection_density"),
+        source_provenance: form.get("source_provenance"),
       }),
     });
     window.location.assign(result.url);
@@ -75,6 +76,8 @@ async function pollProject(root, startButton = null) {
       const job = latest.get(code);
       if (!row || !job) return;
       row.className = `stage ${job.status}`;
+      const statusLabels = { pending: "Ожидает", running: "В работе", done: "Готово", warning: "Внимание", error: "Ошибка", interrupted: "Прервано" };
+      row.querySelector(".stage-status").textContent = statusLabels[job.status] || job.status;
       row.querySelector("[data-stage-message]").textContent = job.current_message || "Ожидает";
       row.querySelector("[data-stage-count]").textContent = `${job.processed_items} / ${job.total_items}`;
       const percent = job.total_items ? Math.min(100, Math.round(job.processed_items / job.total_items * 100)) : 0;
@@ -82,6 +85,12 @@ async function pollProject(root, startButton = null) {
       row.querySelector(".progress span").style.width = `${percent}%`;
     });
     const active = [...latest.values()].find((job) => job.status === "running");
+    const activeRow = active ? document.querySelector(`[data-stage="${["duplicates", "vision", "decisions"].includes(active.stage) ? "metrics" : active.stage}"]`) : null;
+    if (active) {
+      document.querySelector("[data-active-stage]").textContent = activeRow?.querySelector("h3")?.textContent || active.stage;
+      document.querySelector("[data-active-stage-message]").textContent = active.current_message || "В работе";
+      document.querySelector("[data-active-stage-count]").textContent = `${active.processed_items} / ${active.total_items}`;
+    }
     document.querySelector("[data-live-status]").textContent = active?.current_message || `Статус: ${state}`;
     if (["ready", "error", "interrupted"].includes(state)) {
       if (startButton) startButton.disabled = false;

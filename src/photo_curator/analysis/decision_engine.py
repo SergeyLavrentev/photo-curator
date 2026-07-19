@@ -106,6 +106,15 @@ def _selection_score(
         bonus += round(float(face_quality) * 8)
     if int(asset.get("face_count") or 0) and not int(asset.get("eyes_detected") or 0):
         penalty += 4
+    series_rank = 0
+    selection_confidence = 70
+    if duplicate:
+        selection_confidence = round(float(duplicate.get("confidence") or 0) * 100)
+        if duplicate.get("is_leader"):
+            series_rank = 100
+        else:
+            margin = max(0.0, float(duplicate.get("quality_margin") or 0))
+            series_rank = max(0, round(75 - margin * 100))
     score = round(
         quality * 0.35
         + sharpness * 0.25
@@ -124,6 +133,8 @@ def _selection_score(
         "bonus": bonus,
         "penalty": penalty,
         "face_quality": _percent(face_quality, fallback=0),
+        "series_rank": series_rank,
+        "selection_confidence": selection_confidence,
     }
     return max(0, min(100, score)), components
 

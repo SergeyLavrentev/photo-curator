@@ -64,9 +64,24 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "Проверка результата" in response.text
     assert "Альбом с результатом" in response.text
     assert "Отобрано" in response.text
+    assert "pipeline-rail" in response.text
+    assert "active-stage-detail" in response.text
+    assert "Готово" in response.text
     assert "Photos Library" in home.text
     assert "osxphotos" in home.text
     assert '<meta name="csrf-token" content="csrf-secret">' in response.text
+
+
+def test_static_ui_contract_is_dark_compact_and_uses_one_pipeline_detail(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        css = client.get("/static/app.css").text
+        dashboard = client.get("/projects/demo-project").text
+
+    assert "color-scheme: dark" in css
+    assert "grid-template-columns: repeat(6" in css
+    assert dashboard.count('class="active-stage-detail"') == 1
+    assert dashboard.count("summary-card") == 4
 
 
 def test_cache_metrics_tolerate_atomic_file_replacement(tmp_path: Path, monkeypatch) -> None:
@@ -196,6 +211,30 @@ def test_selected_preview_export_is_prepared_and_downloaded(tmp_path: Path) -> N
     assert prepared.json()["count"] >= 1
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"] == "application/zip"
+
+
+def test_manual_shared_copy_provenance_is_persisted_and_explained(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        client.cookies.set(CSRF_COOKIE, "csrf-secret")
+        created = client.post(
+            "/api/projects",
+            headers={"X-CSRF-Token": "csrf-secret"},
+            json={
+                "album_id": FakePhotosProvider.ALBUM_ID,
+                "name": "Shared copy",
+                "selection_density": "compact",
+                "source_provenance": "manual_shared_copy",
+            },
+        )
+        project_id = created.json()["id"]
+        dashboard = client.get(created.json()["url"])
+        payload = client.get(f"/api/projects/{project_id}").json()
+
+    assert created.status_code == 201
+    assert "уменьшены разрешение и исходные метаданные" in dashboard.text
+    assert payload["project"]["settings"]["source_provenance"] == "manual_shared_copy"
+    assert payload["project"]["settings"]["selection_density"] == "compact"
 
 
 class BrokenPhotosProvider(FakePhotosProvider):
