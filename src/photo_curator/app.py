@@ -42,7 +42,7 @@ templates = Jinja2Templates(directory=PACKAGE_ROOT / "web" / "templates")
 
 class ProjectCreate(BaseModel):
     album_id: str
-    name: str = Field(min_length=1, max_length=120)
+    name: str | None = Field(default=None, max_length=120)
     selection_density: Literal["compact", "balanced", "broad"] = "balanced"
     source_provenance: Literal["regular_album", "manual_shared_copy"] = "regular_album"
 
@@ -356,9 +356,6 @@ def create_app(
     @app.post("/api/projects", status_code=201)
     async def create_project_api(payload: ProjectCreate) -> dict[str, str]:
         _require_provider(selected_provider)
-        name = payload.name.strip()
-        if not name:
-            raise HTTPException(422, "Project name cannot be blank")
         try:
             albums = {album.id: album for album in selected_provider.list_regular_albums()}
         except Exception as error:
@@ -366,6 +363,7 @@ def create_app(
         album = albums.get(payload.album_id)
         if not album:
             raise HTTPException(400, "Можно выбрать только обычный альбом")
+        name = (payload.name or "").strip() or album.name
         with database_connection(app_paths.database) as connection:
             project_id = repository.create_project(
                 connection,

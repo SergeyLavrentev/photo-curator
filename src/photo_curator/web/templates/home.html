@@ -3,79 +3,83 @@
 {% block content %}
   <section class="hero">
     <div>
-      <p class="eyebrow">Apple Photos · локально и безопасно</p>
-      <h1>Photo Curator</h1>
-      <p class="hero-copy">Находит дубликаты и технически слабые кадры, объясняет рекомендации
-        и оставляет окончательное решение человеку.</p>
+      <p class="eyebrow">Apple Photos · локально</p>
+      <h1>Соберите лучшие кадры</h1>
+      <p class="hero-copy">Выберите альбом — Photo Curator найдёт серии и слабые снимки,
+        затем покажет объяснимую подборку для вашей проверки.</p>
     </div>
-    <a class="primary button-link" href="/doctor">Проверить среду</a>
   </section>
 
-  <aside class="notice" aria-label="Важно об общих альбомах">
-    <span aria-hidden="true">i</span>
-    <div><strong>Общие альбомы видны, но Photos не даёт приложению надёжно читать оригиналы напрямую.</strong>
-      <p>Создайте локальную рабочую копию в Photos: откройте общий альбом → выберите фото → «Сохранить в медиатеку» → добавьте их в новый обычный альбом. Затем выберите его ниже.</p>
-      {% if shared_albums %}<details><summary>Найдено общих альбомов: {{ shared_albums | length }}</summary>
-        <ul>{% for album in shared_albums %}<li>{{ album.full_path }} · {{ album.photo_count }} фото</li>{% endfor %}</ul>
-      </details>{% endif %}
-    </div>
-  </aside>
-  <section class="environment-grid" aria-label="Текущая среда">
-    {% for label, value in [('Photos Library', environment.library), ('Photos DB', environment.database_version),
-      ('osxphotos', environment.osxphotos_version), ('Совместимость', environment.compatibility)] %}
-      <article><span>{{ label }}</span><strong>{{ value }}</strong></article>
-    {% endfor %}
-  </section>
   {% if provider_error %}
     <aside class="notice warning" role="alert"><span aria-hidden="true">!</span>
       <p><strong>Photos Library пока недоступна.</strong> {{ provider_error }}</p></aside>
   {% endif %}
 
-  <section aria-labelledby="projects-title">
-    <div class="section-heading">
-      <div><p class="eyebrow">Рабочее пространство</p><h2 id="projects-title">Проекты</h2></div>
-      <p>{{ projects | length }} сохранено</p>
-    </div>
-    <div class="project-grid">
-      {% for project in projects %}
-        <a class="project-card" href="/projects/{{ project.id }}">
-          <span class="state {{ project.state }}">{{ project.state }}</span>
-          <h3>{{ project.name }}</h3>
-          <p>{{ project.album_full_path }}</p>
-          <span>Открыть проект →</span>
-        </a>
-      {% else %}
-        <div class="empty-state">Проектов пока нет. Выберите обычный альбом ниже.</div>
-      {% endfor %}
-    </div>
-  </section>
-
   <section class="new-project" aria-labelledby="new-project-title">
-    <div><p class="eyebrow">Новый анализ</p><h2 id="new-project-title">Выберите альбом</h2></div>
+    <div><p class="eyebrow">Новый отбор</p><h2 id="new-project-title">Начать анализ</h2>
+      <p class="step-copy">1. Альбом · 2. Размер подборки · 3. Старт</p></div>
     <form id="new-project-form">
-      <label>Название проекта<input name="name" required maxlength="120" value="Новый проект"></label>
-      <label>Обычный альбом
+      <label>1. Альбом Photos
         <select name="album_id" required>
           {% for album in albums %}
             <option value="{{ album.id }}">{{ album.full_path }} · {{ album.photo_count }} фото{% if album.video_count %} · {{ album.video_count }} видео пропустим{% endif %}</option>
           {% endfor %}
         </select>
       </label>
-      <label>Размер итоговой подборки
+      <label>2. Сколько оставить
         <select name="selection_density">
-          <option value="balanced">Сбалансированная</option>
           <option value="compact">Компактная — только сильнейшие</option>
+          <option value="balanced" selected>Сбалансированная</option>
           <option value="broad">Широкая — больше кадров</option>
         </select>
       </label>
-      <label>Происхождение
-        <select name="source_provenance">
-          <option value="regular_album">Обычный альбом Photos</option>
-          <option value="manual_shared_copy">Локальная копия Shared Album</option>
-        </select>
-      </label>
-      <button class="primary" type="submit" {% if not albums %}disabled{% endif %}>Создать проект</button>
+      <button class="primary" type="submit" {% if not albums %}disabled{% endif %}>3. Начать анализ</button>
+      <details class="advanced-options">
+        <summary>Дополнительные настройки</summary>
+        <div class="advanced-fields">
+          <label>Название проекта <input name="name" maxlength="120" placeholder="Возьмём название альбома"></label>
+          <label>Источник
+            <select name="source_provenance">
+              <option value="regular_album">Обычный альбом Photos</option>
+              <option value="manual_shared_copy">Локальная копия Shared Album</option>
+            </select>
+          </label>
+        </div>
+      </details>
       <p class="form-status" role="status"></p>
     </form>
+    {% if shared_albums %}
+      <details class="shared-intake">
+        <summary>{{ shared_albums | length }} общих альбомов требуют локальной копии</summary>
+        <p>Photos не даёт надёжно анализировать их напрямую. Откройте общий альбом,
+          сохраните фото в медиатеку и добавьте их в новый обычный альбом.</p>
+        <ul>{% for album in shared_albums %}<li>{{ album.full_path }} · {{ album.photo_count }} фото</li>{% endfor %}</ul>
+      </details>
+    {% endif %}
   </section>
+
+  {% if projects %}
+    <section aria-labelledby="projects-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Продолжить</p><h2 id="projects-title">Недавние проекты</h2></div>
+        <p>{{ projects | length }}</p>
+      </div>
+      <div class="project-list">
+        {% for project in projects %}
+          <a class="project-row" href="/projects/{{ project.id }}">
+            <span><strong>{{ project.name }}</strong><small>{{ project.album_full_path }}</small></span>
+            <span class="state {{ project.state }}">{{ project.state }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  <details class="technical-details">
+    <summary>Техническая информация</summary>
+    <dl>{% for label, value in [('Photos Library', environment.library), ('Photos DB', environment.database_version),
+      ('osxphotos', environment.osxphotos_version), ('Совместимость', environment.compatibility)] %}
+      <div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}</dl>
+    <a href="/doctor">Открыть полную диагностику →</a>
+  </details>
 {% endblock %}

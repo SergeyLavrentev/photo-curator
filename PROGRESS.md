@@ -37,9 +37,10 @@ real Chrome desktop + ~500 px workflow        — passed; gallery, preview, filt
 demo pipeline rerun from browser              — 5 selected / 3 review / 4 excluded / 2 series
 responsive navigation regression contract     — passed
 390 px overflow contract                       — batch toolbar, series grid and pagination fixed
+home workflow                                  — album → density → analysis; technical details collapsed
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
-pytest                                         — 79 passed
+pytest                                         — 80 passed
 ruff format / check                            — passed
 local PhotoCurator data roots                  — absent after current demo audit
 service-created PhotoCurator albums            — none in current Photos library

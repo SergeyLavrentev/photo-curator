@@ -83,12 +83,34 @@ def test_static_ui_contract_is_dark_compact_and_uses_one_pipeline_detail(tmp_pat
     with TestClient(make_app(tmp_path)) as client:
         client.cookies.set(SESSION_COOKIE, "session-secret")
         css = client.get("/static/app.css").text
+        home = client.get("/").text
         dashboard = client.get("/projects/demo-project").text
 
     assert "color-scheme: dark" in css
     assert "grid-template-columns: repeat(6" in css
+    assert "Начать анализ" in home
+    assert home.index("Начать анализ") < home.index("Недавние проекты")
+    assert "Дополнительные настройки" in home
+    assert "Техническая информация" in home
+    assert "project-card" not in home
+    assert "environment-grid" not in home
     assert dashboard.count('class="active-stage-detail"') == 1
     assert dashboard.count("summary-card") == 4
+
+
+def test_project_name_defaults_to_selected_album(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        client.cookies.set(CSRF_COOKIE, "csrf-secret")
+        created = client.post(
+            "/api/projects",
+            headers={"X-CSRF-Token": "csrf-secret"},
+            json={"album_id": FakePhotosProvider.ALBUM_ID, "name": ""},
+        )
+        payload = client.get(f"/api/projects/{created.json()['id']}").json()
+
+    assert created.status_code == 201
+    assert payload["project"]["name"] == "Черногория"
 
 
 def test_mobile_ui_keeps_global_navigation_and_explains_horizontal_scroll(tmp_path: Path) -> None:

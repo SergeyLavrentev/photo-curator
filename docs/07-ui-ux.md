@@ -6,19 +6,19 @@
 
 ## Home
 
-- current Photos Library;
-- compatibility status;
-- `osxphotos` version;
-- existing projects;
-- New Project;
-- Doctor;
-- Shared Album intake warning.
+- первичное действие — компактный workflow `альбом → плотность → анализ`;
+- сохранённые проекты — строки, а не крупные карточки;
+- техническая среда и Doctor доступны в свёрнутом блоке после workflow;
+- Shared Album intake показывается отдельной свёрнутой подсказкой только когда
+  общие альбомы действительно найдены.
 
 ## New Project
 
 - album selector с folder path;
 - photo/video counts;
-- project name;
+- плотность итоговой подборки;
+- project name и provenance — необязательные дополнительные настройки;
+- без введённого project name использовать название выбранного альбома;
 - Start Analysis.
 
 Shared collections показывать отдельно с инструкцией локального импорта, не как мёртвый disabled option.

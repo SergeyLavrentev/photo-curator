@@ -24,7 +24,7 @@ newProjectForm?.addEventListener("submit", async (event) => {
     const result = await api("/api/projects", {
       method: "POST",
       body: JSON.stringify({
-        name: form.get("name"),
+        name: form.get("name") || null,
         album_id: form.get("album_id"),
         selection_density: form.get("selection_density"),
         source_provenance: form.get("source_provenance"),
