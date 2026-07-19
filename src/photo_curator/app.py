@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import secrets
+import stat
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -808,9 +809,7 @@ def _quality_distribution(assets: list[dict[str, object]]) -> list[int]:
 
 
 def _directory_size(root: Path) -> int:
-    if not root.is_dir():
-        return 0
-    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+    return sum(file_stat.st_size for file_stat in _cache_file_stats(root))
 
 
 def _human_size(size: int) -> str:
@@ -823,11 +822,30 @@ def _human_size(size: int) -> str:
 
 
 def _last_access(root: Path) -> str:
-    files = [path for path in root.rglob("*") if path.is_file()] if root.is_dir() else []
-    if not files:
+    file_stats = _cache_file_stats(root)
+    if not file_stats:
         return "—"
-    timestamp = max(path.stat().st_atime for path in files)
+    timestamp = max(file_stat.st_atime for file_stat in file_stats)
     return datetime.fromtimestamp(timestamp).astimezone().strftime("%d.%m.%Y %H:%M")
+
+
+def _cache_file_stats(root: Path) -> list[Any]:
+    if not root.is_dir():
+        return []
+    file_stats = []
+    try:
+        for path in root.rglob("*"):
+            try:
+                file_stat = path.stat()
+            except OSError:
+                # Atomic preview writes may rename a temporary file during this scan.
+                continue
+            if stat.S_ISREG(file_stat.st_mode):
+                file_stats.append(file_stat)
+    except OSError:
+        # Cache metrics are informational and must never break the dashboard.
+        pass
+    return file_stats
 
 
 def _elapsed_seconds(started: object, finished: object) -> float:

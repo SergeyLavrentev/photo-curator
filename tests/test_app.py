@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from photo_curator.app import create_app
+from photo_curator.app import _directory_size, _last_access, create_app
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.fake_provider import FakePhotosProvider
 from photo_curator.web.security import CSRF_COOKIE, SESSION_COOKIE, SessionSecrets
@@ -68,6 +68,26 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "Photos Library" in home.text
     assert "osxphotos" in home.text
     assert '<meta name="csrf-token" content="csrf-secret">' in response.text
+
+
+def test_cache_metrics_tolerate_atomic_file_replacement(tmp_path: Path, monkeypatch) -> None:
+    preview = tmp_path / "preview.jpg"
+    preview.write_bytes(b"jpeg")
+    original_stat = Path.stat
+    calls = 0
+
+    def disappearing_stat(path: Path, *args, **kwargs):
+        nonlocal calls
+        if path == preview:
+            calls += 1
+            if calls == 2:
+                raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", disappearing_stat)
+    assert _directory_size(tmp_path) == 4
+    calls = 0
+    assert _last_access(tmp_path) != "—"
 
 
 def test_api_status_does_not_expose_local_paths(tmp_path: Path) -> None:
