@@ -41,10 +41,12 @@ responsive navigation regression contract     — passed
 home workflow                                  — album → density → analysis; technical details collapsed
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
-pytest                                         — 81 passed
 ruff format / check                            — passed
-local PhotoCurator data roots                  — absent after current demo audit
-service-created PhotoCurator albums            — none in current Photos library
+native Swift/PhotoKit helper capability        — compiled and passed; Photos.app UI not used
+Shared Album copy unit/API tests                — passed; live PhotoKit apply intentionally not run
+pytest                                         — 87 passed
+local PhotoCurator data roots                  — present after live intake investigation
+legacy osxphotos test album                     — 39 photos; stopped, retained pending user cleanup decision
 ```
 
 The Chrome extension opened `127.0.0.1` directly and verified the compact workflow

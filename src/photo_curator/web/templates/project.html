@@ -25,7 +25,7 @@
     <a href="/projects/{{ project.id }}/publish">Сохранить в Photos</a>
   </nav>
 
-  {% if project_settings.source_provenance == 'manual_shared_copy' %}
+  {% if project_settings.source_provenance in ['manual_shared_copy', 'service_shared_copy'] %}
     <aside class="notice warning">
       <span aria-hidden="true">!</span><p><strong>Источник — локальная копия Shared Album.</strong>
       У таких файлов могут быть уменьшены разрешение и исходные метаданные. Сравнивайте

@@ -11,7 +11,7 @@ PRAGMA busy_timeout = 5000;
 Миграции через `PRAGMA user_version`.
 
 `projects.settings_json` stores `selection_density`, source photo/video counts and
-`source_provenance` (`regular_album` or `manual_shared_copy`).
+`source_provenance` (`regular_album`, `manual_shared_copy` or `service_shared_copy`).
 
 ## `projects`
 

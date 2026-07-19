@@ -50,10 +50,10 @@
     </form>
     {% if shared_albums %}
       <details class="shared-intake">
-        <summary>{{ shared_albums | length }} общих альбомов требуют локальной копии</summary>
-        <p>Photos не даёт надёжно анализировать их напрямую. Откройте общий альбом,
-          сохраните фото в медиатеку и добавьте их в новый обычный альбом.</p>
-        <ul>{% for album in shared_albums %}<li>{{ album.full_path }} · {{ album.photo_count }} фото</li>{% endfor %}</ul>
+        <summary>{{ shared_albums | length }} общих альбомов · можно создать локальную копию</summary>
+        <p>Photo Curator подготовит уменьшенные Shared Album renders и после вашего
+          подтверждения создаст новый обычный альбом Photos. Исходный общий альбом не меняется.</p>
+        <ul>{% for album in shared_albums %}<li><a href="/shared/{{ album.id }}/copy">{{ album.full_path }} · {{ album.photo_count }} фото{% if album.video_count %} · {{ album.video_count }} видео{% endif %}</a></li>{% endfor %}</ul>
       </details>
     {% endif %}
   </section>

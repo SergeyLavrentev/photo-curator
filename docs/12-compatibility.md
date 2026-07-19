@@ -25,7 +25,10 @@ Apple Silicon и Intel
 
 ## Shared Albums
 
-Не поддерживаются напрямую независимо от OS. Это intentional product scope, а не только техническое ограничение.
+Не поддерживаются как прямой источник анализа. При доступных локальных photo renders
+и рабочем native Swift/PhotoKit helper сервис может создать частичный или полный
+обычный working album после подтверждения, не запуская Photos.app. Видео пропускаются;
+при отсутствии capability UI даёт ручную инструкцию.
 
 ## HEIC
 

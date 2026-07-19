@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -186,6 +186,31 @@ ALTER TABLE metrics ADD COLUMN face_capture_quality REAL;
 ALTER TABLE metrics ADD COLUMN eyes_detected INTEGER;
 """
 
+MIGRATION_4 = """
+CREATE TABLE shared_copy_jobs (
+    id TEXT PRIMARY KEY,
+    shared_album_id TEXT NOT NULL,
+    shared_album_name TEXT NOT NULL,
+    destination_album_name TEXT NOT NULL,
+    destination_album_id TEXT,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    total_items INTEGER NOT NULL,
+    processed_items INTEGER NOT NULL DEFAULT 0,
+    imported_items INTEGER NOT NULL DEFAULT 0,
+    reused_items INTEGER NOT NULL DEFAULT 0,
+    skipped_videos INTEGER NOT NULL DEFAULT 0,
+    warning_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    current_message TEXT,
+    error_text TEXT,
+    asset_uuids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -204,4 +229,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 3:
         connection.executescript(MIGRATION_3)
         connection.execute("PRAGMA user_version = 3")
+        version = 3
+    if version < 4:
+        connection.executescript(MIGRATION_4)
+        connection.execute("PRAGMA user_version = 4")
     connection.commit()

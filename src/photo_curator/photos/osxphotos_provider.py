@@ -19,6 +19,10 @@ class OSXPhotosProvider:
         self._library_path = library_path
         self.__db = None
 
+    def refresh_library(self) -> None:
+        """Reopen the read-only Photos database after an external osxphotos write."""
+        self.__db = None
+
     @property
     def _db(self):
         if self.__db is None:
@@ -48,7 +52,12 @@ class OSXPhotosProvider:
         return sorted(albums, key=lambda item: item.full_path.casefold())
 
     def list_assets(self, album_id: str) -> list[PhotoAsset]:
-        album = self._album_info(album_id)
+        return self._assets_from_album(self._album_info(album_id))
+
+    def list_shared_assets(self, album_id: str) -> list[PhotoAsset]:
+        return self._assets_from_album(self._shared_album_info(album_id))
+
+    def _assets_from_album(self, album: Any) -> list[PhotoAsset]:
         assets = []
         for photo in album.photos:
             try:
@@ -87,6 +96,12 @@ class OSXPhotosProvider:
             if album.uuid == album_id:
                 return album
         raise KeyError(f"Regular album not found: {album_id}")
+
+    def _shared_album_info(self, album_id: str) -> Any:
+        for album in self._db.album_info_shared:
+            if album.uuid == album_id:
+                return album
+        raise KeyError(f"Shared album not found: {album_id}")
 
     @staticmethod
     def _album_from_info(info: Any, *, shared: bool) -> PhotoAlbum:

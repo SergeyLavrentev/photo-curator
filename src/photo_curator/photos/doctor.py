@@ -77,7 +77,7 @@ def run_doctor(provider: PhotosProvider | None, paths: ApplicationPaths) -> list
                         "shared_albums",
                         "Shared Albums",
                         "WARNING" if shared else "OK",
-                        f"{len(shared)} недоступны как source; требуется ручной импорт",
+                        f"{len(shared)} доступны через отдельную локальную PhotoKit-копию",
                     ),
                 ]
             )

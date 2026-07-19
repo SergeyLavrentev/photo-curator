@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Локальная копия {{ album.name }} — Photo Curator{% endblock %}
+{% block content %}
+  <section class="hero compact" data-shared-album-id="{{ album.id }}"{% if copy_job %} data-shared-copy-job="{{ copy_job.id }}"{% endif %}>
+    <div><p class="eyebrow">Shared Album → обычный альбом Photos</p><h1>{{ album.name }}</h1>
+      <p class="hero-copy">{{ total_photos }} фото{% if album.video_count %} · {{ album.video_count }} видео не копируются{% endif %}</p></div>
+    <a class="secondary button-link" href="/">Назад к проектам</a>
+  </section>
+
+  <aside class="notice warning"><span aria-hidden="true">!</span><p><strong>Это рабочая копия.</strong>
+    Shared Albums обычно содержат изображения до 2048 px по длинной стороне. Photo Curator
+    не меняет общий альбом и не выдаёт эти файлы за оригиналы.</p></aside>
+
+  {% if not copy_available %}
+    <aside class="notice warning" role="alert"><span aria-hidden="true">!</span><p>
+      <strong>Автоматическая копия недоступна.</strong> Нативный PhotoKit helper не прошёл capability gate.</p></aside>
+  {% endif %}
+
+  {% if copy_job %}
+    <section class="copy-status-panel" aria-labelledby="copy-status-title">
+      <div class="section-heading"><div><p class="eyebrow">Локальная копия</p>
+        <h2 id="copy-status-title">{{ copy_job.destination_album_name }}</h2></div>
+        <span class="state {{ copy_job.status }}" data-copy-state>{{ copy_job.status }}</span></div>
+      <p data-copy-message>{{ copy_job.current_message }}</p>
+      <div class="copy-metrics"><span><strong data-copy-count>{{ copy_job.processed_items }} / {{ copy_job.total_items }}</strong> подготовлено</span>
+        <span>{{ copy_job.skipped_videos }} видео пропущено</span><span>⚠ {{ copy_job.warning_count }} · ✕ {{ copy_job.error_count }}</span></div>
+      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="{{ copy_job.total_items }}" aria-valuenow="{{ copy_job.processed_items }}">
+        <span style="width:{{ (copy_job.processed_items * 100 / copy_job.total_items) if copy_job.total_items else 0 }}%"></span></div>
+      {% if copy_job.status in ['planned', 'interrupted', 'error'] %}
+        <label class="confirmation"><input type="checkbox" id="shared-copy-confirm"> Я понимаю: будет создан новый обычный альбом Photos; Shared Album не изменится.</label>
+        <button class="primary" data-action="shared-copy-apply">{% if copy_job.status == 'planned' %}Создать локальную копию{% else %}Повторить создание{% endif %}</button>
+      {% elif copy_job.status == 'done' %}
+        <p class="success-copy"><strong>Готово.</strong> Импортировано {{ copy_job.imported_items }}, переиспользовано без дублей {{ copy_job.reused_items }}.</p>
+        <a class="primary button-link" href="/">Выбрать новый альбом для анализа</a>
+      {% endif %}
+      {% if copy_job.status == 'error' and copy_job.error_text %}<p class="error-copy">{{ copy_job.error_text }}</p>{% endif %}
+    </section>
+  {% else %}
+    <section aria-labelledby="copy-options-title">
+      <div class="section-heading"><div><p class="eyebrow">Что скопировать</p><h2 id="copy-options-title">Создать локальный альбом</h2></div></div>
+      <form id="shared-copy-form">
+        <label>Название обычного альбома
+          <input name="destination_album_name" maxlength="120" placeholder="PhotoCurator — {{ album.name }} — R7 Test">
+        </label>
+        <div class="copy-options">
+          <article><strong>Тестовая выборка</strong><p>Первые фотографии по времени — удобно для проверки pipeline.</p>
+            <label>Количество <select name="sample_size"><option>50</option><option selected>80</option><option>100</option></select></label>
+            <button class="primary" type="submit" data-copy-mode="sample" {% if not copy_available %}disabled{% endif %}>Подготовить выборку</button></article>
+          <article><strong>Все фотографии</strong><p>{{ total_photos }} фото; {{ album.video_count }} видео будут явно пропущены.</p>
+            <button class="secondary" type="submit" data-copy-mode="full" {% if not copy_available %}disabled{% endif %}>Подготовить полную фотокопию</button></article>
+          <article><strong>Только отмеченные</strong><p>Выберите до 500 кадров на текущей странице.</p>
+            <button class="secondary" type="submit" data-copy-mode="custom" {% if not copy_available %}disabled{% endif %}>Подготовить отмеченные</button></article>
+        </div>
+        <p class="form-status" role="status"></p>
+      </form>
+    </section>
+
+    <section class="gallery shared-copy-gallery" data-shared-selection aria-label="Фотографии Shared Album">
+      {% for asset in assets %}
+        <article class="asset-card"><label class="select-box"><input type="checkbox" value="{{ asset.uuid }}" aria-label="Выбрать {{ asset.current_filename or asset.uuid }}"></label>
+          <img loading="lazy" src="/shared-media/{{ album.id }}/{{ asset.uuid }}" alt="{{ asset.current_filename or 'Shared photo' }}">
+          <div class="asset-body"><div class="asset-title"><strong>{{ asset.current_filename or asset.uuid }}</strong></div></div>
+        </article>
+      {% endfor %}
+    </section>
+    <nav class="pagination" aria-label="Страницы Shared Album">
+      {% if page > 1 %}<a href="?page={{ page - 1 }}">← Назад</a>{% endif %}<span>{{ page }} / {{ total_pages }}</span>
+      {% if page < total_pages %}<a href="?page={{ page + 1 }}">Дальше →</a>{% endif %}
+    </nav>
+  {% endif %}
+{% endblock %}

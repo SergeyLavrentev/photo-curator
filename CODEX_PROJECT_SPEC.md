@@ -80,7 +80,7 @@ Apple Photos
 
 ```text
 Apple Shared Album
-        ↓ ручной импорт
+        ↓ план + подтверждённая локальная фотокопия
 Личная медиатека Apple Photos
         ↓
 Обычный рабочий альбом «Черногория»
@@ -102,7 +102,9 @@ duplicate groups + decisions
 ручное Command+Delete в Photos.app
 ```
 
-Shared Albums не поддерживаются как прямой источник. Импорт из них выполняется пользователем до запуска приложения.
+Shared Albums не поддерживаются как прямой источник анализа. Photo Curator может
+создать из локально доступных photo renders отдельный обычный альбом после явного
+подтверждения пользователя.
 
 ---
 
@@ -130,12 +132,13 @@ Shared Albums не поддерживаются как прямой источн
 
 ### 3.3. Intake из Shared Album
 
-Пользователь вручную:
-
-1. импортирует нужные фотографии из Shared Album в личную медиатеку;
-2. создаёт обычный рабочий альбом;
-3. добавляет туда свои полноразмерные originals и импортированные shared-копии;
-4. дожидается синхронизации на Mac.
+Пользователь выбирает первые N, отмеченные на странице или все доступные фотографии.
+Приложение проверяет локальные renders, сохраняет план и только после отдельного
+подтверждения вызывает встроенный capability-gated Swift/PhotoKit helper. Через публичный
+macOS API создаётся новый обычный альбом без запуска или UI scripting Photos.app;
+исходный Shared Album остаётся read-only. Видео явно пропускаются, потому что доступный
+derivative может быть только JPEG-preview, а не исходным видео. При отсутствии capability
+показывается ручной fallback.
 
 В UI показать предупреждение:
 
@@ -904,7 +907,8 @@ Dependency invalidation:
 
 ### 21.1. Home
 
-Показывает library, versions, compatibility, projects, кнопку нового проекта, doctor и Shared Album intake warning.
+Показывает library, versions, compatibility, projects, кнопку нового проекта, doctor
+и ссылки на частичную/полную локальную копию найденных Shared Albums.
 
 ### 21.2. Project dashboard
 
@@ -1157,7 +1161,7 @@ uv run photo-curator --demo
 
 ### Milestone 1 — Doctor и Photos provider
 
-Current library, regular albums, disabled Shared Albums, Unicode, read gate.
+Current library, regular albums, отдельный Shared Album copy workflow, Unicode, read gate.
 
 ### Milestone 2 — Inventory
 
@@ -1198,7 +1202,8 @@ MVP готов, если:
 1. устанавливается через `uv` и содержит `uv.lock`;
 2. `--demo` показывает полный визуальный workflow;
 3. doctor диагностирует среду;
-4. regular albums видны, Shared Albums нельзя выбрать;
+4. regular albums видны; Shared Albums нельзя анализировать напрямую, но можно после
+   плана и подтверждения скопировать в новый обычный photo-only album;
 5. project inventory, previews, metrics, duplicate groups и decisions работают;
 6. higher-resolution original защищён от shared-like copy;
 7. review gallery и duplicate comparison позволяют manual overrides;
@@ -1234,7 +1239,7 @@ Helper должен быть локальным, optional и без downloadable
 
 ```text
 Shared Album
-        ↓ manual import
+        ↓ native PhotoKit copy after confirmation
 Personal Photos Library
         ↓
 Regular working album

@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -290,6 +291,36 @@ def test_shared_albums_are_returned_disabled(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["regular"][0]["disabled"] is False
     assert response.json()["shared"][0]["disabled"] is True
+
+
+def test_shared_album_copy_page_and_confirmed_plan_are_exposed(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    app.state.shared_copier.enabled = True
+    app.state.shared_copier.bridge = SimpleNamespace(capability_available=True)
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        client.cookies.set(CSRF_COOKIE, "csrf-secret")
+        page = client.get("/shared/demo-shared-album/copy")
+        preview = client.get("/shared-media/demo-shared-album/demo-001")
+        planned = client.post(
+            "/api/shared/demo-shared-album/copies",
+            headers={"X-CSRF-Token": "csrf-secret"},
+            json={
+                "mode": "sample",
+                "sample_size": 3,
+                "destination_album_name": "PhotoCurator Shared Test",
+            },
+        )
+        plan_page = client.get(planned.json()["url"])
+
+    assert page.status_code == 200
+    assert "Первые фотографии по времени" in page.text
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "image/jpeg"
+    assert planned.status_code == 201
+    assert planned.json()["status"] == "planned"
+    assert planned.json()["total_items"] == 3
+    assert "Создать локальную копию" in plan_page.text
 
 
 def test_media_route_does_not_accept_filesystem_path(tmp_path: Path) -> None:

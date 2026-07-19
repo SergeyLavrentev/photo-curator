@@ -17,6 +17,9 @@ class FakePhotosProvider:
         self.fixture_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._assets = self._ensure_fixtures()
 
+    def refresh_library(self) -> None:
+        return None
+
     def get_current_library(self) -> PhotoLibrary:
         return PhotoLibrary(
             library_path="Synthetic Demo Library",
@@ -51,6 +54,11 @@ class FakePhotosProvider:
         if album_id != self.ALBUM_ID:
             raise KeyError(album_id)
         return list(self._assets)
+
+    def list_shared_assets(self, album_id: str) -> list[PhotoAsset]:
+        if album_id != "demo-shared-album":
+            raise KeyError(album_id)
+        return list(self._assets[:4])
 
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
         wanted = set(asset_uuids)

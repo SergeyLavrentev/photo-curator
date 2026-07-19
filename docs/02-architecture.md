@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart TD
-    SA[Apple Shared Album] -->|ручной импорт| PL[Personal Photos Library]
+    SA[Apple Shared Album] -->|SharedCopyCoordinator: plan + confirm| PL[Personal Photos Library]
     PL --> WA[Regular Working Album]
     WA --> OP[OSXPhotosProvider]
     OP --> INV[Inventory Snapshot]
@@ -23,6 +23,8 @@ flowchart TD
 ### `photos/`
 
 Единственный слой, знающий об `osxphotos`, Photos Library paths и publish subprocesses.
+`SharedCopyCoordinator` читает только локальные Shared Album renders и создаёт новый
+обычный альбом через capability-gated import; source Shared Album остаётся read-only.
 
 ### `pipeline/`
 

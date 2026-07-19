@@ -27,6 +27,7 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "decisions",
         "jobs",
         "publishes",
+        "shared_copy_jobs",
     } <= tables
 
 

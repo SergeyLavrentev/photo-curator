@@ -32,6 +32,133 @@ def mark_running_jobs_interrupted(connection: sqlite3.Connection) -> int:
     return cursor.rowcount
 
 
+def mark_running_shared_copies_interrupted(connection: sqlite3.Connection) -> int:
+    return connection.execute(
+        """
+        UPDATE shared_copy_jobs
+        SET status='interrupted', current_message='Приложение было перезапущено',
+            finished_at=?
+        WHERE status='running'
+        """,
+        (utc_now(),),
+    ).rowcount
+
+
+def create_shared_copy_job(
+    connection: sqlite3.Connection,
+    *,
+    shared_album_id: str,
+    shared_album_name: str,
+    destination_album_name: str,
+    mode: str,
+    asset_uuids: list[str],
+    skipped_videos: int,
+) -> str:
+    job_id = new_id()
+    connection.execute(
+        """
+        INSERT INTO shared_copy_jobs (
+            id, shared_album_id, shared_album_name, destination_album_name,
+            mode, status, total_items, skipped_videos, current_message,
+            asset_uuids_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            shared_album_id,
+            shared_album_name,
+            destination_album_name,
+            mode,
+            len(asset_uuids),
+            skipped_videos,
+            "Готово к созданию локальной копии",
+            json.dumps(asset_uuids),
+            utc_now(),
+        ),
+    )
+    return job_id
+
+
+def get_shared_copy_job(connection: sqlite3.Connection, job_id: str) -> dict[str, object]:
+    row = connection.execute("SELECT * FROM shared_copy_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise KeyError(job_id)
+    return dict(row)
+
+
+def list_shared_copy_jobs(connection: sqlite3.Connection) -> list[dict[str, object]]:
+    rows = connection.execute("SELECT * FROM shared_copy_jobs ORDER BY created_at DESC").fetchall()
+    return [dict(row) for row in rows]
+
+
+def completed_shared_copy_for_album(
+    connection: sqlite3.Connection, album_id: str
+) -> dict[str, object] | None:
+    row = connection.execute(
+        """
+        SELECT * FROM shared_copy_jobs
+        WHERE destination_album_id=? AND status='done'
+        ORDER BY finished_at DESC LIMIT 1
+        """,
+        (album_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def update_shared_copy_job(
+    connection: sqlite3.Connection,
+    job_id: str,
+    *,
+    status: str | None = None,
+    processed: int | None = None,
+    imported: int | None = None,
+    reused: int | None = None,
+    destination_album_id: str | None = None,
+    warnings: int | None = None,
+    errors: int | None = None,
+    message: str | None = None,
+    error_text: str | None = None,
+    clear_error: bool = False,
+    started: bool = False,
+    finished: bool = False,
+    reset_finished: bool = False,
+) -> None:
+    cursor = connection.execute(
+        """
+        UPDATE shared_copy_jobs SET
+            status=COALESCE(?, status), processed_items=COALESCE(?, processed_items),
+            imported_items=COALESCE(?, imported_items), reused_items=COALESCE(?, reused_items),
+            destination_album_id=COALESCE(?, destination_album_id),
+            warning_count=COALESCE(?, warning_count), error_count=COALESCE(?, error_count),
+            current_message=COALESCE(?, current_message),
+            error_text=CASE WHEN ? THEN NULL ELSE COALESCE(?, error_text) END,
+            started_at=CASE WHEN ? THEN COALESCE(started_at, ?) ELSE started_at END,
+            finished_at=CASE WHEN ? THEN NULL WHEN ? THEN ? ELSE finished_at END
+        WHERE id=?
+        """,
+        (
+            status,
+            processed,
+            imported,
+            reused,
+            destination_album_id,
+            warnings,
+            errors,
+            message,
+            int(clear_error),
+            error_text,
+            int(started),
+            utc_now(),
+            int(reset_finished),
+            int(finished),
+            utc_now(),
+            job_id,
+        ),
+    )
+    if not cursor.rowcount:
+        raise KeyError(job_id)
+
+
 def fail_running_jobs(connection: sqlite3.Connection, project_id: str, detail: str) -> int:
     cursor = connection.execute(
         """

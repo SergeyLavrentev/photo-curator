@@ -4,9 +4,12 @@
 
 ```python
 class PhotosProvider(Protocol):
+    def refresh_library(self) -> None: ...
     def get_current_library(self) -> PhotoLibrary: ...
     def list_regular_albums(self) -> list[PhotoAlbum]: ...
+    def list_shared_albums(self) -> list[PhotoAlbum]: ...
     def list_assets(self, album_id: str) -> list[PhotoAsset]: ...
+    def list_shared_assets(self, album_id: str) -> list[PhotoAsset]: ...
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]: ...
     def asset_still_in_album(self, album_id: str, asset_uuid: str) -> bool: ...
 ```
@@ -20,7 +23,7 @@ class PhotosProvider(Protocol):
 - уникальность album name;
 - наличие каждого score field;
 - стабильность internal paths;
-- прямую поддержку Shared Albums;
+- стабильность Shared Album schemas и наличие полноразмерных originals;
 - одинаковое поведение на каждой версии macOS.
 
 ## Identity
@@ -58,6 +61,15 @@ Publisher:
 7. выполняет apply только после отдельного подтверждения.
 
 Если `--add-to-album` или иной необходимый capability недоступен в текущей версии, publish отключается. Запрещены direct DB writes и UI scripting как fallback.
+
+## Shared copy contract
+
+Shared intake отделён от анализа. Сервис сначала сохраняет план и требует отдельного
+подтверждения, затем передаёт только локально доступные photo renders встроенному
+Swift/PhotoKit helper. Он создаёт regular album через `PHPhotoLibrary.performChanges`,
+не открывая Photos.app. Видео и отсутствующие renders не подменяются JPEG-превью.
+Успех повторно проверяется чтением Photos Library; direct DB writes, AppleScript и UI
+scripting для этого workflow запрещены.
 
 ## Open in Photos
 

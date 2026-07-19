@@ -27,6 +27,7 @@ from photo_curator.photos.fake_provider import FakePhotosProvider
 from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.publisher import PhotosPublisher
+from photo_curator.photos.shared_copy import SharedCopyCoordinator
 from photo_curator.pipeline.coordinator import PipelineCoordinator
 from photo_curator.utils.safe_paths import ensure_within, safe_rmtree
 from photo_curator.web.security import (
@@ -66,6 +67,17 @@ class PublishApplyRequest(BaseModel):
     confirmed: bool
 
 
+class SharedCopyPrepareRequest(BaseModel):
+    mode: Literal["full", "sample", "custom"]
+    destination_album_name: str | None = Field(default=None, max_length=120)
+    sample_size: int | None = Field(default=None, ge=1, le=500)
+    asset_uuids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class SharedCopyApplyRequest(BaseModel):
+    confirmed: bool
+
+
 def create_app(
     *,
     demo: bool = False,
@@ -97,6 +109,16 @@ def create_app(
         if selected_provider
         else None
     )
+    shared_copier = (
+        SharedCopyCoordinator(
+            database_path=app_paths.database,
+            paths=app_paths,
+            provider=selected_provider,
+            enabled=not demo,
+        )
+        if selected_provider
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -104,6 +126,7 @@ def create_app(
         with database_connection(app_paths.database) as connection:
             migrate(connection)
             repository.mark_running_jobs_interrupted(connection)
+            repository.mark_running_shared_copies_interrupted(connection)
         if demo and selected_provider and coordinator:
             _ensure_demo_project(app_paths, selected_provider, coordinator)
         yield
@@ -121,6 +144,7 @@ def create_app(
     app.state.provider = selected_provider
     app.state.coordinator = coordinator
     app.state.publisher = publisher
+    app.state.shared_copier = shared_copier
     app.state.session_secrets = secrets_
     app.add_middleware(
         TrustedHostMiddleware,
@@ -201,6 +225,76 @@ def create_app(
             request,
             "doctor.html",
             _context(request, demo=demo, checks=checks),
+        )
+
+    @app.get("/shared/{album_id}/copy", response_class=HTMLResponse)
+    async def shared_copy_page(
+        request: Request,
+        album_id: str,
+        page: Annotated[int, Query(ge=1)] = 1,
+        job: str | None = None,
+    ):
+        if not shared_copier:
+            raise HTTPException(503, "Shared Album intake недоступен")
+        try:
+            album = shared_copier.shared_album(album_id)
+            photos = [asset for asset in shared_copier.assets(album_id) if asset.is_photo]
+        except (KeyError, ValueError) as error:
+            raise HTTPException(404, str(error)) from error
+        page_size = 60
+        total_pages = max(1, (len(photos) + page_size - 1) // page_size)
+        page = min(page, total_pages)
+        start = (page - 1) * page_size
+        copy_job = None
+        if job:
+            with database_connection(app_paths.database) as connection:
+                copy_job = _shared_copy_public(repository.get_shared_copy_job(connection, job))
+            if copy_job["shared_album_id"] != album_id:
+                raise HTTPException(404, "Copy job не относится к этому альбому")
+        return templates.TemplateResponse(
+            request,
+            "shared_copy.html",
+            _context(
+                request,
+                demo=demo,
+                album=album,
+                assets=photos[start : start + page_size],
+                page=page,
+                total_pages=total_pages,
+                total_photos=len(photos),
+                copy_job=copy_job,
+                copy_available=shared_copier.capability_available,
+                csrf_token=secrets_.csrf_token,
+            ),
+        )
+
+    @app.get("/shared-media/{album_id}/{asset_uuid}")
+    async def shared_media(album_id: str, asset_uuid: str):
+        if not shared_copier:
+            raise HTTPException(503, "Shared Album intake недоступен")
+        try:
+            asset = shared_copier.asset(album_id, asset_uuid)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(404, "Shared preview недоступен") from error
+        candidates = [
+            path
+            for path in (*asset.derivative_paths, asset.edited_path, asset.source_path)
+            if path and path.is_file()
+        ]
+        if not candidates:
+            raise HTTPException(404, "Shared preview недоступен")
+        path = max(candidates, key=lambda item: item.stat().st_size)
+        try:
+            allowed_root = (
+                app_paths.cache_dir
+                if demo
+                else Path(shared_copier.provider.get_current_library().library_path)
+            )
+            path = ensure_within(path, allowed_root)
+        except ValueError as error:
+            raise HTTPException(404, "Invalid Shared preview path") from error
+        return FileResponse(
+            path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"}
         )
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
@@ -353,6 +447,43 @@ def create_app(
             "shared": [_album_json(album, disabled=True) for album in shared],
         }
 
+    @app.post("/api/shared/{album_id}/copies", status_code=201)
+    async def prepare_shared_copy(
+        album_id: str, payload: SharedCopyPrepareRequest
+    ) -> dict[str, object]:
+        if not shared_copier:
+            raise HTTPException(503, "Shared Album intake недоступен")
+        try:
+            job = shared_copier.prepare(
+                album_id,
+                mode=payload.mode,
+                destination_album_name=payload.destination_album_name,
+                sample_size=payload.sample_size,
+                asset_uuids=payload.asset_uuids,
+            )
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        public = _shared_copy_public(job)
+        public["url"] = f"/shared/{album_id}/copy?job={job['id']}"
+        return public
+
+    @app.post("/api/shared-copies/{job_id}/apply", status_code=202)
+    async def apply_shared_copy(job_id: str, payload: SharedCopyApplyRequest) -> dict[str, object]:
+        if not payload.confirmed:
+            raise HTTPException(400, "Подтвердите создание обычного альбома Photos")
+        if not shared_copier:
+            raise HTTPException(503, "Shared Album intake недоступен")
+        try:
+            shared_copier.start(job_id)
+        except (KeyError, ValueError, RuntimeError) as error:
+            raise HTTPException(409, str(error)) from error
+        return {"id": job_id, "status": "started"}
+
+    @app.get("/api/shared-copies/{job_id}")
+    async def shared_copy_status(job_id: str) -> dict[str, object]:
+        with database_connection(app_paths.database) as connection:
+            return _shared_copy_public(repository.get_shared_copy_job(connection, job_id))
+
     @app.post("/api/projects", status_code=201)
     async def create_project_api(payload: ProjectCreate) -> dict[str, str]:
         _require_provider(selected_provider)
@@ -365,13 +496,15 @@ def create_app(
             raise HTTPException(400, "Можно выбрать только обычный альбом")
         name = (payload.name or "").strip() or album.name
         with database_connection(app_paths.database) as connection:
+            shared_copy = repository.completed_shared_copy_for_album(connection, album.id)
+            provenance = "service_shared_copy" if shared_copy else payload.source_provenance
             project_id = repository.create_project(
                 connection,
                 name=name,
                 library=selected_provider.get_current_library(),
                 album=album,
                 selection_density=payload.selection_density,
-                source_provenance=payload.source_provenance,
+                source_provenance=provenance,
             )
         return {"id": project_id, "url": f"/projects/{project_id}"}
 
@@ -848,6 +981,10 @@ def _public_publish(publish: dict[str, object]) -> dict[str, object]:
 
 def _public_job(job: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in job.items() if key != "error_text"}
+
+
+def _shared_copy_public(job: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in job.items() if key != "asset_uuids_json"}
 
 
 def _safe_album_lists(provider: PhotosProvider | None) -> tuple[list, list, str | None]:

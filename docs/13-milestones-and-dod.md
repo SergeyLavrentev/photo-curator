@@ -26,7 +26,7 @@ uv run photo-curator --demo
 - `PhotosProvider`, real/fake implementations;
 - current library;
 - regular album browser;
-- disabled Shared Albums;
+- separate Shared Albums with capability-gated partial/full local copy;
 - Unicode/folder paths;
 - read gate.
 
@@ -96,7 +96,8 @@ MVP готов, если:
 1. Устанавливается через `uv` и содержит lockfile.
 2. Demo показывает полный workflow.
 3. Doctor диагностирует среду.
-4. Regular albums выбираются, для Shared Albums показан честный intake workflow.
+4. Regular albums выбираются; для Shared Albums доступен честный plan/confirm workflow
+   частичной или полной фотокопии с явным пропуском видео и manual fallback.
 5. Inventory, previews, metrics, groups, локальный Vision и decisions работают.
 6. Higher-resolution original защищён от shared-like copy.
 7. Review UI и duplicate comparison работают.

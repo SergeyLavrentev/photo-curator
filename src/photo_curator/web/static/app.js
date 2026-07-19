@@ -290,3 +290,69 @@ document.querySelector('[data-action="publish-apply"]')?.addEventListener("click
   if (result.status === "applied") window.location.assign("photos://");
   else window.location.reload();
 });
+
+const sharedCopyForm = document.querySelector("#shared-copy-form");
+sharedCopyForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const root = document.querySelector("[data-shared-album-id]");
+  const status = sharedCopyForm.querySelector(".form-status");
+  const submitter = event.submitter;
+  const mode = submitter?.dataset.copyMode;
+  const form = new FormData(sharedCopyForm);
+  const selected = [...document.querySelectorAll('[data-shared-selection] input[type="checkbox"]:checked')]
+    .map((checkbox) => checkbox.value);
+  submitter.disabled = true;
+  status.textContent = "Проверяем локальные renders…";
+  try {
+    const result = await api(`/api/shared/${root.dataset.sharedAlbumId}/copies`, {
+      method: "POST",
+      body: JSON.stringify({
+        mode,
+        destination_album_name: form.get("destination_album_name") || null,
+        sample_size: mode === "sample" ? Number(form.get("sample_size")) : null,
+        asset_uuids: mode === "custom" ? selected : [],
+      }),
+    });
+    window.location.assign(result.url);
+  } catch (error) {
+    submitter.disabled = false;
+    status.textContent = error.message;
+  }
+});
+
+document.querySelector('[data-action="shared-copy-apply"]')?.addEventListener("click", async (event) => {
+  const root = document.querySelector("[data-shared-copy-job]");
+  const confirmed = document.querySelector("#shared-copy-confirm")?.checked || false;
+  if (!confirmed) {
+    document.querySelector("[data-copy-message]").textContent = "Подтвердите создание обычного альбома Photos";
+    return;
+  }
+  event.currentTarget.disabled = true;
+  await api(`/api/shared-copies/${root.dataset.sharedCopyJob}/apply`, {
+    method: "POST",
+    body: JSON.stringify({ confirmed }),
+  });
+  pollSharedCopy(root.dataset.sharedCopyJob);
+});
+
+const sharedCopyRoot = document.querySelector("[data-shared-copy-job]");
+if (sharedCopyRoot && ["queued", "running"].includes(document.querySelector("[data-copy-state]")?.textContent)) {
+  pollSharedCopy(sharedCopyRoot.dataset.sharedCopyJob);
+}
+
+async function pollSharedCopy(jobId) {
+  while (true) {
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    const job = await api(`/api/shared-copies/${jobId}`);
+    document.querySelector("[data-copy-state]").textContent = job.status;
+    document.querySelector("[data-copy-message]").textContent = job.current_message;
+    document.querySelector("[data-copy-count]").textContent = `${job.processed_items} / ${job.total_items}`;
+    const progress = document.querySelector(".copy-status-panel .progress");
+    progress.setAttribute("aria-valuenow", String(job.processed_items));
+    progress.querySelector("span").style.width = `${job.total_items ? job.processed_items * 100 / job.total_items : 0}%`;
+    if (["done", "error", "interrupted"].includes(job.status)) {
+      window.location.reload();
+      return;
+    }
+  }
+}
