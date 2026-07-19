@@ -68,7 +68,8 @@ async function pollProject(root, startButton = null, reloadOnTerminal = false) {
     }
     const state = payload.project.state;
     root.dataset.projectState = state;
-    document.querySelector("[data-project-state-label]").textContent = state;
+    const stateLabel = document.querySelector("[data-project-state-label]");
+    if (stateLabel) stateLabel.textContent = state;
     const latest = new Map(payload.jobs.map((job) => [job.stage, job]));
     payload.stages.forEach((stage) => {
       const row = document.querySelector(`[data-stage="${stage.code}"]`);
@@ -82,6 +83,18 @@ async function pollProject(root, startButton = null, reloadOnTerminal = false) {
       row.querySelector(".progress").setAttribute("aria-valuenow", String(stage.progress));
       row.querySelector(".progress span").style.width = `${stage.progress}%`;
     });
+    const analysisStages = payload.stages.filter((stage) =>
+      ["inventory", "previews", "metrics"].includes(stage.code));
+    const analysisProgress = analysisStages.length
+      ? Math.round(analysisStages.reduce((total, stage) => total + stage.progress, 0) / analysisStages.length)
+      : 0;
+    const overallProgress = document.querySelector("[data-analysis-progress]");
+    if (overallProgress) {
+      overallProgress.setAttribute("aria-valuenow", String(analysisProgress));
+      overallProgress.querySelector("span").style.width = `${analysisProgress}%`;
+    }
+    const overallPercent = document.querySelector("[data-analysis-percent]");
+    if (overallPercent) overallPercent.textContent = `${analysisProgress}%`;
     const active = [...latest.values()].find((job) => job.status === "running");
     const activeRow = active ? document.querySelector(`[data-stage="${["duplicates", "vision", "decisions"].includes(active.stage) ? "metrics" : active.stage}"]`) : null;
     if (active) {
@@ -123,6 +136,17 @@ document.querySelector('[data-action="cache-clean"]')?.addEventListener("click",
   const root = document.querySelector("[data-project-id]");
   await api(`/api/projects/${root.dataset.projectId}/cache/clean`, { method: "POST" });
   window.location.reload();
+});
+
+document.querySelector('[data-action="project-delete"]')?.addEventListener("click", async (event) => {
+  const root = document.querySelector("[data-project-id]");
+  const includesLocalCopy = event.currentTarget.dataset.localSource === "true";
+  const message = includesLocalCopy
+    ? "Удалить этот отбор, preview-cache и локальные копии Shared Album? Фотографии в Photos не изменятся."
+    : "Удалить этот отбор и его preview-cache? Фотографии в Photos не изменятся.";
+  if (!window.confirm(message)) return;
+  await api(`/api/projects/${root.dataset.projectId}`, { method: "DELETE" });
+  window.location.assign("/");
 });
 
 document.querySelector('[data-action="retry-missing"]')?.addEventListener("click", async (event) => {

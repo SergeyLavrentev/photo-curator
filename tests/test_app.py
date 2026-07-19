@@ -59,7 +59,8 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "Черногория" in home.text
     assert response.status_code == 200
     assert "Черногория" in response.text
-    assert "Ход анализа" in response.text
+    assert "Проверьте предложенный отбор" in response.text
+    assert "Статус и детали анализа" in response.text
     assert "Серий / дублей" in response.text
     assert "Проверка среды" in response.text
     assert "Проверка результата" in response.text
@@ -69,13 +70,14 @@ def test_demo_dashboard_is_rendered_after_login(tmp_path: Path) -> None:
     assert "active-stage-detail" in response.text
     assert "data-active-stage-health" in response.text
     assert "data-active-stage-rate" in response.text
-    assert "cache-facts" in response.text
-    assert "без preview" in response.text
-    assert "видео пропущено" in response.text
+    assert "preview-cache" in response.text
+    assert "Видео пока не анализируются" in response.text
     assert "Готово" in response.text
     assert "Photos Library" in home.text
     assert "osxphotos" in home.text
-    assert "2 видео пропустим" in home.text
+    assert "видео пропустим" in home.text
+    assert "Выбрать и перейти к анализу" in home.text
+    assert home.text.count('class="summary-card') == 0
     assert '<meta name="csrf-token" content="csrf-secret">' in response.text
 
 
@@ -88,10 +90,11 @@ def test_static_ui_contract_is_dark_compact_and_uses_one_pipeline_detail(tmp_pat
 
     assert "color-scheme: dark" in css
     assert "grid-template-columns: repeat(6" in css
-    assert "Начать анализ" in home
-    assert home.index("Начать анализ") < home.index("Недавние проекты")
-    assert "Дополнительные настройки" in home
-    assert "Техническая информация" in home
+    assert "Выберите альбом" in home
+    assert "Настроить стиль отбора" in home
+    assert "Статус и технические детали" in home
+    assert 'class="journey"' in home
+    assert "big-action" in home
     assert "project-card" not in home
     assert "environment-grid" not in home
     assert dashboard.count('class="active-stage-detail"') == 1
@@ -129,8 +132,8 @@ def test_mobile_ui_keeps_global_navigation_and_explains_horizontal_scroll(tmp_pa
     assert ".review-toolbar span { grid-column: 1 / -1; }" in css
     assert ".duplicate-members { grid-template-columns: repeat(2, minmax(0, 1fr)); }" in css
     assert ".pagination { align-items: flex-start; flex-wrap: wrap; }" in css
-    assert "листайте этапы" in dashboard
-    assert "Листайте фильтры" in review
+    assert "project-journey" in dashboard
+    assert "Дополнительные фильтры и сортировка" in review
     assert "category=resolution" in review
     assert "payload.stages.forEach" in javascript
 
@@ -217,7 +220,7 @@ def test_missing_preview_has_a_visible_retry_action(tmp_path: Path) -> None:
         javascript = client.get("/static/app.js")
 
     assert 'data-action="retry-missing"' in dashboard.text
-    assert "Повторить 1 missing" in dashboard.text
+    assert "Повторить недоступные preview" in dashboard.text
     assert "/retry-missing" in javascript.text
 
 
@@ -237,7 +240,7 @@ def test_interrupted_project_exposes_resume_and_active_stage_retry(tmp_path: Pat
 
     assert 'data-action="pipeline-resume"' in dashboard.text
     assert "Продолжить анализ" in dashboard.text
-    assert "Повторить этап" in dashboard.text
+    assert "Повторить с этого этапа" in dashboard.text
     assert "/pipeline/${action}" in javascript.text
 
 
@@ -320,6 +323,13 @@ def test_shared_album_copy_page_and_confirmed_plan_are_exposed(tmp_path: Path) -
         )
         project = client.get(f"/api/projects/{created.json()['id']}").json()
         publish = client.get(f"/projects/{created.json()['id']}/publish?kind=best")
+        local_root = app.state.paths.data_dir / "local_albums" / local_album_id
+        assert local_root.is_dir()
+        deleted = client.delete(
+            f"/api/projects/{created.json()['id']}",
+            headers={"X-CSRF-Token": "csrf-secret"},
+        )
+        albums_after_delete = client.get("/api/albums").json()
 
     assert page.status_code == 200
     assert "Первые фотографии по времени" in page.text
@@ -335,6 +345,9 @@ def test_shared_album_copy_page_and_confirmed_plan_are_exposed(tmp_path: Path) -
     assert project["project"]["settings"]["source_provenance"] == "service_shared_copy"
     assert "импортирует принятые локальные копии" in publish.text
     assert "Нет отобранных фотографий" in publish.text
+    assert deleted.status_code == 204
+    assert not local_root.exists()
+    assert all(album["id"] != local_album_id for album in albums_after_delete["regular"])
 
 
 def test_media_route_does_not_accept_filesystem_path(tmp_path: Path) -> None:
@@ -437,7 +450,7 @@ def test_manual_shared_copy_provenance_is_persisted_and_explained(tmp_path: Path
         payload = client.get(f"/api/projects/{project_id}").json()
 
     assert created.status_code == 201
-    assert "уменьшены разрешение и исходные метаданные" in dashboard.text
+    assert "разрешение может быть ниже оригиналов" in dashboard.text
     assert payload["project"]["settings"]["source_provenance"] == "manual_shared_copy"
     assert payload["project"]["settings"]["selection_density"] == "compact"
 

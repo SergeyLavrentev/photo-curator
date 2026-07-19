@@ -59,6 +59,8 @@
 - Recursive delete только после resolved-path validation.
 - Atomic writes для previews.
 - Source files только read-only.
+- Удаление проекта удаляет service-owned Shared snapshot только если других проектов,
+  использующих этот snapshot, нет; Photos assets и исходный Shared Album не затрагиваются.
 
 ## Пользовательское подтверждение
 

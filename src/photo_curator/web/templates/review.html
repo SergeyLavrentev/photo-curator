@@ -1,28 +1,40 @@
 {% extends "base.html" %}
-{% block title %}Ревью — {{ project.name }}{% endblock %}
+{% block title %}Проверка отбора — {{ project.name }}{% endblock %}
 {% block content %}
-  <section class="page-heading"><div><p class="eyebrow">{{ project.name }}</p><h1>Галерея отбора</h1></div>
-    <a class="secondary button-link" href="/projects/{{ project.id }}">← Результат</a></section>
-  <nav class="project-nav" aria-label="Фильтры ревью">
-    {% for key, label in [('keep', 'Отобрано'), ('review', 'Проверить'), ('reject', 'Исключено'),
-      ('all', 'Все'), ('best', 'Лучшие'), ('duplicates', 'Серии'), ('favorite', 'Избранное'),
-      ('missing', 'Без превью'), ('errors', 'Ошибки'), ('resolution', 'Разрешение')] %}
+  <section class="page-heading"><div><p class="eyebrow">Шаг 3 из 4 · {{ project.name }}</p>
+    <h1>Проверьте фотографии</h1>
+    <p class="hero-copy">Меняйте решение только там, где не согласны с предложением сервиса.</p></div>
+    <a class="secondary button-link" href="/projects/{{ project.id }}">← Назад к шагам</a></section>
+  <nav class="project-nav review-main-nav" aria-label="Основные группы фотографий">
+    {% for key, label in [('keep', 'Отобрано'), ('review', 'Нужно проверить'),
+      ('reject', 'Исключено'), ('all', 'Все фото')] %}
       <a class="{% if category == key %}active{% endif %}" href="?category={{ key }}&sort={{ sort }}">{{ label }}</a>
     {% endfor %}
   </nav>
-  <p class="horizontal-scroll-hint" aria-hidden="true">Листайте фильтры →</p>
-  <form class="sort-form" method="get">
-    <input type="hidden" name="category" value="{{ category }}">
-    <label>Сортировка <select name="sort" onchange="this.form.submit()">
-      {% for key, label in [('technical_quality', 'Оценка'), ('taken_at', 'Дата'), ('filename', 'Имя файла'), ('resolution', 'Разрешение')] %}
-        <option value="{{ key }}" {% if sort == key %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select></label>
-  </form>
+  <details class="review-options simple-details">
+    <summary>Дополнительные фильтры и сортировка</summary>
+    <div class="review-options-content">
+      <nav aria-label="Дополнительные фильтры">
+        {% for key, label in [('best', 'Лучшие по оценке'), ('duplicates', 'Серии'),
+          ('favorite', 'Избранное'), ('missing', 'Без preview'), ('errors', 'Ошибки'),
+          ('resolution', 'Проверить разрешение')] %}
+          <a class="secondary button-link {% if category == key %}active{% endif %}" href="?category={{ key }}&sort={{ sort }}">{{ label }}</a>
+        {% endfor %}
+      </nav>
+      <form class="sort-form" method="get">
+        <input type="hidden" name="category" value="{{ category }}">
+        <label>Сортировка <select name="sort" onchange="this.form.submit()">
+          {% for key, label in [('technical_quality', 'По оценке'), ('taken_at', 'По дате'), ('filename', 'По имени'), ('resolution', 'По разрешению')] %}
+            <option value="{{ key }}" {% if sort == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select></label>
+      </form>
+    </div>
+  </details>
   <div class="review-toolbar">
     <span><strong id="selected-count">0</strong> выбрано</span>
-    <button data-batch-decision="keep">K · Отобрать</button><button data-batch-decision="review">R · Проверить</button>
-    <button data-batch-decision="reject">X · Исключить</button><button data-batch-decision="clear">C · Авто</button>
+    <button data-batch-decision="keep">Оставить</button><button data-batch-decision="review">Проверить</button>
+    <button data-batch-decision="reject">Исключить</button><button data-batch-decision="clear">Вернуть авто</button>
   </div>
   <section class="gallery" data-project-id="{{ project.id }}" aria-label="Фотографии">
     {% for asset in assets %}
@@ -40,11 +52,17 @@
             <img loading="lazy" src="/media/{{ project.id }}/thumbnail/{{ asset.asset_uuid }}" alt="{{ asset.current_filename or 'Фото' }}">
           </button>
         {% else %}<div class="missing-image">Preview недоступно</div>{% endif %}
-        <div class="asset-body"><div class="asset-title"><strong>{{ asset.current_filename }}</strong><span class="decision-badge">{{ disposition_labels.get(asset.final_disposition, 'Ожидает') }}</span></div>
-          <p>{{ asset.width }}×{{ asset.height }}{% if asset.favorite %} · ★ Favorite{% endif %}{% if asset.has_adjustments %} · Edited{% endif %}</p>
-          <div class="score-line"><span>Оценка 0–100</span><strong>{{ asset.selection_score or '—' }}</strong></div>
-          <div class="flag-list">{% for flag in asset.flags[:3] %}<span>{{ flag_labels.get(flag, flag) }}</span>{% endfor %}</div>
-          <div class="decision-buttons"><button data-decision="keep" title="K">K</button><button data-decision="review" title="R">R</button><button data-decision="reject" title="X">X</button><button data-decision="clear" title="C">C</button></div>
+        <div class="asset-body">
+          <div class="asset-summary"><span class="decision-badge">{{ disposition_labels.get(asset.final_disposition, 'Ожидает') }}</span>
+            <details class="asset-details"><summary aria-label="Почему принято это решение?">?</summary>
+              <div><strong>{{ asset.current_filename }}</strong>
+                <p>{{ asset.width }}×{{ asset.height }}{% if asset.favorite %} · ★ Favorite{% endif %}{% if asset.has_adjustments %} · Edited{% endif %}</p>
+                <p>Оценка: <strong>{{ asset.selection_score or '—' }}/100</strong></p>
+                {% if asset.flags %}<p>{% for flag in asset.flags[:3] %}{{ flag_labels.get(flag, flag) }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+              </div>
+            </details>
+          </div>
+          <div class="decision-buttons" aria-label="Решение для фотографии"><button data-decision="keep" title="Оставить">✓</button><button data-decision="review" title="Проверить">?</button><button data-decision="reject" title="Исключить">×</button><button data-decision="clear" title="Вернуть автоматическое решение">↺</button></div>
         </div>
       </article>
     {% endfor %}
@@ -56,6 +74,7 @@
       {% if page < total_pages %}<a class="secondary button-link" href="?category={{ category }}&sort={{ sort }}&page={{ page + 1 }}">Дальше →</a>{% endif %}
     </div>
   </nav>
+  <div class="review-finish"><a class="primary big-action button-link" href="/projects/{{ project.id }}/publish">Готово, сохранить выбранное →</a></div>
   <dialog id="preview-dialog"><button class="dialog-close" aria-label="Закрыть">×</button><img alt="Увеличенное preview">
     <div class="dialog-copy"><p class="preview-evidence"></p><label>Заметка
       <textarea maxlength="1000" rows="2"></textarea></label><div class="button-row">

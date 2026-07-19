@@ -310,6 +310,25 @@ def create_app(
             all_assets = repository.list_assets(connection, project_id)
             distribution = _quality_distribution(all_assets)
             latest_publish = repository.latest_publish(connection, project_id)
+        stages = _stage_views(jobs, summary, latest_publish)
+        analysis_stages = [
+            stage for stage in stages if stage["code"] in {"inventory", "previews", "metrics"}
+        ]
+        calculated_progress = round(sum(int(stage["progress"]) for stage in analysis_stages) / 3)
+        analysis_progress = 100 if project["state"] == "ready" else min(calculated_progress, 99)
+        active_analysis = next(
+            (
+                stage
+                for stage in analysis_stages
+                if stage["status"] in {"running", "error", "interrupted", "warning"}
+            ),
+            None,
+        )
+        analysis_message = (
+            str(active_analysis["message"])
+            if active_analysis
+            else "Нажмите «Начать анализ». Во время обработки эту страницу можно не закрывать."
+        )
         selected_preview = sorted(
             (asset for asset in all_assets if asset.get("final_disposition") == "keep"),
             key=lambda asset: int(asset.get("selection_score") or 0),
@@ -330,7 +349,10 @@ def create_app(
                 distribution=distribution,
                 selected_preview=selected_preview,
                 project_settings=project_settings,
-                stages=_stage_views(jobs, summary, latest_publish),
+                stages=stages,
+                analysis_progress=analysis_progress,
+                analysis_message=analysis_message,
+                publish_applied=bool(latest_publish and latest_publish.get("status") == "applied"),
                 csrf_token=secrets_.csrf_token,
             ),
         )
@@ -532,11 +554,29 @@ def create_app(
 
     @app.delete("/api/projects/{project_id}", status_code=204)
     async def delete_project_api(project_id: str):
+        local_album_id = None
         with database_connection(app_paths.database) as connection:
+            project = repository.get_project(connection, project_id)
+            album_id = str(project["album_id"])
+            if album_id.startswith(LocalAlbumsProvider.PREFIX):
+                other_projects = connection.execute(
+                    "SELECT count(*) FROM projects WHERE album_id=? AND id<>?",
+                    (album_id, project_id),
+                ).fetchone()[0]
+                if not other_projects:
+                    local_album_id = album_id
+                    connection.execute(
+                        "DELETE FROM shared_copy_jobs WHERE destination_album_id=?",
+                        (album_id,),
+                    )
             repository.delete_project(connection, project_id)
         project_cache = app_paths.cache_dir / project_id
         if project_cache.exists():
             safe_rmtree(project_cache, app_paths.cache_dir)
+        if local_album_id:
+            local_album = app_paths.data_dir / "local_albums" / local_album_id
+            if local_album.exists():
+                safe_rmtree(local_album, app_paths.data_dir / "local_albums")
 
     @app.post("/api/projects/{project_id}/pipeline/start", status_code=202)
     async def start_pipeline(project_id: str) -> dict[str, str]:

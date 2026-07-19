@@ -94,6 +94,11 @@ Human-labelled travel album acceptance remains an R7 release gate.
 Acceptance: the main workflow fits in one viewport at 1280 px before the gallery,
 works at 390 px, and all statuses remain understandable without colour alone.
 
+Current interaction model: `Choose album → Analyze → Review → Save`. The landing page
+contains no analytical counters; pipeline stages, cache data and score evidence live in
+explicit details. Gallery cards show only the photo, disposition and decision controls,
+with reasons behind a `?` disclosure.
+
 ## R5 — source intake
 
 - Keep existing regular Photos albums as the primary source.
@@ -108,6 +113,7 @@ works at 390 px, and all statuses remain understandable without colour alone.
   disabled selector.
 - Record `regular_album` / `manual_shared_copy` / `service_shared_copy` provenance
   and warn when shared copies may have reduced resolution or metadata.
+- Remove an unshared service-owned snapshot when its last project is explicitly deleted.
 
 Acceptance: the user always understands whether a source is analyzed directly or from
 a service-owned disk snapshot, and no Shared intake action writes to Photos.
@@ -140,6 +146,15 @@ covered with an integration fake; a real PhotoKit apply remains an R7 acceptance
 - Run performance acceptance at 100, 2,000 and 5,000 inventory rows.
 - Verify tests, lint, dark UI screenshots, restart/resume and macOS publish dry-run.
 - Update `PROGRESS.md` only from verified evidence.
+
+## After R7 — personal taste profile
+
+- Treat human corrections as labelled preference signals, separate from release acceptance.
+- Learn only lightweight, explainable feature weights initially; do not claim neural
+  fine-tuning without a sufficiently large personal dataset.
+- Keep technical safety gates, duplicate protection and resolution protection independent
+  from aesthetic preferences.
+- Show the learned preference profile and allow reset/disable before it affects new projects.
 
 ## Definition of Done
 

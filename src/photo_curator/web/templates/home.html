@@ -1,82 +1,97 @@
 {% extends "base.html" %}
-{% block title %}Photo Curator — проекты{% endblock %}
+{% block title %}Photo Curator — новый отбор{% endblock %}
 {% block content %}
-  <section class="hero">
-    <div>
-      <p class="eyebrow">Apple Photos · локально</p>
-      <h1>Соберите лучшие кадры</h1>
-      <p class="hero-copy">Выберите альбом — Photo Curator найдёт серии и слабые снимки,
-        затем покажет объяснимую подборку для вашей проверки.</p>
-    </div>
+  <section class="welcome">
+    <p class="eyebrow">Apple Photos · локально</p>
+    <h1>Отберите лучшие фотографии</h1>
+    <p class="hero-copy">Вы выбираете альбом. Photo Curator анализирует снимки,
+      показывает результат для проверки и сохраняет одобренную подборку в Photos.</p>
   </section>
+
+  <ol class="journey" aria-label="Как работает Photo Curator">
+    <li class="current"><span>1</span><strong>Выбрать альбом</strong></li>
+    <li><span>2</span><strong>Дождаться анализа</strong></li>
+    <li><span>3</span><strong>Проверить отбор</strong></li>
+    <li><span>4</span><strong>Сохранить в Photos</strong></li>
+  </ol>
 
   {% if provider_error %}
     <aside class="notice warning" role="alert"><span aria-hidden="true">!</span>
       <p><strong>Photos Library пока недоступна.</strong> {{ provider_error }}</p></aside>
   {% endif %}
 
-  <section class="new-project" aria-labelledby="new-project-title">
-    <div><p class="eyebrow">Новый отбор</p><h2 id="new-project-title">Начать анализ</h2>
-      <p class="step-copy">1. Альбом · 2. Размер подборки · 3. Старт</p></div>
-    <form id="new-project-form">
-      <label>1. Альбом Photos
+  {% if projects %}
+    <section class="continue-panel" aria-labelledby="continue-title">
+      <div><p class="eyebrow">Можно продолжить</p><h2 id="continue-title">{{ projects[0].name }}</h2>
+        <p>{{ projects[0].album_name }}</p></div>
+      <a class="primary big-action button-link" href="/projects/{{ projects[0].id }}">Продолжить отбор →</a>
+    </section>
+  {% endif %}
+
+  <section class="source-panel" aria-labelledby="source-title">
+    <div class="step-heading"><span>1</span><div><p class="eyebrow">Новый отбор</p>
+      <h2 id="source-title">Выберите альбом</h2></div></div>
+    <form id="new-project-form" class="source-form">
+      <label>Альбом из вашей медиатеки
         <select name="album_id" required>
           {% for album in albums %}
-            <option value="{{ album.id }}">{{ album.full_path }} · {{ album.photo_count }} фото{% if album.video_count %} · {{ album.video_count }} видео пропустим{% endif %}</option>
+            <option value="{{ album.id }}">{{ album.full_path }} · {{ album.photo_count }} фото{% if album.video_count %} · видео пропустим{% endif %}</option>
           {% endfor %}
         </select>
       </label>
-      <label>2. Сколько оставить
-        <select name="selection_density">
-          <option value="compact">Компактная — только сильнейшие</option>
-          <option value="balanced" selected>Сбалансированная</option>
-          <option value="broad">Широкая — больше кадров</option>
-        </select>
-      </label>
-      <button class="primary" type="submit" {% if not albums %}disabled{% endif %}>3. Начать анализ</button>
-      <details class="advanced-options">
-        <summary>Дополнительные настройки</summary>
+      <button class="primary big-action" type="submit" {% if not albums %}disabled{% endif %}>
+        Выбрать и перейти к анализу →
+      </button>
+      <details class="simple-details">
+        <summary>Настроить стиль отбора</summary>
         <div class="advanced-fields">
-          <label>Название проекта <input name="name" maxlength="120" placeholder="Возьмём название альбома"></label>
-          <label>Источник
-            <select name="source_provenance">
-              <option value="regular_album">Обычный альбом Photos</option>
-              <option value="manual_shared_copy">Локальная копия Shared Album</option>
+          <label>Сколько фотографий предложить
+            <select name="selection_density">
+              <option value="compact">Только самые сильные</option>
+              <option value="balanced" selected>Сбалансированно</option>
+              <option value="broad">Оставить больше вариантов</option>
             </select>
           </label>
+          <label>Название отбора
+            <input name="name" maxlength="120" placeholder="По названию альбома">
+          </label>
+          <input type="hidden" name="source_provenance" value="regular_album">
         </div>
       </details>
       <p class="form-status" role="status"></p>
     </form>
+
     {% if shared_albums %}
-      <details class="shared-intake">
-        <summary>{{ shared_albums | length }} общих альбомов · можно создать локальную копию</summary>
-        <p>Photo Curator скопирует доступные Shared Album renders в собственный локальный
-          альбом на диске. Photos Library и исходный общий альбом не меняются.</p>
-        <ul>{% for album in shared_albums %}<li><a href="/shared/{{ album.id }}/copy">{{ album.full_path }} · {{ album.photo_count }} фото{% if album.video_count %} · {{ album.video_count }} видео{% endif %}</a></li>{% endfor %}</ul>
-      </details>
+      <div class="shared-source">
+        <p class="source-divider"><span>или выберите общий альбом</span></p>
+        {% for album in shared_albums %}
+          <a class="shared-source-link" href="/shared/{{ album.id }}/copy">
+            <span><strong>{{ album.name }}</strong><small>{{ album.photo_count }} фото · видео пока не поддерживается</small></span>
+            <span aria-hidden="true">→</span>
+          </a>
+        {% endfor %}
+        <p class="quiet-copy">Для анализа общего альбома Photo Curator временно сохраняет
+          доступные копии фотографий на этом Mac. Их можно удалить вместе с отбором.</p>
+      </div>
     {% endif %}
   </section>
 
-  {% if projects %}
-    <section aria-labelledby="projects-title">
-      <div class="section-heading">
-        <div><p class="eyebrow">Продолжить</p><h2 id="projects-title">Недавние проекты</h2></div>
-        <p>{{ projects | length }}</p>
-      </div>
+  {% if projects | length > 1 %}
+    <details class="simple-details previous-projects">
+      <summary>Другие сохранённые отборы · {{ projects | length - 1 }}</summary>
       <div class="project-list">
-        {% for project in projects %}
+        {% for project in projects[1:] %}
           <a class="project-row" href="/projects/{{ project.id }}">
-            <span><strong>{{ project.name }}</strong><small>{{ project.album_full_path }}</small></span>
-            <span class="state {{ project.state }}">{{ project.state }}</span>
+            <span><strong>{{ project.name }}</strong><small>{{ project.album_name }}</small></span>
+            <span aria-hidden="true">→</span>
           </a>
         {% endfor %}
       </div>
-    </section>
+    </details>
   {% endif %}
 
   <details class="technical-details">
-    <summary>Техническая информация</summary>
+    <summary>Статус и технические детали</summary>
     <dl>{% for label, value in [('Photos Library', environment.library), ('Photos DB', environment.database_version),
       ('osxphotos', environment.osxphotos_version), ('Совместимость', environment.compatibility)] %}
       <div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}</dl>

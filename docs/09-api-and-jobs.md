@@ -35,6 +35,10 @@ POST   /api/projects/<id>/publish/apply
 POST   /api/projects/<id>/cache/clean
 ```
 
+`DELETE /api/projects/<id>` удаляет project state и preview-cache. Для последнего проекта,
+связанного с service-owned Shared snapshot, также удаляются snapshot и его copy-job.
+Операция никогда не удаляет assets из Photos.
+
 ## Pagination
 
 Assets endpoint использует:

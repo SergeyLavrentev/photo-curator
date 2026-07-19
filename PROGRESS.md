@@ -19,6 +19,10 @@ an explainable curated gallery and a user-confirmed Best album.
 - [x] R6 — independent Best/Reject dry-run/apply and local preview ZIP export
 - [ ] R7 — labelled acceptance, performance gates and release audit
 
+The main UX now follows four explicit actions: choose, analyze, review and save. Technical
+metrics are hidden under status/details, gallery evidence is disclosed with `?`, and deleting
+the last project backed by a Shared snapshot also removes that service-owned disk copy.
+
 ## Current verified evidence
 
 ```text
