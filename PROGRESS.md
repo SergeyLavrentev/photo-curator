@@ -3,7 +3,7 @@
 ## Current milestone
 
 - Milestone: R7 — Acceptance and release audit
-- Status: Feature stages R0–R6 implemented; exact 390 px and human-labelled gates remain
+- Status: Feature stages R0–R6 implemented; the human-labelled release gate remains
 
 ## Product roadmap
 
@@ -33,26 +33,26 @@ score range                                  — 26–90
 5,000 synthetic rows                         — 19,059 / 12,497,500 pairs in 0.039 s
 80-photo labelled generated fixture          — exact/resized/cropped/blur/dark/overexposed passed
 real 20-photo Best publish dry-run            — dry_run_ok, 10 UUIDs, apply not run
-real Chrome desktop + ~500 px workflow        — passed; gallery, preview, filters, pipeline rerun
+real Chrome desktop + exact 390 px workflow   — passed; no overflow or console errors
 demo pipeline rerun from browser              — 5 selected / 3 review / 4 excluded / 2 series
+fast rerun terminal-state refresh              — passed; no stale "Анализ запущен" status
 responsive navigation regression contract     — passed
-390 px overflow contract                       — batch toolbar, series grid and pagination fixed
+390 px overflow contract                       — scroll width 390 at a 390 px viewport
 home workflow                                  — album → density → analysis; technical details collapsed
 human-labelled manifest + metric evaluator     — implemented; real labels still pending
 spec traceability audit                        — polling/resume/missing/resolution/cache safety fixed
-pytest                                         — 80 passed
+pytest                                         — 81 passed
 ruff format / check                            — passed
 local PhotoCurator data roots                  — absent after current demo audit
 service-created PhotoCurator albums            — none in current Photos library
 ```
 
-The in-app browser remains blocked from `127.0.0.1` by enterprise network policy,
-but the application was opened manually in real Chrome and inspected through
-Computer Use at desktop width and a narrow window of approximately 500 px. The
-compact pipeline, gallery filters, score explanation dialog and full pipeline
-rerun passed. The exact 390 px screenshot gate and a real 50–100 photo
-human-labelled album remain external release-quality gates. The real macOS Photos
-Best dry-run passed; apply was intentionally not executed.
+The Chrome extension opened `127.0.0.1` directly and verified the compact workflow
+at an exact 390 x 844 px viewport. The document client and scroll widths were both
+390 px, the console contained no warnings or errors, and a fast full-pipeline rerun
+returned to a clean `ready` screen without a stale launch message. A real 50–100
+photo human-labelled album remains the external release-quality gate. The real
+macOS Photos Best dry-run passed; apply was intentionally not executed.
 
 ## Previous MVP evidence — retained for history only
 
@@ -80,8 +80,8 @@ the new roadmap complete and must not be used as release acceptance.
 ## Current external acceptance gate
 
 The root failure from the old 1,671-photo run is covered by sentinel and bounded
-candidate tests. Release acceptance still requires exact 390 px visual evidence
-and the human-labelled real-world R7 fixture above.
+candidate tests. Release acceptance still requires the human-labelled real-world
+R7 fixture above.
 
 ## Safety invariants verified in code
 

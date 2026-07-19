@@ -241,6 +241,17 @@ def test_interrupted_project_exposes_resume_and_active_stage_retry(tmp_path: Pat
     assert "/pipeline/${action}" in javascript.text
 
 
+def test_user_started_pipeline_refreshes_even_when_it_finishes_before_first_poll(
+    tmp_path: Path,
+) -> None:
+    with TestClient(make_app(tmp_path)) as client:
+        client.cookies.set(SESSION_COOKIE, "session-secret")
+        javascript = client.get("/static/app.js").text
+
+    assert "pollProject(root, button, true)" in javascript
+    assert "reloadOnTerminal || previousState !== state" in javascript
+
+
 def test_api_status_does_not_expose_local_paths(tmp_path: Path) -> None:
     with TestClient(make_app(tmp_path)) as client:
         client.cookies.set(SESSION_COOKIE, "session-secret")

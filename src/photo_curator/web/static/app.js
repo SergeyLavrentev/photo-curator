@@ -46,7 +46,7 @@ document.querySelector('[data-action="pipeline-start"], [data-action="pipeline-r
   try {
     await api(`/api/projects/${root.dataset.projectId}/pipeline/${action}`, { method: "POST" });
     if (status) status.textContent = action === "resume" ? "Анализ продолжается" : "Анализ запущен";
-    pollProject(root, button);
+    pollProject(root, button, true);
   } catch (error) {
     button.disabled = false;
     if (status) status.textContent = `Не удалось запустить анализ: ${error.message}`;
@@ -56,7 +56,7 @@ document.querySelector('[data-action="pipeline-start"], [data-action="pipeline-r
 const projectRoot = document.querySelector("[data-project-state][data-project-id]");
 if (projectRoot?.dataset.projectState === "running") pollProject(projectRoot);
 
-async function pollProject(root, startButton = null) {
+async function pollProject(root, startButton = null, reloadOnTerminal = false) {
   let previousState = root.dataset.projectState;
   while (true) {
     await new Promise((resolve) => window.setTimeout(resolve, 900));
@@ -94,7 +94,7 @@ async function pollProject(root, startButton = null) {
     document.querySelector("[data-live-status]").textContent = active?.current_message || `Статус: ${state}`;
     if (["ready", "error", "interrupted"].includes(state)) {
       if (startButton) startButton.disabled = false;
-      if (state === "ready" && previousState !== "ready") window.location.reload();
+      if (reloadOnTerminal || previousState !== state) window.location.reload();
       return;
     }
     previousState = state;
@@ -133,7 +133,7 @@ document.querySelector('[data-action="retry-missing"]')?.addEventListener("click
   try {
     await api(`/api/projects/${root.dataset.projectId}/retry-missing`, { method: "POST" });
     if (status) status.textContent = "Повторяем недоступные preview…";
-    pollProject(root, button);
+    pollProject(root, button, true);
   } catch (error) {
     button.disabled = false;
     if (status) status.textContent = `Не удалось повторить preview: ${error.message}`;
