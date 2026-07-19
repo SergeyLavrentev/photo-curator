@@ -4,6 +4,8 @@
 
 - `ROADMAP.md` — current product outcome, stages and release gates.
 - `PROGRESS.md` — evidence-backed current status.
+- `decisions/ADR-0007-swipe-score-native-product.md` — Swipe Score, personal taste,
+  Apple-native analysis and target native GUI.
 - `decisions/ADR-0006-curated-selection-first.md` — transition from reject-first to curated selection.
 
 ## Historical specification

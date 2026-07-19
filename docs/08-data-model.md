@@ -1,5 +1,22 @@
 # Модель данных SQLite
 
+> Это схема текущего переходного baseline. S0–S4 добавят миграции для versioned
+> Swipe Score, signal provenance, pairwise preference examples и Personal Taste Profile.
+> До миграции нельзя маскировать новые компоненты внутри старого `selection_score` как
+> будто контракт уже реализован.
+
+## V2 schema direction
+
+Новые queryable сущности должны разделять:
+
+- immutable `analysis_signals` с render fingerprint, capability, model/schema version;
+- `swipe_scores` с generic score, personal delta, confidence, components и reasons;
+- `preference_examples` с явными A/B choices и provenance;
+- `taste_profiles` с feature schema, parameters, training/evaluation evidence и status;
+- `model_registry` с license, checksum, Core ML compute policy и compatibility.
+
+Manual decisions и safety protections остаются отдельными от learned preference state.
+
 ## Connection settings
 
 ```sql

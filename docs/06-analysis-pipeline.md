@@ -1,122 +1,102 @@
-# Analysis Pipeline
+# Swipe Score analysis pipeline
 
-## Принцип
-
-Pipeline использует локальный и объяснимый анализ. Его цель — ранжированная подборка, а не только список удаления. Технические сигналы, серии и доступный Apple Vision объединяются в оценку 0–100.
-
-## Preview normalization
-
-- Review JPEG: max 2048 px, quality ~88.
-- Thumbnail: max 320 px, quality ~75.
-- Correct EXIF orientation.
-- Pillow first, `sips` fallback.
-- Atomic writes и source fingerprint invalidation.
-
-## Technical metrics
-
-На 1024 px normalized image:
-
-- Laplacian variance;
-- gradient energy;
-- edge density;
-- luminance percentiles;
-- black/white clipping ratios;
-- contrast standard deviation;
-- dynamic range;
-- entropy.
-
-Затем album-relative percentiles, median и MAD.
-
-## Hashes
-
-### Render-equivalence hash
-
-SHA-256 normalized 256×256 RGB pixels. Это равенство нормализованного render, не обязательно исходных bytes.
-
-### dHash
-
-9×8 grayscale neighbor comparison.
-
-### pHash
-
-32×32 grayscale, собственная NumPy DCT matrix, 8×8 low frequencies.
-
-### Color histogram
-
-Компактный нормализованный histogram.
-
-## Candidate generation
-
-- equal render-equivalence hash;
-- strict pHash distance;
-- relaxed pHash + short capture-time window;
-- только валидный burst key; `0`, `"0"` и пустые значения считаются отсутствующими;
-- band buckets ограничены соседями, temporal bucket — 40 ближайшими кадрами.
-
-## Pair confirmation
-
-- dHash;
-- aspect ratio;
-- normalized pixel MAE;
-- histogram similarity;
-- time delta;
-- resolution ratio.
-
-## Grouping
-
-Union-find на подтвержденных парах, затем обязательная проверка каждого member непосредственно с chosen leader. Слабые A-B-C chains разбиваются на отдельные группы.
-
-## Leader ranking
-
-1. Manual leader.
-2. Favorite.
-3. Edited.
-4. Burst default pick.
-5. Pixel count.
-6. Composite quality.
-7. UUID tie-break.
-
-## Shared-copy guard
-
-Низкоразрешённая импортированная копия не должна автоматически вытеснять полноразмерный original. `resolution_inversion` блокирует publish до ручного решения.
-
-## Локальный Apple Vision
-
-Capability-gated этап определяет лица, face capture quality и наличие landmarks глаз.
-При недоступности framework этап честно помечается warning; cloud fallback отсутствует.
-
-## Decisions
+## Product pipeline
 
 ```text
-keep
-review
-reject
+source inventory
+  → safe render + immutable fingerprint
+  → exact duplicate protection
+  → Apple Vision native signals
+  → optional Core ML / Apple Photos enrichment
+  → semantic scene and series grouping
+  → generic Swipe Score
+  → best-in-series comparison
+  → Personal Taste adjustment
+  → diverse Top K
+  → human review and approved publish plan
 ```
 
-Пользовательские названия: `Отобрано / Проверить / Исключено`. Оценка хранится в
-structured reason вместе с component breakdown, включая series rank и selection
-confidence. Пороги зависят от density preset.
+Each stage is independently resumable and records processed/total, warnings, failures,
+versions and current message. A failed signal degrades confidence; it must not silently turn
+an asset into Excluded.
 
-Default automatic excluded:
+## Signal layers
 
-- render-equivalent duplicate loser;
-- high-confidence near-duplicate loser при отсутствии protections и warnings.
+### Integrity and technical protection
 
-Clearly weak technical defect может стать Excluded; пограничный или неоднозначный → Review.
+- render/source fingerprint, normalized pixel hash, dHash and pHash;
+- resolution, orientation, missing state and source drift;
+- sharpness, clipping, exposure and contrast defects.
 
-После первичного scoring temporal diversity pass оставляет не более трёх обычных
-auto-selected кадров в 120-секундной сцене. Favorites, edited assets и подтверждённые
-leaders защищены; остальные переходят в Review с причиной `diversity_limit`.
+These signals protect correctness and break close ties. They do not define aesthetic appeal.
 
-## Optional Apple scores
+### Apple-native generic appeal
 
-Используются только как relative ranking signal. Низкий aesthetic score сам по себе не создаёт reject.
+- `VNCalculateImageAestheticsScoresRequest`;
+- Vision feature prints;
+- attention/objectness saliency;
+- face count, landmarks and face capture quality when relevant;
+- optional detailed Apple Photos scores for composition, lighting, framing, subject, colour
+  and timing, with explicit missing/zero semantics.
 
-## Deferred analysis
+### Validated semantic enrichment
 
-- надёжная классификация closed eyes (текущий слой видит landmarks, но не объявляет состояние);
-- semantic composition;
-- pose/occlusion analysis;
-- face identity;
-- neural aesthetic model;
-- advanced crop-invariant similarity.
+MobileCLIP or another aesthetics model may add content/semantic appeal only after a licensed
+Core ML build beats the Vision-only baseline on held-out data within runtime budgets.
+
+## Scenes, series and duplicates
+
+Exact/render-equivalent copies are handled deterministically. Near frames are candidates only
+after bounded temporal, hash and feature-print retrieval. The engine groups coherent scenes,
+then compares members relatively to choose a leader. Global Top K is computed after this
+step, so twenty near-identical sunset frames cannot dominate the result.
+
+## Swipe Score record
+
+```json
+{
+  "schema_version": 1,
+  "score": 84.2,
+  "generic_score": 78.0,
+  "personal_delta": 6.2,
+  "confidence": 0.81,
+  "components": {
+    "generic_aesthetics": 0.82,
+    "content_appeal": 0.76,
+    "composition_and_attention": 0.88,
+    "moment_and_subject": 0.74,
+    "best_in_series": 0.91,
+    "diversity_value": 0.69,
+    "technical_penalty": -0.05
+  },
+  "reasons": ["Сильная композиция", "Лучший кадр серии", "Близко к вашему вкусу"],
+  "model_versions": {}
+}
+```
+
+The score ranks this corpus; it is not a probability or a universal beauty judgement.
+Missing components are not treated as zero. Weights and calibration are versioned.
+
+## Personal Taste Profile
+
+The initial profile is a lightweight local pairwise ranker over stable native/Core ML
+features. Training data comes from explicit A/B choices and, only after consent, review
+corrections. Safety and integrity rules are never training targets.
+
+The profile stores feature schema, training examples, model parameters, quality evidence and
+updated time. It supports pause, reset, export and deletion. Ranking explanations show the
+generic score and personal delta separately.
+
+## Evaluation contract
+
+Use a user-labelled 50–100 photo corpus split into train/calibration and held-out evaluation.
+Report at least:
+
+- pairwise preference accuracy;
+- best-in-series accuracy;
+- Top-K agreement and diversity;
+- false exclusion rate;
+- generic versus personalized uplift;
+- per-stage cold/warm latency, throughput, peak memory and energy.
+
+The full Montenegro album is a scale test only after the bounded quality gate passes.

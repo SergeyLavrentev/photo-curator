@@ -1,112 +1,42 @@
-# Milestones и Definition of Done
+# Milestones and Definition of Done V2
 
-## Milestone 0 — Scaffold и visual shell
+[`ROADMAP.md`](../ROADMAP.md) is authoritative. S0–S8 replace the former implementation
+milestones as the active product plan.
 
-Deliverables:
-
-- package/entrypoint;
-- `pyproject.toml`, `.python-version`, `uv.lock`;
-- FastAPI/Jinja/local assets;
-- application paths и DB migration;
-- startup token;
-- empty dashboard pipeline;
-- `--demo`.
-
-Acceptance:
-
-```bash
-uv sync
-uv run photo-curator --demo
-```
-
-открывает работающий визуальный UI.
-
-## Milestone 1 — Doctor и provider
-
-- `PhotosProvider`, real/fake implementations;
-- current library;
-- regular album browser;
-- separate Shared Albums with partial/full service-owned disk copy;
-- Unicode/folder paths;
-- read gate.
-
-## Milestone 2 — Inventory
-
-- projects/assets;
-- optional score JSON;
-- job progress;
-- restart/interrupted state;
-- per-asset failure containment.
-
-## Milestone 3 — Preview cache
-
-- render resolver;
-- Pillow/sips;
-- atomic cache;
-- orientation;
-- thumbnails/gallery skeleton;
-- missing retry.
-
-## Milestone 4 — Technical analysis
-
-- metrics;
-- robust percentiles;
-- flags;
-- dashboard distributions.
-
-## Milestone 5 — Duplicates
-
-- hashes;
-- candidates/confirmation;
-- union-find;
-- ambiguity;
-- leaders;
-- resolution guard;
-- comparison page.
-
-## Milestone 6 — Decisions/review
-
-- dispositions/reasons/confidence;
-- protections;
-- manual overrides/leaders;
-- filters, shortcuts, batch actions;
-- best candidates.
-
-## Milestone 7 — Publisher
-
-- capability gate;
-- revalidation;
-- dry-run;
-- unique album;
-- apply/audit;
-- final Photos instructions.
-
-## Milestone 8 — Hardening
-
-- resume/invalidation;
-- source drift;
-- cache cleanup;
-- documentation;
-- tests and `ruff`.
+| Stage | Outcome | Acceptance evidence |
+|---|---|---|
+| S0 | Truthful baseline and preference dataset | 50–100 labelled photos, held-out split, reproducible report |
+| S1 | Apple-native intelligence spike | Vision compatibility and quality/performance benchmark |
+| S2 | Swipe Score v1 | uplift over technical-first baseline without more false exclusions |
+| S3 | Semantic/Core ML enrichment | declared uplift plus CPU/GPU/ANE, memory and energy evidence |
+| S4 | Personal Taste Profile | held-out per-user uplift, reset/export/delete verified |
+| S5 | Native macOS workflow | Choose → Analyze → Review → Save without browser/localhost |
+| S6 | Native Photos integration | capability-tested PhotoKit source and safe publish paths |
+| S7 | Personal review quality | understandable, diverse Top K with exact approval preview |
+| S8 | Native release gate | signed build, large-album benchmark, recovery and publish acceptance |
 
 ## Definition of Done
 
-MVP готов, если:
+V2 is complete only when all are true:
 
-1. Устанавливается через `uv` и содержит lockfile.
-2. Demo показывает полный workflow.
-3. Doctor диагностирует среду.
-4. Regular albums выбираются; для Shared Albums доступен честный plan/confirm workflow
-   частичного или полного disk snapshot с явным пропуском видео и без Photos write.
-5. Inventory, previews, metrics, groups, локальный Vision и decisions работают.
-6. Higher-resolution original защищён от shared-like copy.
-7. Review UI и duplicate comparison работают.
-8. Manual overrides сохраняются после restart/reanalysis.
-9. Favorite, edited, missing и leader не получают automatic reject.
-10. Dry-run и apply разделены.
-11. Capability-gated publish создаёт новый regular Best album; Reject опционален.
-12. Приложение не удаляет, не меняет originals, Favorite и keywords.
-13. Source album не меняется до ручного удаления.
-14. Cache безопасно очищается.
-15. Tests и `ruff` проходят.
-16. Нет обязательных Node.js, Docker, Qt или ML-моделей.
+1. Generic Swipe Score materially beats the frozen current heuristic on held-out data.
+2. Personal Taste improves held-out agreement for the same user and can be fully reset.
+3. Best-in-series and final diversity meet predeclared quality thresholds.
+4. Native Vision/Core ML stages publish their versions, capabilities and confidence.
+5. Hardware claims are backed by Apple Silicon measurements, not runtime assumptions.
+6. A 5 000-photo inventory and 2 000-photo analysis satisfy declared responsiveness,
+   memory, cancellation and resume budgets.
+7. The complete user workflow runs in signed SwiftUI/AppKit without browser or localhost.
+8. Source selection and final apply use supported PhotoKit paths where capability permits.
+9. Shared snapshots are explicit service-owned renders and cleaned safely when unreferenced.
+10. Missing, failed, ambiguous, edited, favourite and higher-resolution assets preserve their
+    protections independently of personal taste.
+11. Publish performs immutable dry-run, source revalidation, explicit approval and audit.
+12. No automatic deletion, direct Photos database write, cloud call or telemetry exists.
+13. Tests, static checks, labelled evaluation and real disposable Photos acceptance pass.
+
+## Historical implementation
+
+Former M0–M8 and R0–R6 produced the working Python/web baseline, duplicate protections,
+Shared snapshots and safe publisher. That evidence remains useful, but it does not satisfy
+Swipe Score, personalization, native GUI or native hardware acceptance.

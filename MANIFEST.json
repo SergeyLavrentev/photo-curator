@@ -4,5 +4,5 @@
   "language": "ru",
   "source_of_truth": "ROADMAP.md",
   "historical_specification": "CODEX_PROJECT_SPEC.md",
-  "note": "Git is the authoritative file inventory. The historical specification remains binding only for safety constraints not superseded by ROADMAP.md and ADR-0006."
+  "note": "Git is the authoritative file inventory. ROADMAP.md and ADR-0007 define the Swipe Score and native V2 target. The historical specification remains binding only for safety constraints not superseded by ROADMAP.md, ADR-0006 and ADR-0007."
 }

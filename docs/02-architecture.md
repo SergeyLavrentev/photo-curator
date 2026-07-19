@@ -1,85 +1,79 @@
-# Архитектура
+# Архитектура V2
 
-## Context diagram
+## Target system
 
 ```mermaid
 flowchart TD
-    SA[Apple Shared Album] -->|SharedCopyCoordinator: plan + disk snapshot| LA[Photo Curator Local Album]
-    PL[Personal Photos Library] --> WA[Regular Working Album]
-    LA --> OP[LocalAlbumsProvider]
-    WA --> OP[OSXPhotosProvider]
-    OP --> INV[Inventory Snapshot]
-    INV --> PC[Preview Cache]
-    PC --> AN[Lightweight Analysis]
-    AN --> DB[(SQLite Project State)]
-    DB --> UI[Local FastAPI/Jinja UI]
-    UI --> PUB[PhotosPublisher]
-    PUB -->|PhotoKit import after approval| BA[Curated Best Album]
-    PUB -->|Existing regular assets| RA[Optional Reject Album]
-    BA --> PL
+    PH["Apple Photos / Shared source"] --> PI["PhotoKit + optional osxphotos adapter"]
+    PI --> PS["ProjectStore"]
+    PS --> AC["AnalysisCoordinator"]
+    AC --> VI["Apple Vision: aesthetics, feature print, saliency, faces"]
+    AC --> CM["Core ML: validated semantic and aesthetic models"]
+    AC --> PW["Python enrichment worker"]
+    VI --> SS["Swipe Score and scene ranker"]
+    CM --> SS
+    PW --> SS
+    TP["Personal Taste Profile"] --> SS
+    SS --> UI["SwiftUI / AppKit review workflow"]
+    UI --> PP["PhotoKit publish after dry-run approval"]
 ```
 
-## Component boundaries
+The released application is a signed native `.app`. It does not require HTML,
+JavaScript, FastAPI, a browser or a localhost port.
 
-### `photos/`
+## Component responsibilities
 
-Единственный слой, знающий об `osxphotos`, PhotoKit helper, Photos Library paths и
-publish subprocesses.
-`SharedCopyCoordinator` читает только локальные Shared Album renders и создаёт
-service-owned disk snapshot; Shared Album и Photos Library остаются read-only.
+- **SwiftUI/AppKit** owns workflow, navigation, progress, review state and settings.
+- **PhotoKit adapter** inventories supported regular albums and publishes the approved set.
+- **osxphotos adapter** is optional and read-only for detailed Apple metadata or source
+  capabilities that public APIs do not reliably expose.
+- **ProjectStore** is the single writer for projects, assets, jobs, scores and decisions.
+- **AnalysisCoordinator** schedules bounded stages, cancellation, resume and invalidation.
+- **Vision engine** provides the mandatory generic native baseline on supported macOS.
+- **Core ML engine** runs only versioned, benchmarked models with declared compute policy.
+- **Python worker** is a temporary stateless enrichment boundary, never a second backend.
+- **Taste Profile** owns versioned preference examples and lightweight ranking parameters.
 
-### `pipeline/`
+## State and IPC
 
-Оркестрация stages, jobs, batching, invalidation и resume. Не содержит web-specific кода.
+Mutable state has one owner. Native and Python processes exchange versioned JSONL messages
+containing immutable inputs, progress events and result payloads. Workers cannot receive
+arbitrary filesystem paths, mutate Photos, publish albums or write the project database.
 
-### `analysis/`
+Every analysis record includes:
 
-Чистые функции Pillow/NumPy: metrics, hashes, similarity, normalization и decisions. Должен быть тестируемым без macOS и Photos.
+- source render fingerprint;
+- signal/model/schema versions;
+- capability and unavailable reason;
+- compute/runtime evidence where observable;
+- timestamp and confidence.
 
-### `db/`
+A changed source fingerprint, feature schema or model version invalidates only dependent
+results. Manual decisions and explicit pairwise labels survive re-analysis.
 
-SQLite migrations и repository. ORM не используется.
+## Migration architecture
 
-### `web/`
+The current FastAPI/Jinja application is an implemented reference and diagnostic baseline.
+It remains temporarily runnable while native parity is measured. New product logic must be
+kept outside web route handlers so that the native client can call the same contracts.
 
-HTML/UI/API. Не обращается к `osxphotos` напрямую, только через services/coordinator.
+Migration order:
 
-## Data flow
+1. native signal benchmark and versioned Swipe Score;
+2. taste profile and evaluation harness;
+3. native ProjectStore/coordinator boundary;
+4. native workflow and gallery;
+5. PhotoKit source/publish parity;
+6. removal of web stack after acceptance.
 
-1. Project фиксирует library и album snapshot.
-2. Inventory сохраняет metadata и доступные render candidates.
-3. PreviewBuilder создаёт normalized review/thumbnail JPEG.
-4. TechnicalAnalyzer, SimilarityAnalyzer и локальный Apple Vision сохраняют metrics.
-5. Duplicate stage строит connected components и leaders.
-6. DecisionEngine создаёт auto decisions, не затрагивая manual overrides.
-7. UI выполняет human review.
-8. Publisher revalidates source и создаёт immutable selection file для Best или Reject.
-9. Dry-run предшествует apply; disk Best импортируется через PhotoKit только после approval.
+Python removal is not a goal by itself. It is removed only when native engines reproduce all
+validated signals without losing product quality.
 
-## Failure containment
+## Safety boundaries
 
-- Ошибка asset не роняет stage.
-- Ошибка stage не удаляет предыдущие результаты.
-- Ошибка publish не меняет project decisions.
-- Отсутствие publish capability оставляет рабочий read-only analyzer.
-
-## Dependency rules
-
-```text
-web → services/coordinator → photos/pipeline/db
-analysis → только Pillow/NumPy/stdlib
-photos → osxphotos + native PhotoKit helper + subprocess wrapper
-db → sqlite3
-```
-
-Запрещены обратные зависимости из core в web.
-
-## Stage invalidation
-
-| Изменение | Что пересчитывать |
-|---|---|
-| Decision thresholds | Decisions |
-| Duplicate thresholds | Duplicate groups + decisions |
-| Preview size/quality | Previews + весь downstream |
-| Source render fingerprint | Конкретный asset + downstream |
-| Manual override | Только final decision |
+- no direct Photos database writes;
+- no automatic deletion or source metadata mutation;
+- Shared snapshots are service-owned renders, not claimed originals;
+- publish is plan → revalidate → explicit approval → apply → audit;
+- unsupported or failed assets remain reviewable;
+- taste never overrides source-integrity, duplicate or resolution protection.

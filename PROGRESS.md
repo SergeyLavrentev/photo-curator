@@ -1,31 +1,39 @@
 # Progress
 
+- 2026-07-20: принят новый продуктовый контракт V2: универсальный Swipe Score,
+  Personal Taste Profile, Apple Vision/Core ML baseline и целевой native SwiftUI/AppKit
+  workflow. Roadmap и ADR готовы; реализация S0–S8 ещё не завершена.
 - 2026-07-20: добавлен self-contained macOS `.app`: AppKit launcher, управление backend
   из Dock/menu bar и веб-настроек, остановка при `⌘Q`, сборка/установка через Makefile,
   локальная code signing и проверка bundle.
 
 ## Current milestone
 
-- Milestone: R7 — Acceptance and release audit
-- Status: Feature stages R0–R6 implemented; the human-labelled release gate remains
+- Milestone: S0 — Truthful baseline and preference dataset
+- Status: V2 roadmap accepted; existing R0–R6 implementation is the frozen transition
+  baseline, not proof of Swipe Score or native product completion
 
 ## Product roadmap
 
-The authoritative roadmap is [`ROADMAP.md`](ROADMAP.md). The product now targets
-an explainable curated gallery and a user-confirmed Best album.
+The authoritative roadmap is [`ROADMAP.md`](ROADMAP.md). The product now targets a
+personalized Swipe Score, Apple-native analysis and a native user-confirmed Best album.
 
-- [x] R0 — clean application data baseline and replace the roadmap
-- [x] R1 — reliable candidate generation, progress, resume and state handling
-- [x] R2 — Selected / Review / Excluded, scores, explanations and density presets
-- [x] R3 — coherent series, best-frame ranking and local Apple Vision signals
-- [x] R4 — compact dark UI, gallery-first workflow and in-place progress polling
-- [x] R5 — guided Shared Album intake with explicit capability limits
-- [x] R6 — independent Best/Reject dry-run/apply and local preview ZIP export
-- [ ] R7 — labelled acceptance, performance gates and release audit
+- [ ] S0 — labelled preference dataset and frozen baseline
+- [ ] S1 — Apple-native Vision benchmark
+- [ ] S2 — versioned Swipe Score v1
+- [ ] S3 — validated Core ML enrichment and hardware evidence
+- [ ] S4 — local Personal Taste Profile
+- [ ] S5 — native SwiftUI/AppKit workflow
+- [ ] S6 — native PhotoKit source and publish integration
+- [ ] S7 — personal, explainable and diverse review experience
+- [ ] S8 — signed native release gate
 
-The main UX now follows four explicit actions: choose, analyze, review and save. Technical
-metrics are hidden under status/details, gallery evidence is disclosed with `?`, and deleting
-the last project backed by a Shared snapshot also removes that service-owned disk copy.
+Historical R0–R6 are implemented and retained as migration assets: inventory, previews,
+duplicate protections, resumability, Shared snapshots, review and safe publish.
+
+The implemented transition UX follows choose, analyze, review and save. The target native
+workflow adds explicit optional taste calibration; deleting the last project backed by a
+Shared snapshot continues to remove that service-owned disk copy.
 
 ## Current verified evidence
 
@@ -56,16 +64,16 @@ disk Best → Photos native PhotoKit publish       — implemented; dry-run + ex
 native Swift helper                              — compiles on this Mac; real apply not run
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 91 passed
+pytest                                           — 92 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow
 at an exact 390 x 844 px viewport. The document client and scroll widths were both
 390 px, the console contained no warnings or errors, and a fast full-pipeline rerun
 returned to a clean `ready` screen without a stale launch message. A real 50–100
-photo human-labelled album remains the external release-quality gate. The real
-macOS Photos Best dry-run passed; native disk-snapshot apply was intentionally not
-executed against the real library and remains part of R7 acceptance.
+photo human-labelled preference corpus is now the S0 quality gate. The real macOS Photos
+Best dry-run passed; native disk-snapshot apply was intentionally not executed against the
+real library and remains an S6/S8 acceptance item.
 
 ## Previous MVP evidence — retained for history only
 
@@ -90,11 +98,11 @@ duplicate manual override via browser        — passed end-to-end
 The checks below covered the former reject-first implementation. They do not prove
 the new roadmap complete and must not be used as release acceptance.
 
-## Current external acceptance gate
+## Current quality gate
 
-The root failure from the old 1,671-photo run is covered by sentinel and bounded
-candidate tests. Release acceptance still requires the human-labelled real-world
-R7 fixture above.
+The root state failure from the old 1,671-photo run is covered by sentinel and bounded
+candidate tests, but ranking quality is not proven. S0 requires a real 50–100-photo corpus
+with pairwise preference, best-in-series and Top-K labels before a full-album scale run.
 
 ## Safety invariants verified in code
 

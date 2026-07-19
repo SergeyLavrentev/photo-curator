@@ -1,164 +1,240 @@
-# Photo Curator — product roadmap
+# Photo Curator — Swipe Score roadmap
 
-## Product outcome
+## Product promise
 
-Photo Curator turns a large unreviewed trip album into a compact, explainable
-gallery of the best photographs. The primary result is a curated selection, not
-a deletion list.
+Photo Curator turns a large Apple Photos album into a compact selection of images
+that create the strongest first impression for this user.
+
+> Из большого альбома — фотографии, которые хочется свайпнуть вправо.
+
+`Swipe Score` is a universal metaphor, not a dating-only score. It applies to a
+portrait, landscape, boat at sunset, street scene, family moment or any other visual
+subject. The product evaluates the photograph and its presentation, not the worth or
+beauty of a person depicted in it.
+
+The primary outcome is:
+
+1. a personalized ranked gallery;
+2. the best frame from every coherent scene or series;
+3. a diverse final selection;
+4. an explanation of why each image is recommended;
+5. a user-confirmed Photos album.
+
+Technical quality is a safety signal and tie-breaker. Sharpness, exposure and contrast
+must not dominate aesthetic appeal, meaning, timing or personal taste.
+
+## Product principles
+
+- **First impression first.** Rank visual appeal and emotional pull before technical
+  perfection.
+- **Personal, not universal.** A generic aesthetic baseline starts the ranking; user
+  comparisons and corrections adapt it over time.
+- **Relative beats absolute.** Prefer `A or B?` and best-in-series ranking over an
+  unsupported claim that an image is objectively beautiful.
+- **Apple-native intelligence.** Vision and Core ML are the production baseline;
+  compatible models use CPU, GPU and Neural Engine through Core ML.
+- **Open-source where it adds value.** `osxphotos`, MobileCLIP and candidate aesthetic
+  models are benchmarked, licensed and replaceable adapters rather than hidden truths.
+- **Explainable recommendations.** Show a short reason and uncertainty without exposing
+  a wall of metrics.
+- **Local and reversible.** No automatic deletion or source mutation. Publishing remains
+  a dry-run plus explicit approval.
+
+## Target architecture
 
 ```text
-Source album
-  -> local working cache
-  -> technical analysis
-  -> exact duplicates
-  -> similar scenes and series
-  -> ranking inside each series
-  -> Selected / Review / Excluded
-  -> user corrections
-  -> "Best of" album and optional Reject album
+PhotoCurator.app
+  -> SwiftUI/AppKit workflow and review gallery
+  -> PhotoKit source and publishing
+  -> ProjectStore (single local owner)
+  -> AnalysisCoordinator
+       -> Apple Vision engine
+            aesthetics / feature print / saliency / faces
+       -> Core ML engine
+            optional MobileCLIP and validated aesthetic models
+       -> Python enrichment worker
+            osxphotos and temporary experimental algorithms
+  -> Personal Taste Profile
 ```
 
-The application never deletes photos, changes originals, or silently publishes
-results. Apple Photos remains the source of truth.
+The released GUI must not require a browser, HTML, JavaScript, FastAPI or a localhost
+port. During migration, the existing web application remains a reference implementation
+and diagnostic fallback until native feature parity is proven.
 
-## R0 — clean baseline
+Python is allowed behind a narrow local IPC contract. It must not own GUI state and must
+be removable without redesigning the application. Production ML inference should move to
+Vision/Core ML when the native implementation reaches measured parity.
 
-- Remove previous application projects, caches, logs, demo data and temporary QA data.
-- Confirm that no service-created `PhotoCurator — ...` albums remain in Photos.
-- Keep original user albums untouched.
-- Replace the old reject-first roadmap and progress claims with this roadmap.
+## Swipe Score contract
 
-Acceptance: a clean application start contains no projects and no cached media.
+Every analyzed image receives a versioned score record:
 
-## R1 — reliable pipeline
+```text
+Swipe Score 0...100
+  generic_aesthetics
+  content_appeal
+  composition_and_attention
+  moment_and_subject
+  portrait_signal, when relevant
+  best_in_series
+  personal_taste
+  diversity_value
+  technical_penalty
+  confidence
+```
 
-- Normalize provider sentinels such as `burst_key=0` to missing values.
-- Generate duplicate candidates through exact hashes, perceptual-hash buckets,
-  capture-time windows and valid burst groups for albums of every size.
-- Avoid opening image files for unrelated pairs.
-- Persist batch progress and expose real candidate/pair counters.
-- Resume interrupted work without repeating completed previews and metrics.
-- Keep project and job states consistent; stop full-page polling reloads.
+The score is a ranking instrument, not a calibrated probability that every viewer will
+like the image. The UI must distinguish generic baseline, personalized adjustment and
+technical blockers.
 
-Acceptance: a 2,000-photo synthetic inventory completes candidate generation in a
-bounded time and interrupted jobs resume with truthful UI state.
+Initial signals:
 
-## R2 — curated selection model
+- `VNCalculateImageAestheticsScoresRequest`;
+- Apple Photos scores exposed by `osxphotos`, including composition, lighting, framing,
+  subject, colour, timing and overall curation;
+- Vision feature prints for semantic similarity and scene/series comparison;
+- attention/objectness saliency;
+- face capture quality and landmarks when a person is present;
+- exact/render hashes for deterministic duplicate protection;
+- technical defects only as blockers, penalties and tie-breakers;
+- user pairwise choices and manual review corrections.
 
-- Make `selected`, `review` and `excluded` the user-facing result buckets.
-- Keep safety-compatible internal dispositions and manual overrides.
-- Store a 0–100 overall score and component scores for technical quality,
-  series rank and selection confidence.
-- Store short human-readable reasons for every automatic recommendation.
-- Support selection-density presets: compact, balanced and broad.
-- Treat the selected gallery as the primary project screen.
+Future context profiles may include General, Dating Profile, Travel, Portfolio and Family,
+but V2 ships one general personal profile before adding specialised claims.
 
-Acceptance: every analyzed asset has a bucket, score and at least one explanation;
-manual changes survive reanalysis.
+## S0 — truthful baseline and preference dataset
 
-## R3 — series and best-frame selection
+- Preserve the current Python engine as a measurable baseline, not the target product.
+- Add human labels for pairwise preference, best-in-series and final Top K, separate from
+  duplicate correctness labels.
+- Define a reproducible evaluation report: pairwise accuracy, Top-K agreement, series
+  leader accuracy, diversity, false exclusion rate, latency and memory.
+- Record current heuristic, Apple overall-only and non-personalized baselines.
+- Never use the full Montenegro album as a release test before the bounded labelled set
+  passes.
 
-- Separate exact duplicates from near-duplicate scenes and temporal series.
-- Validate every group member against the chosen leader and split weak chains.
-- Rank frames inside a series using resolution, sharpness, exposure, contrast,
-  Favorite/edited protections and available Apple scores.
-- Add a capability-gated local Vision layer for faces, capture quality and eye
-  landmarks; do not claim closed-eye state without a validated classifier and
-  never require cloud image APIs.
-- Preserve diversity so one scene cannot dominate the final gallery.
+Acceptance: a user-labelled 50–100 photo corpus and held-out comparisons can rank two
+engine versions without subjective hand-waving.
 
-Implementation: a 120-second temporal scene keeps at most three ordinary automatic
-selections; Favorites, edited frames and validated series leaders remain protected.
+## S1 — Apple-native intelligence spike
 
-Acceptance: a labelled 50–100 photo fixture measures duplicate precision, series
-leader accuracy and false exclusions.
+- Build a Swift command-line benchmark independent of the GUI.
+- Run Vision aesthetics, feature prints, saliency and face requests on the same corpus.
+- Persist model/request revision and unavailable-capability reasons.
+- Measure cold/warm latency, throughput, peak memory and energy on the target Mac.
+- Compare public Vision aesthetics with detailed stored Apple Photos scores.
+- Establish the per-stage runtime budget from measured evidence.
 
-Release thresholds: pairwise duplicate precision ≥ 90%, duplicate recall ≥ 80%,
-series leader accuracy ≥ 80% and false exclusion rate ≤ 5%. The checked-in
-acceptance evaluator rejects incomplete labels and produces text or JSON evidence.
+Acceptance: every native signal has a compatibility result, benchmark and observable
+contribution to held-out ranking quality.
 
-Implemented automated baseline: a generated labelled 80-photo fixture covers exact,
-recompressed, resized, cropped, blurred, dark, overexposed and separated scenes.
-Human-labelled travel album acceptance remains an R7 release gate.
+## S2 — Swipe Score v1
 
-## R4 — clear dark UI
+- Replace the technical-first weighted sum with the versioned Swipe Score contract.
+- Make Apple Vision aesthetics the mandatory generic baseline on supported macOS.
+- Use detailed Apple Photos scores as optional enrichment with missing/zero handling.
+- Rank coherent scenes pairwise and select the best frame before global Top K.
+- Preserve technical and resolution protections independently from aesthetic taste.
+- Store concise reasons and confidence for every recommendation.
 
-- Use a dark, desktop-first interface with compact typography and controls.
-- Replace large stage cards with one horizontal progress rail and one expanded
-  active-stage detail row.
-- Show only the key outcome counters above the gallery.
-- Provide gallery tabs for Selected, Review and Excluded.
-- Show score breakdown, reasons and comparison with the series leader on demand.
-- Update progress in place without reloading the whole page.
+Acceptance: Swipe Score v1 outperforms the current heuristic on held-out pairwise and
+Top-K evaluation without increasing false exclusions.
 
-Acceptance: the main workflow fits in one viewport at 1280 px before the gallery,
-works at 390 px, and all statuses remain understandable without colour alone.
+## S3 — semantic appeal and hardware acceleration
 
-Current interaction model: `Choose album → Analyze → Review → Save`. The landing page
-contains no analytical counters; pipeline stages, cache data and score evidence live in
-explicit details. Gallery cards show only the photo, disposition and decision controls,
-with reasons behind a `?` disclosure.
+- Benchmark Apple MobileCLIP and at least one licensed image-aesthetics model against the
+  native Vision baseline; do not ship a model merely because it is fashionable.
+- Convert the winning model to Core ML and use `.all` compute units where compatible.
+- Cache embeddings by immutable render fingerprint.
+- Batch inference and prevent duplicate image decoding across requests.
+- Measure CPU/GPU/Neural Engine execution, thermal behaviour and battery impact.
+- Keep model download/size optional until its measured product uplift justifies it.
 
-## R5 — source intake
+Acceptance: any bundled model provides a predeclared ranking uplift over Vision alone and
+stays within the S1 runtime, memory and energy budgets.
 
-- Keep existing regular Photos albums as the primary source.
-- Detect Shared Albums separately and offer partial (first N or selected) and full
-  photo-only disk snapshot flows when local renders are available.
-- Build an explicit plan, require confirmation and copy Shared Album renders into a
-  persistent service-owned album with an atomic manifest. The album then enters the
-  same analysis pipeline without any Photos Library write.
-- Skip videos explicitly because the available local derivatives are JPEG previews,
-  not playable source media.
-- Otherwise present an explicit import-to-library instruction instead of a dead
-  disabled selector.
-- Record `regular_album` / `manual_shared_copy` / `service_shared_copy` provenance
-  and warn when shared copies may have reduced resolution or metadata.
-- Remove an unshared service-owned snapshot when its last project is explicitly deleted.
+## S4 — Personal Taste Profile
 
-Acceptance: the user always understands whether a source is analyzed directly or from
-a service-owned disk snapshot, and no Shared intake action writes to Photos.
+- Add a short calibration flow based on pairwise image choices, not abstract sliders only.
+- Let the user adjust selection breadth and visible preference dimensions before final
+  publishing.
+- Learn a lightweight local ranking head over stable image features.
+- Treat manual Keep/Review/Exclude and leader changes as preference signals only after an
+  explicit product choice.
+- Persist the profile with feature schema, model version and training evidence.
+- Show generic score versus personal adjustment.
+- Allow pause, reset, export and complete deletion of the taste profile.
+- Keep safety, duplicate and resolution rules outside the learned profile.
 
-## R6 — outputs
+Acceptance: the personal model improves held-out pairwise agreement for the same user and
+never changes protected assets or Photos content by itself.
 
-- Review the curated gallery before any external write.
-- Create a new regular `PhotoCurator — <source> — Best` album from Selected.
-- Optionally create a separate Reject album from confirmed Excluded assets.
-- For a service-owned Shared snapshot, import approved Selected files through public
-  PhotoKit without opening Photos; do not publish its Reject copies.
-- Keep dry-run and explicit apply confirmation for every Photos write.
-- Offer a local ZIP of review renders; never label it as an original-file export.
+## S5 — Native macOS workflow
 
-Acceptance: regular-library Best/Reject and disk-snapshot Best publishing are previewed,
-explicitly confirmed and audited.
+- Replace the user-facing web GUI with SwiftUI/AppKit.
+- Use a native album picker, four-step workflow, progress, review gallery and settings.
+- Use PhotoKit and native thumbnail caching where capability parity is proven.
+- Support keyboard navigation, Quick Look, undo, accessibility and state restoration.
+- Keep one state owner; a Python worker communicates through versioned JSONL IPC and does
+  not write UI/project state independently.
+- Keep AppKit `NSCollectionView` as a measured fallback if SwiftUI grids cannot sustain
+  large albums.
 
-Verified on macOS: a temporary 20-photo real project produced a successful Best
-album `osxphotos` dry-run with 10 selected UUIDs. Apply was intentionally not run.
-The native disk-to-Photos helper compiles on macOS and its approval/state flow is
-covered with an integration fake; a real PhotoKit apply remains an R7 acceptance check.
+Acceptance: Choose → Analyze → Review → Save works without a browser or localhost and
+remains responsive on a 2,000-photo project.
 
-## R7 — acceptance and release
+## S6 — Native Photos integration
 
-- Maintain a generated unit fixture for exact, recompressed, resized, cropped,
-  blurred, dark, overexposed and unrelated images.
-- Maintain a labelled real-world acceptance album of 50–100 expendable assets.
-- Export and evaluate the human labels reproducibly with `acceptance-template` and
-  `acceptance-evaluate`; never treat an unfilled template as evidence.
-- Run performance acceptance at 100, 2,000 and 5,000 inventory rows.
-- Verify tests, lint, dark UI screenshots, restart/resume and macOS publish dry-run.
-- Update `PROGRESS.md` only from verified evidence.
+- Inventory regular Photos albums through PhotoKit where its metadata is sufficient.
+- Keep `osxphotos` as an optional read-only enrichment adapter for scores or sources that
+  public APIs do not expose reliably.
+- Revalidate regular albums, Shared Albums, edited assets, Live Photos and iCloud-only
+  resources through explicit capability tests.
+- Publish only the approved result through PhotoKit.
+- Preserve disk snapshots only when Shared Album access requires them; remove them with
+  the last referencing project.
+- Continue to skip video analysis in V2.
 
-## After R7 — personal taste profile
+Acceptance: the native workflow covers supported source and publish paths without opening
+Photos or writing its database directly.
 
-- Treat human corrections as labelled preference signals, separate from release acceptance.
-- Learn only lightweight, explainable feature weights initially; do not claim neural
-  fine-tuning without a sufficiently large personal dataset.
-- Keep technical safety gates, duplicate protection and resolution protection independent
-  from aesthetic preferences.
-- Show the learned preference profile and allow reset/disable before it affects new projects.
+## S7 — personal review and portfolio selection
+
+- Make Swipe Score the default ordering and strongest visible decision aid.
+- Present explanations behind a compact disclosure rather than technical card chrome.
+- Optimise the final set for both score and visual diversity; prevent one scene or subject
+  from dominating.
+- Let the user tune the result and immediately preview how the personal profile changes
+  the ranking.
+- Reserve specialised context profiles without claiming a dating-specific predictor until
+  matching labelled evidence exists.
+
+Acceptance: the user can produce a useful, diverse final selection with only local edits,
+understand the largest score changes and approve the exact Photos output.
+
+## S8 — native release gate
+
+- Run labelled generic, scene/series and personal-preference evaluations.
+- Benchmark 100, 2,000 and 5,000-photo inventories on supported Apple Silicon hardware.
+- Verify restart, cancellation, resume, model invalidation and taste-profile reset.
+- Verify code signing, notarization plan, permissions and bundle contents.
+- Remove FastAPI/Jinja/JavaScript and the browser launcher only after native parity.
+- Remove bundled Python only when native engines cover all validated product signals; its
+  removal is not required for the first native release.
+
+Acceptance: the signed native application proves ranking uplift, personalised uplift,
+large-album responsiveness and safe PhotoKit publishing with reproducible evidence.
 
 ## Definition of Done
 
-The new product is done only when a user can start from a supported source, run a
-truthful resumable pipeline, understand every recommendation, refine a useful
-Selected gallery and explicitly publish a new Best album without any automatic
-deletion or mutation of originals.
+V2 is done only when a user can choose a supported album, receive a materially better
+than technical-baseline Swipe Score ranking, tune and retain personal taste, review a
+diverse native gallery and explicitly publish the approved result — without a browser,
+localhost or automatic source mutation.
+
+## Historical baseline
+
+The previous R0–R6 implementation remains valuable evidence for inventory, previews,
+duplicates, resumability, Shared Album snapshots and safe publishing. It does not prove
+Swipe Score quality, personal preference quality, Apple-native GUI parity or native ML
+hardware utilisation. Previous R7 is superseded by S0–S8 above.

@@ -1,5 +1,10 @@
 # API и background jobs
 
+> Этот HTTP contract описывает текущий переходный web baseline. В целевом V2 нативный
+> UI вызывает `ProjectStore` и `AnalysisCoordinator` внутри приложения; localhost API
+> отсутствует. Python enrichment, пока он нужен, использует ограниченный versioned JSONL
+> IPC без прав на publish или mutable project state.
+
 ## HTML routes
 
 ```text

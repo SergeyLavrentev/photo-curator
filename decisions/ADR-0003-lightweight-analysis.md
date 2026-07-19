@@ -1,6 +1,6 @@
 # ADR-0003: Лёгкий анализ без тяжёлого ML runtime
 
-- Status: Accepted
+- Status: Superseded by ADR-0007 for V2; retained as the implemented baseline
 
 ## Context
 

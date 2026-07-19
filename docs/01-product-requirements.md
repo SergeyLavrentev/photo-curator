@@ -1,71 +1,73 @@
-# Product Requirements
+# Product Requirements V2
 
 ## Product statement
 
-Photo Curator превращает большой обычный альбом Apple Photos в объяснимую подборку лучших кадров, сохраняя полный контроль человека.
+Photo Curator превращает большой альбом Apple Photos в персональную подборку кадров,
+которые этому пользователю хочется «свайпнуть вправо».
 
-## Primary persona
-
-Технически грамотный владелец Mac и iPhone, использующий Apple Photos и iCloud Photos.
-Пользователь хочет поручить приложению создание управляемого дискового snapshot Shared
-Album и не хочет вручную поддерживать JPEG-папки или собирать альбом в Photos.
+`Swipe Score` применим к портрету, пейзажу, семейному моменту, предмету или сцене. Он
+оценивает силу фотографии и первого впечатления, а не ценность или красоту изображённого
+человека и не обещает реакцию других людей.
 
 ## Primary job to be done
 
-> Когда после поездки в одном альбоме оказывается множество фотографий от нескольких участников, я хочу быстро увидеть дубли и слабые кадры, проверить рекомендации визуально и безопасно удалить только подтверждённый мусор, сохранив один исходный альбом с хорошими фотографиями.
+> Когда после поездки или съёмки у меня 2 000 похожих и неравноценных фотографий, я хочу
+> быстро получить сильную, разнообразную подборку в моём вкусе, понять ключевые причины,
+> поправить спорные решения и сохранить только подтверждённый результат в Photos.
 
 ## User journey
 
-1. Пользователь выбирает Shared Album и объём копии: первые N, отмеченные или все фото.
-2. Проверяет план и подтверждает создание service-owned disk album.
-3. Выбирает созданный локальный working album для анализа.
-4. Наблюдает pipeline и видит предупреждения.
-5. Просматривает `Selected / Review / Excluded`, оценки и серии.
-6. Исправляет решения и leaders.
-7. Выполняет publish dry-run.
-8. Создаёт новый Best-альбом.
-9. При необходимости отдельно создаёт Reject-альбом.
+1. Выбрать поддерживаемый обычный альбом или создать service-owned disk snapshot общего.
+2. При желании пройти короткую калибровку вкуса сравнением пар фотографий.
+3. Запустить анализ и видеть честный общий прогресс с раскрываемыми деталями.
+4. Получить галерею, упорядоченную по персональному Swipe Score и сериям.
+5. Подкрутить ширину отбора, исправить спорные решения и увидеть обновлённый результат.
+6. Проверить immutable dry-run и явно создать новый альбом Photos из принятого набора.
 
 ## Functional requirements
 
-- Regular album browser с folder path и количеством assets.
-- Частичный/полный disk snapshot Shared Album с планом, подтверждением, resumable copy,
-  atomic manifest и явным пропуском видео.
-- Project state и resumable pipeline.
-- Preview cache без permanent originals.
-- Technical metrics и perceptual similarity.
-- Duplicate groups с объяснимым leader selection.
-- `Selected/Review/Excluded`, оценка 0–100, flags, confidence и structured reasons.
-- Manual override, batch actions, keyboard shortcuts.
-- Компактный строковый pipeline и галерея результата.
-- Capability-gated dry-run/apply Best- и опционального Reject-альбома.
-- Doctor, logging, cache cleanup и source drift validation.
+- Нативный SwiftUI/AppKit workflow без браузера и localhost в целевом релизе.
+- PhotoKit для поддерживаемых источников и публикации; `osxphotos` — read-only adapter
+  для недоступного публичным API enrichment и Shared Album intake.
+- Versioned Swipe Score 0–100 с generic baseline, personal adjustment, confidence и
+  краткими причинами.
+- Apple Vision aesthetics, feature print, saliency и face signals как native baseline.
+- Опциональные Core ML-модели допускаются только после измеримого uplift и проверки
+  лицензии, размера, памяти, энергии и hardware execution.
+- Поиск точных/визуальных дублей, формирование сцен и выбор лучшего кадра внутри серии.
+- Технические дефекты как blockers, penalties и tie-breakers, но не главный критерий
+  привлекательности.
+- Локальный Personal Taste Profile, обучаемый на явных pairwise choices и подтверждённых
+  правках; reset, export и полное удаление профиля.
+- Разнообразие финального Top K, чтобы одна серия или один сюжет не заняли весь результат.
+- Manual override, undo, keyboard navigation, Quick Look и state restoration.
+- Safe publish: dry-run, source revalidation, explicit confirmation и новый Best-альбом.
 
 ## Non-functional requirements
 
-- Полностью локальная обработка.
-- Memory желательно менее 1 GB.
-- Альбомы до 5000 фотографий.
-- Отсутствие тяжёлого ML runtime.
-- Работа без Node.js/Docker/Qt.
-- Идемпотентные stages и resume.
-- Никаких автоматических destructive actions.
+- Полностью локальная обработка без cloud API и telemetry.
+- Поддержка 5 000 фотографий с измеренными latency, peak memory и energy budgets.
+- Core ML использует доступные CPU/GPU/Neural Engine через совместимые compute units.
+- Один владелец mutable project state; Python worker не пишет состояние самостоятельно.
+- Идемпотентные стадии, cancellation, resume и model/schema invalidation.
+- Никаких автоматических destructive actions или direct Photos DB writes.
+- Кодовая подпись обязательна; notarization — release gate распространения.
 
-## Out of scope
+## Out of scope for V2
 
-- Прямой анализ Shared Albums.
-- Автоматическое удаление.
-- Распознавание личности и semantic composition.
-- Видео и RAW quality.
-- Face recognition identities.
-- Облачные API.
-- Полноценный `.app` bundle и notarization.
+- Видеоанализ и оценка RAW-оригиналов.
+- Облачный SaaS и синхронизация taste profile.
+- Face identity/recognition.
+- Автоматическое удаление или изменение исходного альбома.
+- Обещание dating outcome или «объективной красоты».
+- Несколько специализированных профилей до доказанного качества общего персонального.
 
 ## Success criteria
 
-- Пользователь проходит весь workflow через GUI.
-- Уверенные lower-quality duplicates выявляются корректно.
-- Higher-resolution originals не проигрывают импортированным shared-копиям без явного ручного решения.
-- Неоднозначные случаи направляются в review.
-- Приложение не удаляет и не меняет metadata.
-- Финальный Best-альбом содержит только текущие final selected.
+- Swipe Score статистически превосходит текущий technical-first baseline на held-out
+  pairwise, best-in-series и Top-K evaluation.
+- Personal Taste Profile улучшает согласие с тем же пользователем на отложенной выборке.
+- Пользователь проходит Choose → Analyze → Review → Save в нативном приложении.
+- Для каждого заметного решения доступны короткая причина, confidence и personal delta.
+- Higher-resolution, missing, failed и ambiguous assets защищены от ложного исключения.
+- Финальный Photos album в точности соответствует подтверждённому dry-run plan.
