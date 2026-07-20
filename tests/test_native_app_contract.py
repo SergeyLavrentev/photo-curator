@@ -14,7 +14,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "PHOTO_CURATOR_NATIVE_DEMO" in worker
     assert "PHOTO_CURATOR_PHOTOKIT_HELPER" in worker
     assert "PHOTO_CURATOR_PUBLISH_HELPER" in worker
-    assert "configured_photokit" in (ROOT / "src/photo_curator/native_worker.py").read_text()
+    native_worker = (ROOT / "src/photo_curator/native_worker.py").read_text()
+    assert "PhotoKitProvider.from_environment" in native_worker
+    assert "OSXPhotosProvider" not in native_worker
     assert "NSWorkspace.shared.open" not in app + worker
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker

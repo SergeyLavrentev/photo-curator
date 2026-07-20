@@ -1,5 +1,8 @@
 # Progress
 
+- 2026-07-20: native worker теперь fail-closed требует bundled PhotoKit helper:
+  неполная сборка больше не откатывается на `osxphotos` и не пытается
+  копировать `Photos.sqlite`.
 - 2026-07-20: S7 diversity vertical slice заменил placeholder `diversity_value=50`:
   финальный Keep-набор теперь получает versioned evidence из Apple Vision feature prints,
   семантически близкие четвёртые кадры переводятся в Review, а temporal fallback ограничивает

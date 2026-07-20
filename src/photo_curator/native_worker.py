@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from typing import TextIO
 
@@ -15,7 +14,6 @@ from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import SCHEMA_VERSION, migrate
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.local_provider import LocalAlbumsProvider
-from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
 from photo_curator.photos.photokit_provider import PhotoKitProvider
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.publisher import PhotosPublisher
@@ -232,13 +230,11 @@ def run_native_worker(
 
             base = FakePhotosProvider(paths.cache_dir / "demo-sources")
         else:
-            configured_photokit = os.environ.get("PHOTO_CURATOR_PHOTOKIT_HELPER")
-            if configured_photokit:
-                base = PhotoKitProvider.from_environment(paths)
-                if base is None:
-                    raise RuntimeError("Встроенный PhotoKit source helper отсутствует")
-            else:
-                base = OSXPhotosProvider()
+            base = PhotoKitProvider.from_environment(paths)
+            if base is None:
+                raise RuntimeError(
+                    "Встроенный PhotoKit source helper отсутствует; переустановите Photo Curator"
+                )
         provider = LocalAlbumsProvider(base, paths.data_dir / "local_albums")
         worker = NativeWorker(paths, provider=provider)
     for raw_line in input_stream:

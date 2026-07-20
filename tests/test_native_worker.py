@@ -4,6 +4,8 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from photo_curator.native_worker import NativeWorker, run_native_worker
 from tests.test_pipeline import build_pipeline
 
@@ -74,6 +76,16 @@ def test_jsonl_worker_can_boot_with_packaged_demo_provider(tmp_path: Path) -> No
     )
     response = json.loads(output_stream.getvalue().splitlines()[0])
     assert response["result"]["regular"][0]["photo_count"] == 12
+
+
+def test_native_worker_fails_closed_without_photokit_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, _, _, _ = build_pipeline(tmp_path)
+    monkeypatch.delenv("PHOTO_CURATOR_PHOTOKIT_HELPER", raising=False)
+
+    with pytest.raises(RuntimeError, match="PhotoKit source helper"):
+        run_native_worker(paths, input_stream=io.StringIO(), output_stream=io.StringIO())
 
 
 def test_native_worker_can_create_project_directly_from_shared_album(tmp_path: Path) -> None:
