@@ -1,6 +1,7 @@
 import base64
 import struct
 from pathlib import Path
+from threading import Event
 
 import pytest
 from PIL import Image, ImageDraw
@@ -299,3 +300,34 @@ def test_resume_from_duplicates_reuses_previews_and_metrics(tmp_path: Path) -> N
     assert after["selection_score"] is not None
     assert after["swipe_confidence"] >= 0
     assert after["score_components"]["generic_aesthetics"] >= 0
+
+
+def test_pipeline_cancels_cooperatively_and_resumes_from_cancelled_stage(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    entered = Event()
+    release = Event()
+    original_list_assets = provider.list_assets
+
+    def blocking_list_assets(album_id: str):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_list_assets(album_id)
+
+    provider.list_assets = blocking_list_assets
+    coordinator.start(project_id)
+    assert entered.wait(timeout=5)
+    assert coordinator.cancel(project_id)
+    release.set()
+    coordinator._futures[project_id].result(timeout=5)
+
+    with database_connection(paths.database) as connection:
+        project = repository.get_project(connection, project_id)
+        jobs = repository.latest_jobs(connection, project_id)
+    assert project["state"] == "interrupted"
+    assert jobs[-1]["stage"] == "inventory"
+    assert jobs[-1]["status"] == "cancelled"
+
+    provider.list_assets = original_list_assets
+    coordinator.run(project_id, from_stage="inventory")
+    with database_connection(paths.database) as connection:
+        assert repository.get_project(connection, project_id)["state"] == "ready"

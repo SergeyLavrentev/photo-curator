@@ -6,7 +6,7 @@ import os
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from threading import Lock, Semaphore
+from threading import Event, Lock, Semaphore
 
 from photo_curator.analysis.decision_engine import DecisionResult, decide_asset
 from photo_curator.analysis.diversity import diversity_evidence
@@ -32,6 +32,10 @@ STAGES = ("inventory", "previews", "metrics", "duplicates", "vision", "decisions
 PREVIEW_LIMIT = Semaphore(2)
 
 
+class PipelineCancelled(RuntimeError):
+    pass
+
+
 class PipelineCoordinator:
     def __init__(
         self,
@@ -49,6 +53,7 @@ class PipelineCoordinator:
             max_workers=min(4, os.cpu_count() or 2), thread_name_prefix="photo-curator"
         )
         self._futures: dict[str, Future[None]] = {}
+        self._cancel_events: dict[str, Event] = {}
         self._lock = Lock()
 
     def start(self, project_id: str, from_stage: str | None = None) -> str:
@@ -56,27 +61,55 @@ class PipelineCoordinator:
             current = self._futures.get(project_id)
             if current and not current.done():
                 raise RuntimeError("Pipeline is already running")
+            self._cancel_events[project_id] = Event()
             future = self._executor.submit(self.run, project_id, from_stage=from_stage)
             self._futures[project_id] = future
         return project_id
 
+    def cancel(self, project_id: str) -> bool:
+        with self._lock:
+            current = self._futures.get(project_id)
+            event = self._cancel_events.get(project_id)
+            if not current or current.done() or event is None:
+                return False
+            event.set()
+            return True
+
     def run(self, project_id: str, *, from_stage: str | None = None) -> None:
         start_index = STAGES.index(from_stage) if from_stage else 0
+        with self._lock:
+            cancel_event = self._cancel_events.setdefault(project_id, Event())
         try:
             with database_connection(self.database_path) as connection:
                 repository.set_project_state(connection, project_id, "running")
             for stage in STAGES[start_index:]:
+                self._check_cancelled(project_id)
                 LOGGER.info("Stage started project=%s stage=%s", project_id, stage)
                 getattr(self, f"_stage_{stage}")(project_id)
                 LOGGER.info("Stage completed project=%s stage=%s", project_id, stage)
             with database_connection(self.database_path) as connection:
                 repository.set_project_state(connection, project_id, "ready")
+        except PipelineCancelled:
+            LOGGER.info("Pipeline cancelled project=%s", project_id)
+            with database_connection(self.database_path) as connection:
+                repository.cancel_running_jobs(connection, project_id)
+                repository.set_project_state(connection, project_id, "interrupted")
         except Exception as error:
             LOGGER.exception("Pipeline failed for project %s", project_id)
             with database_connection(self.database_path) as connection:
                 repository.fail_running_jobs(connection, project_id, str(error))
                 repository.set_project_state(connection, project_id, "error")
             raise
+        finally:
+            with self._lock:
+                if self._cancel_events.get(project_id) is cancel_event:
+                    self._cancel_events.pop(project_id, None)
+
+    def _check_cancelled(self, project_id: str) -> None:
+        with self._lock:
+            event = self._cancel_events.get(project_id)
+        if event is not None and event.is_set():
+            raise PipelineCancelled("Pipeline cancellation requested")
 
     def _stage_inventory(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
@@ -85,6 +118,7 @@ class PipelineCoordinator:
         assets = [
             asset for asset in self.provider.list_assets(str(project["album_id"])) if asset.is_photo
         ]
+        self._check_cancelled(project_id)
         with database_connection(self.database_path) as connection:
             connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (len(assets), job_id))
             repository.upsert_assets(connection, project_id, assets)
@@ -110,6 +144,7 @@ class PipelineCoordinator:
         errors = warnings = 0
         cache = self.paths.cache_dir / project_id
         for index, row in enumerate(stored, start=1):
+            self._check_cancelled(project_id)
             asset_uuid = str(row["asset_uuid"])
             asset = current_assets.get(asset_uuid)
             render = resolve_source_render(asset) if asset else None
@@ -219,6 +254,7 @@ class PipelineCoordinator:
         errors = 0
         completed = len(ready) - len(pending)
         for index, asset in enumerate(pending, start=completed + 1):
+            self._check_cancelled(project_id)
             try:
                 image = load_normalized(Path(str(asset["review_path"])), max_dimension=1024)
                 metrics = technical_metrics(image)
@@ -293,6 +329,7 @@ class PipelineCoordinator:
             job_id = repository.create_job(connection, project_id, "duplicates", 0)
 
         def report_progress(processed: int, total: int) -> None:
+            self._check_cancelled(project_id)
             with database_connection(self.database_path) as connection:
                 connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (total, job_id))
                 repository.update_job(
@@ -340,6 +377,7 @@ class PipelineCoordinator:
             return
         errors = 0
         for index, asset in enumerate(assets, start=1):
+            self._check_cancelled(project_id)
             try:
                 result = analyze_faces(Path(str(asset["review_path"])))
                 with database_connection(self.database_path) as connection:
@@ -375,9 +413,11 @@ class PipelineCoordinator:
         self, project_id: str, job_id: str, assets: list[dict[str, object]]
     ) -> None:
         try:
+            self._check_cancelled(project_id)
             report = self.vision_engine.analyze(
                 [(str(asset["asset_uuid"]), Path(str(asset["review_path"]))) for asset in assets]
             )
+            self._check_cancelled(project_id)
         except (NativeVisionError, OSError, ValueError) as error:
             LOGGER.exception("Native Vision batch failed for %s", project_id)
             with database_connection(self.database_path) as connection:
@@ -428,6 +468,7 @@ class PipelineCoordinator:
         }
         errors = 0
         for index, asset in enumerate(assets, start=1):
+            self._check_cancelled(project_id)
             asset_uuid = str(asset["asset_uuid"])
             row = by_uuid[asset_uuid]
             raw_errors = row.get("errors")

@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: native pipeline lifecycle стал восстанавливаемым: worker startup
+  переводит оставшиеся running jobs в `interrupted`, resume начинает с того же
+  stage, а cooperative cancel проверяется между stages и в per-asset loops. SwiftUI
+  показывает явные кнопки Stop/Continue; cancel во время одного blocking
+  PhotoKit/Vision helper по-прежнему завершается после возврата helper.
 - 2026-07-20: S8 получил versioned `release-benchmark` для coordinator hot paths:
   на этом arm64 Mac median из трёх запусков составил 0.002/0.045/0.132 s для
   100/2 000/5 000 rows. Измеряются duplicate candidate reduction, Swipe Score,

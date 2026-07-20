@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from photo_curator.db import repository
+from photo_curator.db.connection import database_connection
 from photo_curator.native_worker import NativeWorker, run_native_worker
 from tests.test_pipeline import build_pipeline
 
@@ -141,3 +143,31 @@ def test_native_worker_rejects_unknown_resume_stage(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unknown pipeline stage"):
         worker.dispatch("start_analysis", {"project_id": project_id, "from_stage": "unknown"})
+
+
+def test_native_worker_marks_restart_interrupted_and_resumes_same_stage(tmp_path: Path) -> None:
+    paths, provider, _, project_id = build_pipeline(tmp_path)
+    with database_connection(paths.database) as connection:
+        repository.create_job(connection, project_id, "metrics", 12)
+        repository.set_project_state(connection, project_id, "running")
+
+    class RecordingCoordinator:
+        def __init__(self) -> None:
+            self.started = []
+
+        def start(self, received_project_id, from_stage=None):
+            self.started.append((received_project_id, from_stage))
+
+        def cancel(self, received_project_id):
+            return received_project_id == project_id
+
+    coordinator = RecordingCoordinator()
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    state = worker.dispatch("project", {"project_id": project_id})
+
+    assert state["project"]["state"] == "interrupted"
+    assert state["jobs"][-1]["status"] == "interrupted"
+    resumed = worker.dispatch("resume_analysis", {"project_id": project_id})
+    assert resumed["from_stage"] == "metrics"
+    assert coordinator.started == [(project_id, "metrics")]
+    assert worker.dispatch("cancel_analysis", {"project_id": project_id})["status"] == "cancelling"

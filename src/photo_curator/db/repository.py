@@ -32,6 +32,18 @@ def mark_running_jobs_interrupted(connection: sqlite3.Connection) -> int:
     return cursor.rowcount
 
 
+def cancel_running_jobs(connection: sqlite3.Connection, project_id: str) -> int:
+    cursor = connection.execute(
+        """
+        UPDATE jobs
+        SET status='cancelled', current_message='Анализ остановлен', finished_at=?
+        WHERE project_id=? AND status='running'
+        """,
+        (utc_now(), project_id),
+    )
+    return cursor.rowcount
+
+
 def mark_running_shared_copies_interrupted(connection: sqlite3.Connection) -> int:
     return connection.execute(
         """

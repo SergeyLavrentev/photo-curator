@@ -26,6 +26,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert '.keyboardShortcut("1", modifiers: [])' in app
     assert ".keyboardShortcut(.space, modifiers: [])" in app
     assert "undoLastDecision" in app
+    assert 'call("resume_analysis"' in app
+    assert 'call("cancel_analysis"' in app
+    assert "Продолжить с прерванного этапа" in app
     assert "UserDefaults.standard" in app
     assert ".accessibilityHint" in app
     assert "NSWorkspace.shared.open" not in app + worker

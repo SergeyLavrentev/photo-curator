@@ -52,6 +52,7 @@ class NativeWorker:
         )
         with database_connection(paths.database) as connection:
             migrate(connection)
+            repository.mark_running_jobs_interrupted(connection)
 
     def dispatch(self, method: str, params: dict[str, object]) -> object:
         handler = getattr(self, f"_handle_{method}", None)
@@ -123,6 +124,29 @@ class NativeWorker:
             repository.get_project(connection, project_id)
         self.coordinator.start(project_id, from_stage=from_stage)
         return {"status": "started", "project_id": project_id}
+
+    def _handle_resume_analysis(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            repository.get_project(connection, project_id)
+            jobs = repository.latest_jobs(connection, project_id)
+        interrupted = next(
+            (
+                job
+                for job in reversed(jobs)
+                if job["status"] in {"interrupted", "cancelled", "error"}
+            ),
+            None,
+        )
+        from_stage = str(interrupted["stage"]) if interrupted else None
+        self.coordinator.start(project_id, from_stage=from_stage)
+        return {"status": "resumed", "project_id": project_id, "from_stage": from_stage}
+
+    def _handle_cancel_analysis(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        if not self.coordinator.cancel(project_id):
+            raise NativeWorkerError("Активный анализ не найден")
+        return {"status": "cancelling", "project_id": project_id}
 
     def _handle_project(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")

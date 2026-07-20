@@ -49,6 +49,7 @@ final class AppModel: ObservableObject {
         if let active = jobs.last(where: { $0.status == "running" }) {
             return active.message.isEmpty ? stageName(active.stage) : active.message
         }
+        if project?.state == "interrupted" { return "Анализ остановлен — его можно продолжить" }
         if project?.state == "ready" { return "Анализ завершён — подборка готова к проверке" }
         return "Подготовка анализа"
     }
@@ -98,6 +99,32 @@ final class AppModel: ObservableObject {
                 isBusy = false
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    func resumeAnalysis() {
+        guard let project else { return }
+        isBusy = true
+        errorMessage = nil
+        Task {
+            do {
+                _ = try await call("resume_analysis", ["project_id": project.id])
+                isBusy = false
+                try await Task.sleep(nanoseconds: 200_000_000)
+                startPolling(projectID: project.id)
+            } catch {
+                isBusy = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelAnalysis() {
+        guard let project else { return }
+        Task {
+            do {
+                _ = try await call("cancel_analysis", ["project_id": project.id])
+            } catch { errorMessage = error.localizedDescription }
         }
     }
 
@@ -240,7 +267,9 @@ final class AppModel: ObservableObject {
             }
             if let taste = rawTaste as? [String: Any] { applyTasteProfile(taste) }
             let projects = (rawProjects as? [[String: Any]] ?? []).compactMap(ProjectItem.init)
-            if let restored = projects.first(where: { $0.state == "ready" || $0.state == "running" }) {
+            if let restored = projects.first(where: {
+                $0.state == "ready" || $0.state == "running" || $0.state == "interrupted"
+            }) {
                 project = restored
                 if (albums + sharedAlbums).contains(where: { $0.id == restored.albumID }) {
                     selectedAlbumID = restored.albumID
@@ -273,6 +302,7 @@ final class AppModel: ObservableObject {
                         errorMessage = "Анализ завершился с ошибкой. Детали сохранены в локальном журнале."
                         return
                     }
+                    if updated.state == "interrupted" { return }
                     try await Task.sleep(nanoseconds: 1_000_000_000)
                 } catch is CancellationError {
                     return
@@ -616,16 +646,36 @@ struct RootView: View {
                     }
                 }
             }
-            Button {
-                model.createAndAnalyze()
-            } label: {
-                Label(model.project == nil ? "Начать анализ" : "Создать новый анализ", systemImage: "play.fill")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+            if model.project?.state == "interrupted" {
+                Button {
+                    model.resumeAnalysis()
+                } label: {
+                    Label("Продолжить с прерванного этапа", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity).padding(.vertical, 8)
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                .disabled(model.isBusy)
+            } else {
+                Button {
+                    model.createAndAnalyze()
+                } label: {
+                    Label(model.project == nil ? "Начать анализ" : "Создать новый анализ", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.isBusy || model.selectedAlbumID.isEmpty || model.project?.state == "running")
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(model.isBusy || model.selectedAlbumID.isEmpty || model.project?.state == "running")
+            if model.project?.state == "running" {
+                Button(role: .destructive) {
+                    model.cancelAnalysis()
+                } label: {
+                    Label("Остановить анализ", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
         }
     }
 
