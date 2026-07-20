@@ -12,6 +12,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "worker.request(method:" in app
     assert '"native-worker", "--demo"' in worker
     assert "PHOTO_CURATOR_NATIVE_DEMO" in worker
+    assert "PHOTO_CURATOR_PHOTOKIT_HELPER" in worker
+    assert "PHOTO_CURATOR_PUBLISH_HELPER" in worker
+    assert "configured_photokit" in (ROOT / "src/photo_curator/native_worker.py").read_text()
     assert "NSWorkspace.shared.open" not in app + worker
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker
@@ -33,3 +36,16 @@ def test_frozen_worker_includes_osxphotos_uti_runtime_data() -> None:
     assert 'collect_data_files("photoscript")' in spec
     assert 'collect_data_files("osxmetadata")' in spec
     assert 'collect_submodules("bitstring")' in spec
+
+
+def test_native_bundle_compiles_public_photokit_source_helper() -> None:
+    build = (ROOT / "packaging/macos/build_app.sh").read_text()
+    helper = (ROOT / "src/photo_curator/photos/native/photo_curator_photokit.swift").read_text()
+
+    assert "photo_curator_photokit.swift" in build
+    assert "-framework Photos" in build
+    assert "PhotoCuratorSource-Info.plist" in build
+    assert "PHAssetCollection.fetchAssetCollections" in helper
+    assert "PHImageManager.default().requestImage" in helper
+    assert "Photos.sqlite" not in helper
+    assert "photo_curator_publish.swift" in build

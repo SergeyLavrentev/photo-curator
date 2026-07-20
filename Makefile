@@ -51,6 +51,8 @@ verify-app:
 	test -f "$(APP)/Contents/Resources/backend/_internal/photoscript/photoscript.applescript"
 	test -f "$(APP)/Contents/Resources/backend/_internal/osxmetadata/attribute_data/image_attributes.json"
 	test -x "$(APP)/Contents/Resources/native/photo-curator-vision"
+	test -x "$(APP)/Contents/Resources/native/photo-curator-photokit"
+	test -x "$(APP)/Contents/Resources/native/photo-curator-publish"
 
 install: app
 	mkdir -p "$(INSTALL_DIR)"

@@ -74,3 +74,16 @@ def test_jsonl_worker_can_boot_with_packaged_demo_provider(tmp_path: Path) -> No
     )
     response = json.loads(output_stream.getvalue().splitlines()[0])
     assert response["result"]["regular"][0]["photo_count"] == 12
+
+
+def test_native_worker_can_create_project_directly_from_shared_album(tmp_path: Path) -> None:
+    paths, provider, coordinator, _ = build_pipeline(tmp_path)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    created = worker.dispatch(
+        "create_project",
+        {"album_id": "demo-shared-album", "selection_density": "compact"},
+    )
+
+    assert created["album_id"] == "demo-shared-album"
+    assert created["album_name"] == "Семейный Shared Album"

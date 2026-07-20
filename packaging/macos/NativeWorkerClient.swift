@@ -122,6 +122,10 @@ final class NativeWorkerClient: @unchecked Sendable {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         environment["PYTHONUNBUFFERED"] = "1"
+        environment["PHOTO_CURATOR_PHOTOKIT_HELPER"] = resources
+            .appendingPathComponent("native/photo-curator-photokit").path
+        environment["PHOTO_CURATOR_PUBLISH_HELPER"] = resources
+            .appendingPathComponent("native/photo-curator-publish").path
         process.environment = environment
         do {
             try process.run()

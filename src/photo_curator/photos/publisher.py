@@ -159,7 +159,10 @@ class PhotosPublisher:
                 if kind == "best"
                 else "Нет подтверждённых reject-assets"
             )
-        if not self.capability_available:
+        if self._is_photokit_project(project):
+            if not self.local_importer.capability_available:
+                blockers.append("Нативная публикация через PhotoKit недоступна")
+        elif not self.capability_available:
             blockers.append("osxphotos CLI недоступен")
         return PublishValidation(sorted(accepted), sorted(removed), blockers, warnings)
 
@@ -183,7 +186,7 @@ class PhotosPublisher:
                 uuid_file=str(uuid_file),
                 kind=kind,
             )
-        if self._is_local_project(project):
+        if self._is_local_project(project) or self._is_photokit_project(project):
             result = CommandResult(
                 ["photokit-publish", "--dry-run"],
                 0,
@@ -271,6 +274,20 @@ class PhotosPublisher:
                 )
             except Exception as error:
                 result = CommandResult(["photokit-publish"], 1, "", str(error)[:500])
+        elif self._is_photokit_project(project):
+            try:
+                native_result = self.local_importer.publish_assets(
+                    str(publish["album_name"]), prepared
+                )
+                destination_album_id = str(native_result["album_identifier"])
+                result = CommandResult(
+                    ["photokit-publish"],
+                    0,
+                    json.dumps(native_result, ensure_ascii=False),
+                    "",
+                )
+            except Exception as error:
+                result = CommandResult(["photokit-publish"], 1, "", str(error)[:500])
         else:
             result = self.runner(
                 self._command(uuid_file, str(publish["album_name"]), dry_run=False)
@@ -296,6 +313,10 @@ class PhotosPublisher:
     @staticmethod
     def _is_local_project(project: dict[str, object]) -> bool:
         return str(project["album_id"]).startswith("local-")
+
+    @staticmethod
+    def _is_photokit_project(project: dict[str, object]) -> bool:
+        return str(project.get("library_path") or "").startswith("photokit://")
 
     def _validate_local(self, assets: list[dict[str, object]], kind: str) -> PublishValidation:
         if kind != "best":

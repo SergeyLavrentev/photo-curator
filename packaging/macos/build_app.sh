@@ -41,6 +41,29 @@ xcrun swiftc \
   -o "$RESOURCES/native/photo-curator-vision"
 xcrun swiftc \
   -swift-version 5 \
+  -O \
+  -target "$(uname -m)-apple-macosx13.0" \
+  -framework Photos \
+  -framework AppKit \
+  "$PROJECT_ROOT/src/photo_curator/photos/native/photo_curator_photokit.swift" \
+  -o "$RESOURCES/native/photo-curator-photokit" \
+  -Xlinker -sectcreate \
+  -Xlinker __TEXT \
+  -Xlinker __info_plist \
+  -Xlinker "$PROJECT_ROOT/src/photo_curator/photos/native/PhotoCuratorSource-Info.plist"
+xcrun swiftc \
+  -swift-version 5 \
+  -O \
+  -target "$(uname -m)-apple-macosx13.0" \
+  -framework Photos \
+  "$PROJECT_ROOT/src/photo_curator/photos/native/photo_curator_publish.swift" \
+  -o "$RESOURCES/native/photo-curator-publish" \
+  -Xlinker -sectcreate \
+  -Xlinker __TEXT \
+  -Xlinker __info_plist \
+  -Xlinker "$PROJECT_ROOT/src/photo_curator/photos/native/PhotoCuratorPublish-Info.plist"
+xcrun swiftc \
+  -swift-version 5 \
   -parse-as-library \
   -O \
   -target "$(uname -m)-apple-macosx13.0" \

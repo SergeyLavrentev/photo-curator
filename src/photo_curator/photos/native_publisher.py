@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -28,8 +29,14 @@ class NativePhotosImporter:
         self.paths = paths
         self.runner = runner
         self.enabled = enabled
+        bundled = os.environ.get("PHOTO_CURATOR_PUBLISH_HELPER")
+        self.bundled_executable = Path(bundled) if bundled else None
         self.swiftc = find_executable("swiftc") or _xcrun_swiftc(runner)
-        self.executable = paths.data_dir / "native" / "photo-curator-publish-helper"
+        self.executable = (
+            self.bundled_executable
+            if self.bundled_executable
+            else paths.data_dir / "native" / "photo-curator-publish-helper"
+        )
         self.digest_file = self.executable.with_suffix(".sha256")
         self._capability: bool | None = None
 
@@ -48,16 +55,23 @@ class NativePhotosImporter:
         return self._capability
 
     def publish(self, album_name: str, files: list[Path]) -> dict[str, object]:
+        return self._publish_request(
+            {"album_name": album_name, "files": [str(path) for path in files]}
+        )
+
+    def publish_assets(self, album_name: str, asset_identifiers: list[str]) -> dict[str, object]:
+        return self._publish_request(
+            {"album_name": album_name, "asset_identifiers": asset_identifiers}
+        )
+
+    def _publish_request(self, payload: dict[str, object]) -> dict[str, object]:
         if not self.capability_available:
             raise ValueError("Нативная публикация в Photos недоступна")
         request_dir = self.paths.cache_dir / "_native_publish"
         request_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         request_path = request_dir / f"{uuid.uuid4()}.json"
         request_path.write_text(
-            json.dumps(
-                {"album_name": album_name, "files": [str(path) for path in files]},
-                ensure_ascii=False,
-            ),
+            json.dumps(payload, ensure_ascii=False),
             encoding="utf-8",
         )
         try:
@@ -73,6 +87,10 @@ class NativePhotosImporter:
             raise ValueError("PhotoKit helper вернул некорректный результат") from error
 
     def _ensure_compiled(self) -> None:
+        if self.bundled_executable:
+            if not self.bundled_executable.is_file():
+                raise RuntimeError("Встроенный PhotoKit publisher отсутствует")
+            return
         if not self.swiftc or not SOURCE.is_file() or not INFO_PLIST.is_file():
             raise RuntimeError("Swift/PhotoKit toolchain недоступен")
         digest = hashlib.sha256(SOURCE.read_bytes() + INFO_PLIST.read_bytes()).hexdigest()

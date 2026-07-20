@@ -9,8 +9,8 @@
 Новый продуктовый план и критерии готовности находятся в [`ROADMAP.md`](ROADMAP.md).
 
 > Python/web-реализация остаётся переходным диагностическим baseline. Product logic уже
-> доступна нативному клиенту через локальный stdin/stdout JSONL worker без браузера,
-> HTTP и localhost; полноценный SwiftUI workflow ещё не считается реализованным.
+> доступна полноценному SwiftUI-клиенту через локальный stdin/stdout JSONL worker без
+> браузера, HTTP и localhost.
 
 ## Быстрый запуск
 
@@ -51,9 +51,8 @@ uv run photo-curator
 
 Для воспроизводимой проверки native GUI без Photos Library сборку можно запустить из
 терминала с `PHOTO_CURATOR_NATIVE_DEMO=1`; это test-only режим с 12 generated images.
-Реальная SwiftUI-сборка пока читает source через bundled read-only osxphotos adapter.
-Нативный PhotoKit intake — отдельный S6 gate и нужен для удаления этой зависимости и
-ограничений filesystem-доступа к Photos Library.
+Реальная SwiftUI-сборка читает обычные и общие альбомы через встроенный публичный
+PhotoKit helper. Она не открывает `Photos.sqlite` и не требует Full Disk Access.
 
 ## Workflow
 
@@ -67,15 +66,11 @@ uv run photo-curator
 Плотность подборки, технические стадии, оценки 0–100 и причины доступны по запросу,
 но не перегружают основной экран.
 
-Shared Albums отображаются отдельным безопасным intake workflow: первые N, отмеченные
-на странице или все доступные фотографии. После плана и явного подтверждения сервис
-копирует доступные JPEG/PNG/HEIC renders в собственное persistent-хранилище и показывает
-их как локальный альбом в обычном селекторе проекта. Photos Library и Shared Album не
-меняются. После проверки результата сервис может нативно импортировать только принятый
-Best-набор в новый обычный альбом Photos; это отдельная операция после dry-run и
-подтверждения. Видео пропускаются, а Shared renders не называются originals.
-При удалении единственного отбора, использующего Shared snapshot, сервис удаляет также
-его локальные копии и manifest. Фотографии в Photos при этом не затрагиваются.
+Shared Albums отображаются прямо в нативном селекторе. Для анализа PhotoKit создаёт
+только локальные JPEG review-renders в cache приложения; Photos Library и Shared Album
+не меняются. После проверки сервис добавляет local identifiers одобренного Best-набора
+в новый обычный альбом Photos; это отдельная операция после dry-run и подтверждения.
+Видео пропускаются, а Shared renders не называются originals.
 Приложение не пишет напрямую в Photos SQLite, не меняет Favorite/keywords/originals и
 не содержит API удаления фото.
 

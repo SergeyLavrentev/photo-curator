@@ -1,5 +1,11 @@
 # Progress
 
+- 2026-07-20: S6 native PhotoKit source vertical slice заменил filesystem-доступ
+  установленного приложения к `Photos.sqlite`: обычные и Shared albums читаются через
+  публичный PhotoKit, review-renders сохраняются только в service cache, source assets
+  revalidate по local identifiers, а одобренный Best добавляется в Photos тем же публичным
+  API. Реальная установленная сборка показала `Cape Town 2024 · 394 фото`, не открыла
+  TCP listener и завершила GUI+worker по Cmd+Q. Реальный publish apply намеренно не выполнен.
 - 2026-07-20: первый S5 native workflow заменил browser launcher: SwiftUI
   NavigationSplitView, четыре явных шага, native progress, LazyVGrid review, компактные
   score/reasons, ручные decisions и подтверждение publish. Runtime не открывает порт;
@@ -50,7 +56,7 @@ personalized Swipe Score, Apple-native analysis and a native user-confirmed Best
 - [ ] S3 — validated Core ML enrichment and hardware evidence
 - [ ] S4 — local Personal Taste Profile
 - [ ] S5 — native SwiftUI/AppKit workflow
-- [ ] S6 — native PhotoKit source and publish integration
+- [ ] S6 — native PhotoKit source and publish integration (код готов; real apply gate открыт)
 - [ ] S7 — personal, explainable and diverse review experience
 - [ ] S8 — signed native release gate
 
@@ -93,10 +99,12 @@ ruff format / check                            — passed
 Shared Album disk snapshot + manifest           — implemented; Photos Library writes removed
 local album provider → project API               — covered end-to-end in tests
 disk Best → Photos native PhotoKit publish       — implemented; dry-run + explicit approval gated
-native SwiftUI app + Vision helper               — compiles on this Mac; real apply not run
+native SwiftUI app + Vision/PhotoKit helpers      — signed bundle verified; real apply not run
+real native PhotoKit album inventory              — Cape Town 2024 · 394; no Photos.sqlite access
+native app network surface                        — no TCP listener; Cmd+Q stopped GUI + worker
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 115 passed
+pytest                                           — 120 passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

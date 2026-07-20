@@ -142,7 +142,9 @@ final class AppModel: ObservableObject {
             if let groups = rawAlbums as? [String: Any] {
                 albums = (groups["regular"] as? [[String: Any]] ?? []).compactMap(AlbumItem.init)
                 sharedAlbums = (groups["shared"] as? [[String: Any]] ?? []).compactMap(AlbumItem.init)
-                if selectedAlbumID.isEmpty { selectedAlbumID = albums.first?.id ?? "" }
+                if selectedAlbumID.isEmpty {
+                    selectedAlbumID = albums.first?.id ?? sharedAlbums.first?.id ?? ""
+                }
             }
             if let taste = rawTaste as? [String: Any] {
                 tasteExamples = taste["preference_count"] as? Int ?? 0
@@ -345,8 +347,17 @@ struct RootView: View {
                 }
             } else {
                 Picker("Альбом", selection: $model.selectedAlbumID) {
-                    ForEach(model.albums) { album in
-                        Text("\(album.name) · \(album.photoCount) фото").tag(album.id)
+                    Section("Мои альбомы") {
+                        ForEach(model.albums) { album in
+                            Text("\(album.name) · \(album.photoCount) фото").tag(album.id)
+                        }
+                    }
+                    if !model.sharedAlbums.isEmpty {
+                        Section("Общие альбомы") {
+                            ForEach(model.sharedAlbums) { album in
+                                Text("\(album.name) · \(album.photoCount) фото").tag(album.id)
+                            }
+                        }
                     }
                 }
                 .pickerStyle(.menu)
@@ -359,7 +370,7 @@ struct RootView: View {
                 .pickerStyle(.segmented)
             }
             if !model.sharedAlbums.isEmpty {
-                Label("Общие альбомы появятся здесь после нативного PhotoKit intake в S6.", systemImage: "person.2")
+                Label("Для общего альбома PhotoKit подготовит локальные review‑копии; источник не изменится.", systemImage: "person.2")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

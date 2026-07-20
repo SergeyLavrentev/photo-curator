@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import TextIO
 
@@ -15,6 +16,7 @@ from photo_curator.db.migrations import SCHEMA_VERSION, migrate
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
+from photo_curator.photos.photokit_provider import PhotoKitProvider
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.publisher import PhotosPublisher
 from photo_curator.pipeline.coordinator import PipelineCoordinator
@@ -81,23 +83,36 @@ class NativeWorker:
 
     def _handle_create_project(self, params: dict[str, object]) -> dict[str, object]:
         album_id = _required_string(params, "album_id")
-        albums = {album.id: album for album in self.provider.list_regular_albums()}
+        albums = {
+            album.id: album
+            for album in [
+                *self.provider.list_regular_albums(),
+                *self.provider.list_shared_albums(),
+            ]
+        }
         album = albums.get(album_id)
         if not album:
-            raise NativeWorkerError("Можно выбрать только поддерживаемый обычный альбом")
+            raise NativeWorkerError("Выбранный альбом больше недоступен")
         density = str(params.get("selection_density") or "balanced")
         if density not in {"compact", "balanced", "broad"}:
             raise NativeWorkerError("Unknown selection density")
         name = str(params.get("name") or "").strip() or album.name
         with database_connection(self.paths.database) as connection:
             shared_copy = repository.completed_shared_copy_for_album(connection, album.id)
+            library = self.provider.get_current_library()
             project_id = repository.create_project(
                 connection,
                 name=name,
-                library=self.provider.get_current_library(),
+                library=library,
                 album=album,
                 selection_density=density,
-                source_provenance="service_shared_copy" if shared_copy else "regular_album",
+                source_provenance=(
+                    "service_shared_copy"
+                    if shared_copy
+                    else "photokit"
+                    if library.library_path.startswith("photokit://")
+                    else "regular_album"
+                ),
             )
             return _project_payload(repository.get_project(connection, project_id))
 
@@ -217,7 +232,13 @@ def run_native_worker(
 
             base = FakePhotosProvider(paths.cache_dir / "demo-sources")
         else:
-            base = OSXPhotosProvider()
+            configured_photokit = os.environ.get("PHOTO_CURATOR_PHOTOKIT_HELPER")
+            if configured_photokit:
+                base = PhotoKitProvider.from_environment(paths)
+                if base is None:
+                    raise RuntimeError("Встроенный PhotoKit source helper отсутствует")
+            else:
+                base = OSXPhotosProvider()
         provider = LocalAlbumsProvider(base, paths.data_dir / "local_albums")
         worker = NativeWorker(paths, provider=provider)
     for raw_line in input_stream:

@@ -3,7 +3,8 @@ import Photos
 
 struct PublishRequest: Decodable {
     let album_name: String
-    let files: [String]
+    let files: [String]?
+    let asset_identifiers: [String]?
 }
 
 struct PublishResponse: Encodable {
@@ -31,14 +32,23 @@ enum PublishError: LocalizedError {
 }
 
 func requestAuthorization() throws {
-    let semaphore = DispatchSemaphore(value: 0)
     var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     if status == .notDetermined {
+        var finished = false
+        let lock = NSLock()
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
+            lock.lock()
             status = newStatus
-            semaphore.signal()
+            finished = true
+            lock.unlock()
         }
-        semaphore.wait()
+        while true {
+            lock.lock()
+            let done = finished
+            lock.unlock()
+            if done { break }
+            _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
+        }
     }
     guard status == .authorized || status == .limited else {
         throw PublishError.authorizationDenied
@@ -87,10 +97,36 @@ func existingFilenames(in album: PHAssetCollection) -> Set<String> {
 func publish(_ request: PublishRequest) throws -> PublishResponse {
     try requestAuthorization()
     let album = try fetchAlbum(named: request.album_name) ?? createAlbum(named: request.album_name)
+    if let identifiers = request.asset_identifiers {
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        var assetsByIdentifier: [String: PHAsset] = [:]
+        fetched.enumerateObjects { asset, _, _ in assetsByIdentifier[asset.localIdentifier] = asset }
+        guard assetsByIdentifier.count == Set(identifiers).count else {
+            throw PublishError.incompleteImport
+        }
+        let existingFetch = PHAsset.fetchAssets(in: album, options: nil)
+        var existingIdentifiers = Set<String>()
+        existingFetch.enumerateObjects { asset, _, _ in
+            existingIdentifiers.insert(asset.localIdentifier)
+        }
+        let pending = identifiers.compactMap {
+            existingIdentifiers.contains($0) ? nil : assetsByIdentifier[$0]
+        }
+        if !pending.isEmpty {
+            try PHPhotoLibrary.shared().performChangesAndWait {
+                PHAssetCollectionChangeRequest(for: album)?.addAssets(pending as NSArray)
+            }
+        }
+        return PublishResponse(
+            album_identifier: album.localIdentifier,
+            imported: pending.count,
+            reused: identifiers.count - pending.count
+        )
+    }
     var existing = existingFilenames(in: album)
     var imported = 0
     var reused = 0
-    let urls = request.files.map { URL(fileURLWithPath: $0) }
+    let urls = (request.files ?? []).map { URL(fileURLWithPath: $0) }
     for start in stride(from: 0, to: urls.count, by: 50) {
         let end = min(start + 50, urls.count)
         let batch = Array(urls[start..<end])
