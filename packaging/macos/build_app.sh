@@ -69,6 +69,7 @@ xcrun swiftc \
   -target "$(uname -m)-apple-macosx13.0" \
   -framework SwiftUI \
   -framework AppKit \
+  -framework Photos \
   -framework QuickLookUI \
   "$SCRIPT_DIR/NativeWorkerClient.swift" \
   "$SCRIPT_DIR/PhotoCuratorModels.swift" \
@@ -94,12 +95,25 @@ done
 /usr/bin/iconutil -c icns "$ICONSET" -o "$RESOURCES/PhotoCurator.icns"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
-  /usr/bin/codesign --force --deep --sign - "$APP"
+  SIGN_OPTIONS=(--force --sign -)
 elif [[ "$SIGN_IDENTITY" == "Photo Curator Local Development" ]]; then
-  /usr/bin/codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP"
+  SIGN_OPTIONS=(--force --options runtime --sign "$SIGN_IDENTITY")
 else
-  /usr/bin/codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+  SIGN_OPTIONS=(--force --options runtime --timestamp --sign "$SIGN_IDENTITY")
 fi
+
+
+# Plain executables under Resources are not reliably discovered by `codesign --deep`.
+# Sign them first so TCC can bind Photos access to their embedded identities.
+for executable in \
+  "$RESOURCES/native/photo-curator-vision" \
+  "$RESOURCES/native/photo-curator-photokit" \
+  "$RESOURCES/native/photo-curator-publish" \
+  "$CONTENTS/MacOS/PhotoCurator"; do
+  /usr/bin/codesign "${SIGN_OPTIONS[@]}" "$executable"
+done
+/usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep "$RESOURCES/backend/photo-curator-backend"
+/usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep "$APP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
 echo "$APP"

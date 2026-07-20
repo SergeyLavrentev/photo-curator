@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Photos
 import QuickLookUI
 import SwiftUI
 
@@ -55,7 +56,12 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
-        Task { await bootstrap() }
+        Task {
+            if ProcessInfo.processInfo.environment["PHOTO_CURATOR_NATIVE_DEMO"] != "1" {
+                guard await requestPhotoLibraryAccess() else { return }
+            }
+            await bootstrap()
+        }
     }
 
     func shutdown() {
@@ -280,6 +286,26 @@ final class AppModel: ObservableObject {
             workerStatus = "Ошибка: \(error.localizedDescription)"
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func requestPhotoLibraryAccess() async -> Bool {
+        workerStatus = "Запрашиваем доступ к Apple Photos…"
+        let status: PHAuthorizationStatus
+        if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
+            status = await withCheckedContinuation { continuation in
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { value in
+                    continuation.resume(returning: value)
+                }
+            }
+        } else {
+            status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        }
+        guard status == .authorized || status == .limited else {
+            workerStatus = "Нет доступа к Apple Photos"
+            errorMessage = "Разрешите Photo Curator доступ к Фото в Системных настройках → Конфиденциальность и безопасность → Фото."
+            return false
+        }
+        return true
     }
 
     private func startPolling(projectID: String) {

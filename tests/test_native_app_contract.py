@@ -36,6 +36,15 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "127.0.0.1" not in app + worker
 
 
+def test_native_app_requests_photos_permission_before_worker_bootstrap() -> None:
+    app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
+
+    assert "import Photos" in app
+    assert "requestPhotoLibraryAccess" in app
+    assert "PHPhotoLibrary.requestAuthorization(for: .readWrite)" in app
+    assert "guard await requestPhotoLibraryAccess() else { return }" in app
+
+
 def test_native_workflow_keeps_publish_behind_dry_run_and_confirmation() -> None:
     app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
 
@@ -67,6 +76,8 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "Photos.sqlite" not in helper
     assert "photo_curator_publish.swift" in build
     assert "-framework QuickLookUI" in build
+    assert '"$RESOURCES/native/photo-curator-photokit"' in build
+    assert '/usr/bin/codesign "${SIGN_OPTIONS[@]}" "$executable"' in build
 
 
 def test_local_signing_identity_is_stable_and_optional() -> None:
