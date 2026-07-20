@@ -281,6 +281,10 @@ class NativeWorker:
             examples = repository.list_preference_examples(connection)
         return build_native_quality_evidence(project_id, assets, examples)
 
+    def _handle_quality_status(self, params: dict[str, object]) -> dict[str, object]:
+        evidence = self._handle_quality_export(params)
+        return dict(evidence["summary"])
+
     def _handle_quality_top_k(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         asset_uuid = _required_string(params, "asset_uuid")

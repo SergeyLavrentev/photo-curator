@@ -8,6 +8,7 @@
   от prediction state. Произвольная multi-selection размечает и пропущенные алгоритмом серии,
   не завышая recall; серия готова только после manual decisions всех её кадров. Заполненные
   labels и frozen score snapshot можно импортировать обратно и получить PASS/FAIL без CLI.
+  Settings в реальном времени показывает полноту каждого структурного quality gate.
 - 2026-07-20: native Personal Taste больше не обучается и оценивается на одних данных:
   первые три выбора server-assigned calibration, затем blind held-out/calibration
   чередуются независимо от client params. Held-out выбор не делает готовую модель stale;

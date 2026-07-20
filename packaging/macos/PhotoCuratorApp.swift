@@ -32,6 +32,11 @@ final class AppModel: ObservableObject {
     @Published var tasteMessage: String?
     @Published var qualityMessage: String?
     @Published var qualitySeriesSelection: Set<String> = []
+    @Published var qualityManualLabels = 0
+    @Published var qualityHeldOutPairs = 0
+    @Published var qualityTopKCount = 0
+    @Published var qualitySeriesCount = 0
+    @Published var qualityReleaseReady = false
     @Published var isTasteBusy = false
     @Published var selectedPhotoID: String?
     @Published var photoAccessNeedsAction = false
@@ -263,6 +268,11 @@ final class AppModel: ObservableObject {
         tasteMessage = nil
         qualitySeriesSelection.removeAll()
         qualityMessage = nil
+        qualityManualLabels = 0
+        qualityHeldOutPairs = 0
+        qualityTopKCount = 0
+        qualitySeriesCount = 0
+        qualityReleaseReady = false
         publishPlan = nil
         Task {
             do {
@@ -327,6 +337,7 @@ final class AppModel: ObservableObject {
                         decisionHistory.append(DecisionUndo(photoID: photoID, previous: previousManual))
                     }
                 }
+                await loadQualityStatus(projectID: project.id)
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -442,6 +453,7 @@ final class AppModel: ObservableObject {
                 {
                     applyTasteProfile(profile)
                 }
+                await loadQualityStatus(projectID: project.id)
                 if tasteCalibrationExamples >= 3 {
                     let trained = try await call("taste_train")
                     if let profile = trained as? [String: Any] { applyTasteProfile(profile) }
@@ -606,6 +618,7 @@ final class AppModel: ObservableObject {
                 selectedPhotoID = photos.first?.id
             }
             await loadTastePair(projectID: projectID)
+            await loadQualityStatus(projectID: projectID)
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -645,6 +658,20 @@ final class AppModel: ObservableObject {
         tasteCalibrationExamples = value["calibration_count"] as? Int ?? tasteCalibrationExamples
         tasteHeldOutExamples = value["held_out_count"] as? Int ?? tasteHeldOutExamples
         tasteStatus = value["status"] as? String ?? "Не настроен"
+    }
+
+    private func loadQualityStatus(projectID: String) async {
+        do {
+            let result = try await call("quality_status", ["project_id": projectID])
+            guard let value = result as? [String: Any] else {
+                throw NativeWorkerClientError.invalidResponse
+            }
+            qualityManualLabels = value["manual_labels"] as? Int ?? 0
+            qualityHeldOutPairs = value["held_out_pairs"] as? Int ?? 0
+            qualityTopKCount = value["expected_top_k"] as? Int ?? 0
+            qualitySeriesCount = value["human_duplicate_groups"] as? Int ?? 0
+            qualityReleaseReady = value["release_ready"] as? Bool ?? false
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func refreshDecisionsForTaste() async {
@@ -1271,6 +1298,15 @@ struct SettingsView: View {
                 Text("Экспортирует только ваши явные решения и A/B-сравнения вместе с замороженным Swipe Score.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                LabeledContent("Ручные решения", value: "\(model.qualityManualLabels) / 50–100")
+                LabeledContent("Проверочные A/B", value: "\(model.qualityHeldOutPairs) / 10+")
+                LabeledContent("Top‑K", value: "\(model.qualityTopKCount) / 5+")
+                LabeledContent("Подтверждённые серии", value: "\(model.qualitySeriesCount) / 1+")
+                Label(
+                    model.qualityReleaseReady ? "Структура corpus готова" : "Разметка ещё не завершена",
+                    systemImage: model.qualityReleaseReady ? "checkmark.seal.fill" : "hourglass"
+                )
+                .foregroundStyle(model.qualityReleaseReady ? .green : .secondary)
                 Button("Экспортировать проверочный набор…") {
                     model.exportQualityEvidence()
                 }

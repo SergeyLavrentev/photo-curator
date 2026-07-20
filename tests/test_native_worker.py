@@ -290,3 +290,7 @@ def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Pa
     )
     assert custom["leader_uuid"] == ungrouped[1]["asset_uuid"]
     assert custom["duplicate_group"].startswith("human-")
+    status = worker.dispatch("quality_status", {"project_id": project_id})
+    assert status["manual_labels"] == 1
+    assert status["expected_top_k"] == 2
+    assert status["release_ready"] is False
