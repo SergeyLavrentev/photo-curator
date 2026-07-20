@@ -79,7 +79,7 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "photo_curator_publish.swift" in build
     assert "-framework QuickLookUI" in build
     assert '"$RESOURCES/native/photo-curator-photokit"' in build
-    assert '/usr/bin/codesign "${SIGN_OPTIONS[@]}" "$executable"' in build
+    assert '--entitlements "$SCRIPT_DIR/Photos.entitlements"' in build
 
 
 def test_local_signing_identity_is_stable_and_optional() -> None:
@@ -93,6 +93,8 @@ def test_local_signing_identity_is_stable_and_optional() -> None:
     assert "security add-trusted-cert" in helper
     assert 'SIGN_IDENTITY" == "Photo Curator Local Development"' in build
     assert "--timestamp --sign" in build
+    entitlements = (ROOT / "packaging/macos/Photos.entitlements").read_text()
+    assert "com.apple.security.personal-information.photos-library" in entitlements
 
 
 def test_bundle_verifier_guards_tcc_identity_and_native_only_contents() -> None:
@@ -103,6 +105,8 @@ def test_bundle_verifier_guards_tcc_identity_and_native_only_contents() -> None:
     assert 'require_identifier "$SOURCE" "local.photo-curator.source-helper"' in verifier
     assert 'require_identifier "$PUBLISH" "local.photo-curator.publish-helper"' in verifier
     assert "PhotoKit helper has no signed embedded Info.plist" in verifier
+    assert "require_photos_entitlement" in verifier
+    assert "Photos Library entitlement is disabled" in verifier
     assert "web assets are present in the native bundle" in verifier
     assert 'bash packaging/macos/verify_app.sh "$(APP)"' in makefile
 

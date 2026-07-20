@@ -95,7 +95,7 @@ done
 /usr/bin/iconutil -c icns "$ICONSET" -o "$RESOURCES/PhotoCurator.icns"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
-  SIGN_OPTIONS=(--force --sign -)
+  SIGN_OPTIONS=(--force --options runtime --sign -)
 elif [[ "$SIGN_IDENTITY" == "Photo Curator Local Development" ]]; then
   SIGN_OPTIONS=(--force --options runtime --sign "$SIGN_IDENTITY")
 else
@@ -105,15 +105,21 @@ fi
 
 # Plain executables under Resources are not reliably discovered by `codesign --deep`.
 # Sign them first so TCC can bind Photos access to their embedded identities.
+/usr/bin/codesign "${SIGN_OPTIONS[@]}" "$RESOURCES/native/photo-curator-vision"
 for executable in \
-  "$RESOURCES/native/photo-curator-vision" \
   "$RESOURCES/native/photo-curator-photokit" \
-  "$RESOURCES/native/photo-curator-publish" \
-  "$CONTENTS/MacOS/PhotoCurator"; do
-  /usr/bin/codesign "${SIGN_OPTIONS[@]}" "$executable"
+  "$RESOURCES/native/photo-curator-publish"; do
+  /usr/bin/codesign "${SIGN_OPTIONS[@]}" \
+    --entitlements "$SCRIPT_DIR/Photos.entitlements" \
+    "$executable"
 done
+/usr/bin/codesign "${SIGN_OPTIONS[@]}" \
+  --entitlements "$SCRIPT_DIR/Photos.entitlements" \
+  "$CONTENTS/MacOS/PhotoCurator"
 /usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep "$RESOURCES/backend/photo-curator-backend"
-/usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep "$APP"
+/usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep \
+  --entitlements "$SCRIPT_DIR/Photos.entitlements" \
+  "$APP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
 echo "$APP"

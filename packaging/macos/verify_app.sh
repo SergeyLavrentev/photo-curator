@@ -30,6 +30,16 @@ require_identifier() {
     || fail "unexpected identifier for $executable: $actual (expected $expected)"
 }
 
+require_photos_entitlement() {
+  local executable="$1"
+  local entitlements
+  entitlements="$(/usr/bin/codesign -d --entitlements :- "$executable" 2>/dev/null)"
+  /usr/bin/grep -Eq \
+    '<key>com.apple.security.personal-information.photos-library</key>.*<true/>' \
+    <<<"$entitlements" \
+    || fail "Photos Library entitlement is disabled: $executable"
+}
+
 [[ -d "$APP" ]] || fail "app not found: $APP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 /usr/bin/plutil -lint "$CONTENTS/Info.plist" >/dev/null
@@ -48,6 +58,9 @@ done
 require_identifier "$MAIN" "local.photo-curator.app"
 require_identifier "$SOURCE" "local.photo-curator.source-helper"
 require_identifier "$PUBLISH" "local.photo-curator.publish-helper"
+require_photos_entitlement "$MAIN"
+require_photos_entitlement "$SOURCE"
+require_photos_entitlement "$PUBLISH"
 
 for helper in "$SOURCE" "$PUBLISH"; do
   helper_signature="$(/usr/bin/codesign -d --verbose=4 "$helper" 2>&1)"
