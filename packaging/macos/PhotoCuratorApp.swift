@@ -29,9 +29,11 @@ final class AppModel: ObservableObject {
     @Published var tasteMessage: String?
     @Published var isTasteBusy = false
     @Published var selectedPhotoID: String?
+    @Published var photoAccessNeedsAction = false
 
     let worker = NativeWorkerClient()
     private var pollTask: Task<Void, Never>?
+    private var permissionHelpTask: Task<Void, Never>?
     private var decisionHistory: [DecisionUndo] = []
 
     init() {
@@ -66,7 +68,15 @@ final class AppModel: ObservableObject {
 
     func shutdown() {
         pollTask?.cancel()
+        permissionHelpTask?.cancel()
         worker.stop()
+    }
+
+    func openPhotoPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func restartWorker() {
@@ -290,8 +300,16 @@ final class AppModel: ObservableObject {
 
     private func requestPhotoLibraryAccess() async -> Bool {
         workerStatus = "Запрашиваем доступ к Apple Photos…"
+        photoAccessNeedsAction = false
         let status: PHAuthorizationStatus
         if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
+            permissionHelpTask?.cancel()
+            permissionHelpTask = Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { return }
+                photoAccessNeedsAction = true
+                workerStatus = "Подтвердите доступ к Apple Photos"
+            }
             status = await withCheckedContinuation { continuation in
                 PHPhotoLibrary.requestAuthorization(for: .readWrite) { value in
                     continuation.resume(returning: value)
@@ -300,11 +318,15 @@ final class AppModel: ObservableObject {
         } else {
             status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         }
+        permissionHelpTask?.cancel()
+        permissionHelpTask = nil
         guard status == .authorized || status == .limited else {
             workerStatus = "Нет доступа к Apple Photos"
+            photoAccessNeedsAction = true
             errorMessage = "Разрешите Photo Curator доступ к Фото в Системных настройках → Конфиденциальность и безопасность → Фото."
             return false
         }
+        photoAccessNeedsAction = false
         return true
     }
 
@@ -586,7 +608,16 @@ struct RootView: View {
     private var sourceSection: some View {
         StepCard(number: 1, title: "Выберите альбом", symbol: "photo.on.rectangle.angled") {
             if model.albums.isEmpty {
-                if model.workerStatus.hasPrefix("Ошибка:") {
+                if model.photoAccessNeedsAction {
+                    Label(
+                        "Разрешите доступ в системном запросе или настройках macOS.",
+                        systemImage: "photo.badge.exclamationmark"
+                    )
+                    .foregroundStyle(.secondary)
+                    Button("Открыть настройки доступа к Фото") {
+                        model.openPhotoPrivacySettings()
+                    }
+                } else if model.workerStatus.hasPrefix("Ошибка:") {
                     Button("Повторить чтение Apple Photos") { model.restartWorker() }
                 } else {
                     ProgressView("Читаем Apple Photos…")
@@ -902,6 +933,11 @@ struct SettingsView: View {
         Form {
             Section("Локальный движок") {
                 LabeledContent("Статус", value: model.workerStatus)
+                if model.photoAccessNeedsAction {
+                    Button("Открыть настройки доступа к Фото") {
+                        model.openPhotoPrivacySettings()
+                    }
+                }
                 Button("Перезапустить движок") { model.restartWorker() }
             }
             Section("Персональный вкус") {

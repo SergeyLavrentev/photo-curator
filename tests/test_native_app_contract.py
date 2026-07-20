@@ -31,7 +31,6 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "Продолжить с прерванного этапа" in app
     assert "UserDefaults.standard" in app
     assert ".accessibilityHint" in app
-    assert "NSWorkspace.shared.open" not in app + worker
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker
 
@@ -43,6 +42,9 @@ def test_native_app_requests_photos_permission_before_worker_bootstrap() -> None
     assert "requestPhotoLibraryAccess" in app
     assert "PHPhotoLibrary.requestAuthorization(for: .readWrite)" in app
     assert "guard await requestPhotoLibraryAccess() else { return }" in app
+    assert "photoAccessNeedsAction" in app
+    assert "Открыть настройки доступа к Фото" in app
+    assert "Privacy_Photos" in app
 
 
 def test_native_workflow_keeps_publish_behind_dry_run_and_confirmation() -> None:
