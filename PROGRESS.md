@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: native bundle перешёл на отдельный minimal worker entrypoint:
+  FastAPI/Jinja/web assets и `osxphotos` больше не пакуются в `.app`; размер уменьшился
+  с 103 MB до 50 MB. Frozen production status/shutdown и demo albums JSONL проверены
+  на собранном bundle; web CLI остаётся только в development install.
 - 2026-07-20: packaging получил idempotent stable local signing identity и
   `make local-signing-identity`; `make app` автоматически выберет его после trust.
   Certificate/private key уже импортированы в login Keychain, но macOS отклонила

@@ -44,14 +44,15 @@ def test_native_workflow_keeps_publish_behind_dry_run_and_confirmation() -> None
     assert "confirmationDialog" in app
 
 
-def test_frozen_worker_includes_osxphotos_uti_runtime_data() -> None:
+def test_frozen_worker_excludes_legacy_web_and_osxphotos_runtime() -> None:
     spec = (ROOT / "packaging/macos/backend.spec").read_text()
 
-    assert 'collect_data_files("utitools")' in spec
-    assert "osxphotos_data + utitools_data" in spec
-    assert 'collect_data_files("photoscript")' in spec
-    assert 'collect_data_files("osxmetadata")' in spec
-    assert 'collect_submodules("bitstring")' in spec
+    assert "native_backend_main.py" in spec
+    assert '"fastapi"' in spec
+    assert '"jinja2"' in spec
+    assert '"osxphotos"' in spec
+    assert "collect_all" not in spec
+    assert "collect_submodules" not in spec
 
 
 def test_native_bundle_compiles_public_photokit_source_helper() -> None:

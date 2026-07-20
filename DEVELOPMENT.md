@@ -48,7 +48,7 @@ uv run pytest --cov=photo_curator
 
 ## Сборка macOS-приложения
 
-`make app` собирает frozen Python backend через PyInstaller, компилирует AppKit launcher,
+`make app` собирает minimal frozen JSONL worker через PyInstaller, компилирует SwiftUI app,
 создаёт `build/macos/PhotoCurator.app`, подписывает весь bundle и проверяет подпись.
 Полученный `.app` self-contained; сборочная машина должна иметь Xcode Command Line Tools,
 Python 3.12, `uv`, `qlmanage`, `iconutil` и `codesign`.
@@ -61,11 +61,11 @@ make install INSTALL_DIR="$HOME/Applications" # только для текуще
 make app SIGN_IDENTITY="Developer ID Application: Example (TEAMID)"
 ```
 
-Native launcher владеет backend-процессом и читает URL из его stdout, не сохраняя
-startup-token. При `⌘Q` launcher отправляет `SIGTERM`, ждёт до пяти секунд и только затем
-использует `SIGKILL`. Веб-кнопка остановки вызывает тот же штатный `SIGTERM`; приложение
-остаётся открытым и позволяет запустить backend заново.
+Native app владеет worker-процессом и обменивается с ним versioned JSONL через
+stdin/stdout; browser, HTTP и localhost не используются. При `⌘Q` app посылает protocol
+shutdown, затем завершает worker. Native bundle entrypoint не включает FastAPI, Jinja,
+web assets и `osxphotos`; legacy web CLI остаётся только в development environment.
 
-Перед релизом дополнительно проверить demo в desktop и узком viewport, отсутствие
-`shell=True`, bind только на `127.0.0.1`, отсутствие source paths в HTML/JSON и
+Перед релизом дополнительно проверить demo workflow, Quick Look, keyboard/undo,
+restart/cancel/resume, отсутствие TCP listener и source paths в JSONL payload, а также
 сохранность manual overrides после reanalysis.

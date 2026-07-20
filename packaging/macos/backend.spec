@@ -1,30 +1,29 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
 from pathlib import Path
 
 project_root = Path(SPECPATH).parents[1]
 
-photo_data = collect_data_files("photo_curator") + copy_metadata("photo-curator")
-osxphotos_data, osxphotos_binaries, osxphotos_hidden = collect_all("osxphotos")
-utitools_data = collect_data_files("utitools")
-photoscript_data = collect_data_files("photoscript")
-osxmetadata_data = collect_data_files("osxmetadata")
-
 analysis = Analysis(
-    [str(project_root / "src/photo_curator/__main__.py")],
+    [str(project_root / "packaging/macos/native_backend_main.py")],
     pathex=[str(project_root / "src")],
-    binaries=osxphotos_binaries,
-    datas=photo_data + osxphotos_data + utitools_data + photoscript_data + osxmetadata_data,
-    hiddenimports=(
-        collect_submodules("photo_curator")
-        + osxphotos_hidden
-        + collect_submodules("bitstring")
-    ),
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest", "ruff"],
+    excludes=[
+        "pytest",
+        "ruff",
+        "fastapi",
+        "uvicorn",
+        "jinja2",
+        "osxphotos",
+        "photoscript",
+        "utitools",
+        "osxmetadata",
+    ],
     noarchive=False,
 )
 pyz = PYZ(analysis.pure)
