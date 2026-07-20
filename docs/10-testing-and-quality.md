@@ -118,6 +118,8 @@ request durations и отсутствие per-signal errors.
 OS/architecture, capability map, mean/p95 stage durations и request revisions. Отдельный
 aesthetics score snapshot нормализует публичный диапазон Apple `-1...1` в `0...100` только
 для ranking/evaluation; исходное значение сохраняется в benchmark report.
+Helper также сохраняет собственный process peak RSS через `getrusage`; report без
+положительного `peak_rss_bytes` считается недостоверным.
 
 ## S3 optional Core ML benchmark
 

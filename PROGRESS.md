@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: native Vision и Core ML benchmark reports теперь содержат измеренный
+  process peak RSS (`getrusage.ru_maxrss`) и Python boundary fail-closed отклоняет отчёт
+  без memory evidence. Это закрывает peak-memory instrumentation, но не подменяет
+  Instruments energy/thermal/ANE attribution.
 - 2026-07-20: S3 production inference foundation добавляет batch-only miss execution и
   content-addressed Core ML output cache по approved model SHA-256 + immutable render
   fingerprint. Cache write атомарен, corrupt/stale/error entries не принимаются, порядок

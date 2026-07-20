@@ -55,6 +55,7 @@ def test_native_vision_helper_compiles_and_returns_versioned_signals(tmp_path: P
     assert result["engine"]["name"] == "apple-vision-native"
     assert result["engine"]["architecture"] in {"arm64", "x86_64"}
     assert result["summary"]["asset_count"] == 1
+    assert result["summary"]["peak_rss_bytes"] > 0
     row = result["assets"][0]
     assert row["errors"] == {}
     assert -1 <= row["aesthetics"]["overall_score"] <= 1

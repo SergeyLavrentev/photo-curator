@@ -1,4 +1,5 @@
 import CoreVideo
+import Darwin
 import Foundation
 import Vision
 
@@ -155,12 +156,14 @@ private struct BenchmarkSummary: Codable {
     let assetCount: Int
     let successfulAssets: Int
     let wallTimeMS: Double
+    let peakRSSBytes: UInt64
     let stageDurations: [String: DurationSummary]
 
     enum CodingKeys: String, CodingKey {
         case assetCount = "asset_count"
         case successfulAssets = "successful_assets"
         case wallTimeMS = "wall_time_ms"
+        case peakRSSBytes = "peak_rss_bytes"
         case stageDurations = "stage_durations"
     }
 }
@@ -348,6 +351,12 @@ private func architecture() -> String {
 #endif
 }
 
+private func peakRSSBytes() -> UInt64 {
+    var usage = rusage()
+    guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+    return UInt64(max(0, usage.ru_maxrss))
+}
+
 private func durationSummary(_ assets: [AssetResult]) -> [String: DurationSummary] {
     var values: [String: [Double]] = [:]
     for asset in assets {
@@ -399,6 +408,7 @@ private func run() throws {
         summary: BenchmarkSummary(assetCount: assets.count,
                                   successfulAssets: assets.filter(\.errors.isEmpty).count,
                                   wallTimeMS: wallMS,
+                                  peakRSSBytes: peakRSSBytes(),
                                   stageDurations: durationSummary(assets)))
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

@@ -139,6 +139,13 @@ class NativeVisionEngine:
         if not isinstance(engine, dict) or engine.get("name") != ENGINE_NAME:
             raise NativeVisionError("Native Vision engine identity не совпадает")
         rows = payload.get("assets")
+        summary = payload.get("summary")
+        if (
+            not isinstance(summary, dict)
+            or not isinstance(summary.get("peak_rss_bytes"), (int, float))
+            or summary["peak_rss_bytes"] <= 0
+        ):
+            raise NativeVisionError("Native Vision peak memory evidence отсутствует")
         if not isinstance(rows, list):
             raise NativeVisionError("Native Vision assets отсутствуют")
         returned_ids = {str(row.get("asset_uuid")) for row in rows if isinstance(row, dict)}

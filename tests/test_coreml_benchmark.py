@@ -40,6 +40,7 @@ def test_engine_validates_coreml_result_and_removes_requests(tmp_path: Path) -> 
                     "schema_version": 1,
                     "engine": {"name": "apple-coreml-image", "version": "1"},
                     "model": {"compute_units": "all"},
+                    "summary": {"peak_rss_bytes": 12_345_678},
                     "assets": [
                         {
                             "asset_uuid": "asset-1",
@@ -98,6 +99,7 @@ def test_cli_benchmarks_ready_project(tmp_path: Path, monkeypatch: pytest.Monkey
                 "schema_version": 1,
                 "engine": {"name": "apple-coreml-image", "version": "1"},
                 "model": {"compute_units": "all"},
+                "summary": {"peak_rss_bytes": 12_345_678},
                 "assets": [
                     {"asset_uuid": asset_uuid, "duration_ms": 1.0, "values": [0.5]}
                     for asset_uuid, _ in assets

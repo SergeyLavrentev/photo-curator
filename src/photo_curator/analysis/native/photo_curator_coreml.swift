@@ -1,5 +1,6 @@
 import AppKit
 import CoreML
+import Darwin
 import Foundation
 import Vision
 
@@ -143,6 +144,12 @@ func median(_ values: [Double]) -> Double {
         : sorted[middle]
 }
 
+func peakRSSBytes() -> Double {
+    var usage = rusage()
+    guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+    return Double(max(0, usage.ru_maxrss))
+}
+
 func runAsset(
     _ asset: AssetInput,
     model: VNCoreMLModel,
@@ -226,6 +233,7 @@ do {
             "asset_count": Double(rows.count),
             "successful_assets": Double(successful.count),
             "median_inference_ms": successful.isEmpty ? -1 : median(successful),
+            "peak_rss_bytes": peakRSSBytes(),
         ]
     )
     let encoder = JSONEncoder()

@@ -134,10 +134,17 @@ class CoreMLBenchmarkEngine:
         engine = payload.get("engine")
         model = payload.get("model")
         rows = payload.get("assets")
+        summary = payload.get("summary")
         if not isinstance(engine, dict) or engine.get("name") != ENGINE_NAME:
             raise CoreMLBenchmarkError("Core ML engine identity mismatch")
         if not isinstance(model, dict) or model.get("compute_units") != "all":
             raise CoreMLBenchmarkError("Core ML benchmark did not request all compute units")
+        if (
+            not isinstance(summary, dict)
+            or not isinstance(summary.get("peak_rss_bytes"), (int, float))
+            or summary["peak_rss_bytes"] <= 0
+        ):
+            raise CoreMLBenchmarkError("Core ML peak memory evidence is missing")
         if not isinstance(rows, list):
             raise CoreMLBenchmarkError("Core ML benchmark assets are missing")
         returned = {str(row.get("asset_uuid")) for row in rows if isinstance(row, dict)}
