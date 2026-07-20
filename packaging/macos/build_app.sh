@@ -69,6 +69,7 @@ xcrun swiftc \
   -target "$(uname -m)-apple-macosx13.0" \
   -framework SwiftUI \
   -framework AppKit \
+  -framework QuickLookUI \
   "$SCRIPT_DIR/NativeWorkerClient.swift" \
   "$SCRIPT_DIR/PhotoCuratorModels.swift" \
   "$SCRIPT_DIR/PhotoCuratorApp.swift" \

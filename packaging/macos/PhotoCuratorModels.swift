@@ -23,15 +23,18 @@ struct ProjectItem {
     let id: String
     let name: String
     let state: String
+    let albumID: String
 
     init?(_ value: [String: Any]) {
         guard let id = value["id"] as? String,
               let name = value["name"] as? String,
-              let state = value["state"] as? String
+              let state = value["state"] as? String,
+              let albumID = value["album_id"] as? String
         else { return nil }
         self.id = id
         self.name = name
         self.state = state
+        self.albumID = albumID
     }
 }
 
@@ -73,6 +76,7 @@ struct PhotoItem: Identifiable {
     let confidence: Double?
     let reasons: [String]
     var disposition: String?
+    var manualDisposition: String?
 
     init?(_ value: [String: Any]) {
         guard let id = value["asset_uuid"] as? String else { return nil }
@@ -84,6 +88,7 @@ struct PhotoItem: Identifiable {
         personalDelta = (value["personal_delta"] as? NSNumber)?.doubleValue
         confidence = (value["confidence"] as? NSNumber)?.doubleValue
         disposition = value["final_disposition"] as? String
+        manualDisposition = value["manual_disposition"] as? String
         reasons = (value["reasons"] as? [[String: Any]] ?? []).compactMap {
             ($0["code"] as? String).map(reasonTitle)
         }

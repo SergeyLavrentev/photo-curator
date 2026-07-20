@@ -336,6 +336,7 @@ def _asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "height": asset.get("height"),
         "favorite": bool(asset.get("favorite")),
         "final_disposition": asset.get("final_disposition"),
+        "manual_disposition": asset.get("manual_disposition"),
         "swipe_score": asset.get("swipe_score"),
         "generic_score": asset.get("swipe_generic_score"),
         "personal_delta": asset.get("swipe_personal_delta"),

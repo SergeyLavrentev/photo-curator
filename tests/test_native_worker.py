@@ -35,6 +35,7 @@ def test_native_worker_exposes_projects_ranked_assets_and_decisions_without_http
     assert assets["total"] == 12
     assert assets["items"][0]["swipe_score"] >= assets["items"][-1]["swipe_score"]
     assert changed["final_disposition"] == "keep"
+    assert changed["manual_disposition"] == "keep"
     assert "source_path" not in changed
 
 

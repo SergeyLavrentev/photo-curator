@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: native review получил клавиатурный workflow: стрелки меняют кадр,
+  1/2/3 задают Keep/Review/Reject, Space открывает native Quick Look, Cmd+Z
+  точно возвращает предыдущий manual override. Выбор альбома, density,
+  последний ready/running project и review восстанавливаются после перезапуска;
+  карточки получили VoiceOver labels/hints и явный focus outline.
 - 2026-07-20: S4/S7 native A/B calibration замкнула Personal Taste loop:
   worker выбирает неоценённые близкие по Swipe Score пары вне duplicate group,
   SwiftUI собирает три явных выбора, локально обучает profile и сразу

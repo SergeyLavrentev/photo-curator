@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QuickLookUI
 import SwiftUI
 
 @MainActor
@@ -7,8 +8,12 @@ final class AppModel: ObservableObject {
     @Published var workerStatus = "Запуск локального движка…"
     @Published var albums: [AlbumItem] = []
     @Published var sharedAlbums: [AlbumItem] = []
-    @Published var selectedAlbumID = ""
-    @Published var density = "balanced"
+    @Published var selectedAlbumID: String {
+        didSet { UserDefaults.standard.set(selectedAlbumID, forKey: "selectedAlbumID") }
+    }
+    @Published var density: String {
+        didSet { UserDefaults.standard.set(density, forKey: "selectionDensity") }
+    }
     @Published var project: ProjectItem?
     @Published var jobs: [JobItem] = []
     @Published var photos: [PhotoItem] = []
@@ -22,9 +27,18 @@ final class AppModel: ObservableObject {
     @Published var tasteRemaining = 0
     @Published var tasteMessage: String?
     @Published var isTasteBusy = false
+    @Published var selectedPhotoID: String?
 
     let worker = NativeWorkerClient()
     private var pollTask: Task<Void, Never>?
+    private var decisionHistory: [DecisionUndo] = []
+
+    init() {
+        selectedAlbumID = UserDefaults.standard.string(forKey: "selectedAlbumID") ?? ""
+        let savedDensity = UserDefaults.standard.string(forKey: "selectionDensity") ?? "balanced"
+        density = ["compact", "balanced", "broad"].contains(savedDensity)
+            ? savedDensity : "balanced"
+    }
 
     var progress: Double {
         guard !jobs.isEmpty else { return 0 }
@@ -62,6 +76,8 @@ final class AppModel: ObservableObject {
         isBusy = true
         errorMessage = nil
         photos = []
+        selectedPhotoID = nil
+        decisionHistory = []
         tastePair = nil
         tasteMessage = nil
         publishPlan = nil
@@ -85,18 +101,49 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setDecision(photoID: String, disposition: String?) {
+    func setDecision(photoID: String, disposition: String?, recordUndo: Bool = true) {
         guard let project else { return }
+        let previousManual = photos.first(where: { $0.id == photoID })?.manualDisposition
         Task {
             do {
                 var params: [String: Any] = ["project_id": project.id, "asset_uuid": photoID]
                 params["disposition"] = disposition ?? NSNull()
-                _ = try await call("decision", params)
-                if let index = photos.firstIndex(where: { $0.id == photoID }) {
-                    photos[index].disposition = disposition
+                let result = try await call("decision", params)
+                if let value = result as? [String: Any],
+                   let updated = PhotoItem(value),
+                   let index = photos.firstIndex(where: { $0.id == photoID })
+                {
+                    photos[index] = updated
+                    if recordUndo && previousManual != disposition {
+                        decisionHistory.append(DecisionUndo(photoID: photoID, previous: previousManual))
+                    }
                 }
             } catch { errorMessage = error.localizedDescription }
         }
+    }
+
+    func movePhotoSelection(_ offset: Int) {
+        guard !photos.isEmpty else { return }
+        let current = selectedPhotoID.flatMap { id in photos.firstIndex(where: { $0.id == id }) } ?? 0
+        selectedPhotoID = photos[min(max(0, current + offset), photos.count - 1)].id
+    }
+
+    func decideSelected(_ disposition: String) {
+        guard let selectedPhotoID else { return }
+        setDecision(photoID: selectedPhotoID, disposition: disposition)
+    }
+
+    func undoLastDecision() {
+        guard let change = decisionHistory.popLast() else { return }
+        selectedPhotoID = change.photoID
+        setDecision(photoID: change.photoID, disposition: change.previous, recordUndo: false)
+    }
+
+    func previewSelected() {
+        guard let selectedPhotoID,
+              let path = photos.first(where: { $0.id == selectedPhotoID })?.imagePath
+        else { return }
+        QuickLookController.shared.show(path: path)
     }
 
     func chooseTaste(preferredID: String) {
@@ -182,14 +229,24 @@ final class AppModel: ObservableObject {
             workerStatus = "Локальный движок готов"
             let rawAlbums = try await callWithRetry("albums", attempts: 3)
             let rawTaste = try await call("taste_profile")
+            let rawProjects = try await call("projects")
             if let groups = rawAlbums as? [String: Any] {
                 albums = (groups["regular"] as? [[String: Any]] ?? []).compactMap(AlbumItem.init)
                 sharedAlbums = (groups["shared"] as? [[String: Any]] ?? []).compactMap(AlbumItem.init)
-                if selectedAlbumID.isEmpty {
+                let availableIDs = Set((albums + sharedAlbums).map(\.id))
+                if !availableIDs.contains(selectedAlbumID) {
                     selectedAlbumID = albums.first?.id ?? sharedAlbums.first?.id ?? ""
                 }
             }
             if let taste = rawTaste as? [String: Any] { applyTasteProfile(taste) }
+            let projects = (rawProjects as? [[String: Any]] ?? []).compactMap(ProjectItem.init)
+            if let restored = projects.first(where: { $0.state == "ready" || $0.state == "running" }) {
+                project = restored
+                if (albums + sharedAlbums).contains(where: { $0.id == restored.albumID }) {
+                    selectedAlbumID = restored.albumID
+                }
+                await restoreProject(restored)
+            }
         } catch {
             workerStatus = "Ошибка: \(error.localizedDescription)"
             errorMessage = error.localizedDescription
@@ -232,7 +289,27 @@ final class AppModel: ObservableObject {
             let result = try await call("assets", ["project_id": projectID])
             let value = result as? [String: Any]
             photos = (value?["items"] as? [[String: Any]] ?? []).compactMap(PhotoItem.init)
+            if !photos.contains(where: { $0.id == selectedPhotoID }) {
+                selectedPhotoID = photos.first?.id
+            }
             await loadTastePair(projectID: projectID)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func restoreProject(_ restored: ProjectItem) async {
+        do {
+            let result = try await call("project", ["project_id": restored.id])
+            guard let value = result as? [String: Any],
+                  let rawProject = value["project"] as? [String: Any],
+                  let updated = ProjectItem(rawProject)
+            else { throw NativeWorkerClientError.invalidResponse }
+            project = updated
+            jobs = (value["jobs"] as? [[String: Any]] ?? []).compactMap(JobItem.init)
+            if updated.state == "running" {
+                startPolling(projectID: updated.id)
+            } else if updated.state == "ready" {
+                await loadPhotos(projectID: updated.id)
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -285,6 +362,33 @@ final class AppModel: ObservableObject {
     }
 }
 
+private struct DecisionUndo {
+    let photoID: String
+    let previous: String?
+}
+
+final class QuickLookController: NSObject, QLPreviewPanelDataSource {
+    static let shared = QuickLookController()
+    private var previewURL: NSURL?
+
+    func show(path: String) {
+        previewURL = URL(fileURLWithPath: path) as NSURL
+        guard let panel = QLPreviewPanel.shared() else { return }
+        panel.dataSource = self
+        panel.currentPreviewItemIndex = 0
+        panel.reloadData()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        previewURL == nil ? 0 : 1
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        previewURL
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
@@ -316,6 +420,32 @@ struct PhotoCuratorApplication: App {
                 }
         }
         .defaultSize(width: 1180, height: 820)
+        .commands {
+            CommandMenu("Проверка фото") {
+                Button("Предыдущее фото") { model.movePhotoSelection(-1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                    .disabled(model.photos.isEmpty)
+                Button("Следующее фото") { model.movePhotoSelection(1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                    .disabled(model.photos.isEmpty)
+                Button("Быстрый просмотр") { model.previewSelected() }
+                    .keyboardShortcut(.space, modifiers: [])
+                    .disabled(model.selectedPhotoID == nil)
+                Divider()
+                Button("Оставить") { model.decideSelected("keep") }
+                    .keyboardShortcut("1", modifiers: [])
+                    .disabled(model.selectedPhotoID == nil)
+                Button("На проверку") { model.decideSelected("review") }
+                    .keyboardShortcut("2", modifiers: [])
+                    .disabled(model.selectedPhotoID == nil)
+                Button("Не брать") { model.decideSelected("reject") }
+                    .keyboardShortcut("3", modifiers: [])
+                    .disabled(model.selectedPhotoID == nil)
+                Divider()
+                Button("Отменить решение") { model.undoLastDecision() }
+                    .keyboardShortcut("z", modifiers: .command)
+            }
+        }
 
         Settings {
             SettingsView()
@@ -505,7 +635,15 @@ struct RootView: View {
                 .foregroundStyle(.secondary)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 16) {
                 ForEach(model.photos) { photo in
-                    PhotoCard(photo: photo) { disposition in
+                    PhotoCard(
+                        photo: photo,
+                        selected: model.selectedPhotoID == photo.id,
+                        select: { model.selectedPhotoID = photo.id },
+                        preview: {
+                            model.selectedPhotoID = photo.id
+                            model.previewSelected()
+                        }
+                    ) { disposition in
                         model.setDecision(photoID: photo.id, disposition: disposition)
                     }
                 }
@@ -569,8 +707,15 @@ struct StepLabel: View {
 
 struct PhotoCard: View {
     let photo: PhotoItem
+    let selected: Bool
+    let select: () -> Void
+    let preview: () -> Void
     let decide: (String?) -> Void
     @State private var showDetails = false
+
+    private var scoreText: String {
+        photo.swipeScore.map(String.init) ?? "—"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -585,7 +730,9 @@ struct PhotoCard: View {
                 .frame(height: 180)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                Text(photo.swipeScore.map(String.init) ?? "—")
+                .onTapGesture(count: 2, perform: preview)
+                .onTapGesture(perform: select)
+                Text(scoreText)
                     .font(.headline.monospacedDigit())
                     .padding(8)
                     .background(.ultraThickMaterial, in: Capsule())
@@ -619,7 +766,15 @@ struct PhotoCard: View {
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.separator.opacity(0.4)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(selected ? Color.accentColor : Color(nsColor: .separatorColor).opacity(0.4),
+                        lineWidth: selected ? 3 : 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(photo.filename), Swipe Score \(photo.swipeScore ?? 0)")
+        .accessibilityValue(dispositionTitle(photo.disposition))
+        .accessibilityHint("Клавиши 1, 2 и 3 меняют решение; пробел открывает быстрый просмотр")
     }
 }
 
@@ -657,6 +812,11 @@ struct TasteChoiceCard: View {
         .disabled(disabled)
         .accessibilityLabel("Выбрать \(photo.filename) для настройки вкуса")
     }
+}
+
+private func dispositionTitle(_ disposition: String?) -> String {
+    ["keep": "Оставить", "review": "На проверку", "reject": "Не брать"][disposition ?? ""]
+        ?? "Без решения"
 }
 
 struct SettingsView: View {

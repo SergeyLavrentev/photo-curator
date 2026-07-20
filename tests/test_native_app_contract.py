@@ -21,6 +21,12 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'call("taste_preference"' in app
     assert '"from_stage": "decisions"' in app
     assert "Какой кадр вы бы оставили?" in app
+    assert "QuickLookController.shared.show" in app
+    assert '.keyboardShortcut("1", modifiers: [])' in app
+    assert ".keyboardShortcut(.space, modifiers: [])" in app
+    assert "undoLastDecision" in app
+    assert "UserDefaults.standard" in app
+    assert ".accessibilityHint" in app
     assert "NSWorkspace.shared.open" not in app + worker
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker
@@ -55,6 +61,7 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "PHImageManager.default().requestImage" in helper
     assert "Photos.sqlite" not in helper
     assert "photo_curator_publish.swift" in build
+    assert "-framework QuickLookUI" in build
 
 
 def test_native_review_localizes_swipe_reasons() -> None:
