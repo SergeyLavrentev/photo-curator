@@ -749,11 +749,15 @@ def add_preference_example(
     connection.execute(
         """
         UPDATE taste_profiles
-        SET status=CASE WHEN weights_base64 IS NULL THEN 'collecting' ELSE 'stale' END,
+        SET status=CASE
+                WHEN ?='held_out' AND weights_base64 IS NOT NULL THEN status
+                WHEN weights_base64 IS NULL THEN 'collecting'
+                ELSE 'stale'
+            END,
             updated_at=?
         WHERE id=?
         """,
-        (now, profile_id),
+        (split, now, profile_id),
     )
     return example_id
 

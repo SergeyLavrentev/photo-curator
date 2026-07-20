@@ -192,7 +192,7 @@ class NativeWorker:
         with database_connection(self.paths.database) as connection:
             profile = repository.ensure_taste_profile(connection)
             examples = repository.list_preference_examples(connection)
-        return _taste_payload(profile, len(examples))
+        return _taste_payload(profile, examples)
 
     def _handle_taste_pair(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -214,24 +214,30 @@ class NativeWorker:
 
     def _handle_taste_preference(self, params: dict[str, object]) -> dict[str, object]:
         with database_connection(self.paths.database) as connection:
+            examples = repository.list_preference_examples(connection)
+            split = _next_preference_split(examples)
             example_id = capture_preference(
                 connection,
                 project_id=_required_string(params, "project_id"),
                 left_uuid=_required_string(params, "left_uuid"),
                 right_uuid=_required_string(params, "right_uuid"),
                 preferred_uuid=_required_string(params, "preferred_uuid"),
-                split=str(params.get("split") or "calibration"),
+                split=split,
             )
             profile = repository.get_taste_profile(connection)
-            count = len(repository.list_preference_examples(connection))
-        return {"example_id": example_id, "profile": _taste_payload(profile, count)}
+            examples = repository.list_preference_examples(connection)
+        return {
+            "example_id": example_id,
+            "split": split,
+            "profile": _taste_payload(profile, examples),
+        }
 
     def _handle_taste_train(self, params: dict[str, object]) -> dict[str, object]:
         del params
         with database_connection(self.paths.database) as connection:
             profile = train_taste_profile(connection)
-            count = len(repository.list_preference_examples(connection))
-        return _taste_payload(profile, count)
+            examples = repository.list_preference_examples(connection)
+        return _taste_payload(profile, examples)
 
     def _handle_taste_status(self, params: dict[str, object]) -> dict[str, object]:
         paused = params.get("paused")
@@ -239,8 +245,8 @@ class NativeWorker:
             raise NativeWorkerError("paused must be boolean")
         with database_connection(self.paths.database) as connection:
             profile = repository.set_taste_profile_paused(connection, paused)
-            count = len(repository.list_preference_examples(connection))
-        return _taste_payload(profile, count)
+            examples = repository.list_preference_examples(connection)
+        return _taste_payload(profile, examples)
 
     def _handle_taste_export(self, params: dict[str, object]) -> dict[str, object]:
         del params
@@ -438,16 +444,30 @@ def _next_taste_pair(
     return (best[4], best[5]), len(ranked_pairs)
 
 
-def _taste_payload(profile: dict[str, object], count: int) -> dict[str, object]:
+def _taste_payload(
+    profile: dict[str, object], examples: list[dict[str, object]]
+) -> dict[str, object]:
+    calibration_count = sum(example["split"] == "calibration" for example in examples)
+    held_out_count = sum(example["split"] == "held_out" for example in examples)
     return {
         "id": profile["id"],
         "name": profile["name"],
         "status": profile["status"],
         "model_version": profile.get("model_version"),
         "training_examples": profile.get("training_examples") or 0,
-        "preference_count": count,
+        "preference_count": len(examples),
+        "calibration_count": calibration_count,
+        "held_out_count": held_out_count,
         "evidence": profile.get("evidence") or {},
     }
+
+
+def _next_preference_split(examples: list[dict[str, object]]) -> str:
+    calibration_count = sum(example["split"] == "calibration" for example in examples)
+    if calibration_count < 3:
+        return "calibration"
+    post_warmup_count = max(0, len(examples) - 3)
+    return "held_out" if post_warmup_count % 2 == 0 else "calibration"
 
 
 def _publish_payload(publish: dict[str, object]) -> dict[str, object]:

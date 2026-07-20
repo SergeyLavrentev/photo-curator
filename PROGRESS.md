@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: native Personal Taste больше не обучается и оценивается на одних данных:
+  первые три выбора server-assigned calibration, затем blind held-out/calibration
+  чередуются независимо от client params. Held-out выбор не делает готовую модель stale;
+  profile/UI отдельно показывают training и verification counts, а retrain evidence
+  рассчитывает held-out accuracy. Это создаёт честный путь к per-user uplift gate.
 - 2026-07-20: real packaged demo QA поймал Hardened Runtime failure: ad-hoc backend не
   мог загрузить embedded Python framework из-за library validation/CDHash mismatch.
   Local/ad-hoc backend теперь получает узкий `disable-library-validation` entitlement;

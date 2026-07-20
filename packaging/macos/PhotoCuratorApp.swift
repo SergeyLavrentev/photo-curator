@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     @Published var publishMessage: String?
     @Published var tasteStatus = "Не настроен"
     @Published var tasteExamples = 0
+    @Published var tasteCalibrationExamples = 0
+    @Published var tasteHeldOutExamples = 0
     @Published var tastePair: TastePair?
     @Published var tasteRemaining = 0
     @Published var tasteMessage: String?
@@ -126,6 +128,8 @@ final class AppModel: ObservableObject {
                 _ = try await call("taste_reset")
                 tasteStatus = "collecting"
                 tasteExamples = 0
+                tasteCalibrationExamples = 0
+                tasteHeldOutExamples = 0
                 tastePair = nil
                 tasteMessage = "Профиль вкуса удалён. Используется общий Swipe Score."
                 await refreshDecisionsForTaste()
@@ -261,7 +265,7 @@ final class AppModel: ObservableObject {
                 {
                     applyTasteProfile(profile)
                 }
-                if tasteExamples >= 3 {
+                if tasteCalibrationExamples >= 3 {
                     let trained = try await call("taste_train")
                     if let profile = trained as? [String: Any] { applyTasteProfile(profile) }
                     tastePair = nil
@@ -274,7 +278,7 @@ final class AppModel: ObservableObject {
                     startPolling(projectID: project.id)
                 } else {
                     await loadTastePair(projectID: project.id)
-                    tasteMessage = "Выбор сохранён. Ещё \(max(0, 3 - tasteExamples))."
+                    tasteMessage = "Выбор сохранён. Ещё \(max(0, 3 - tasteCalibrationExamples))."
                 }
             } catch { errorMessage = error.localizedDescription }
         }
@@ -461,6 +465,8 @@ final class AppModel: ObservableObject {
 
     private func applyTasteProfile(_ value: [String: Any]) {
         tasteExamples = value["preference_count"] as? Int ?? tasteExamples
+        tasteCalibrationExamples = value["calibration_count"] as? Int ?? tasteCalibrationExamples
+        tasteHeldOutExamples = value["held_out_count"] as? Int ?? tasteHeldOutExamples
         tasteStatus = value["status"] as? String ?? "Не настроен"
     }
 
@@ -722,7 +728,7 @@ struct RootView: View {
     private var tasteSection: some View {
         StepCard(number: 2, title: "Персональный вкус — опционально", symbol: "heart.text.square") {
             Text(model.tasteExamples > 0
-                 ? "Профиль: \(model.tasteStatusTitle), сравнений: \(model.tasteExamples)."
+                 ? "Профиль: \(model.tasteStatusTitle). Обучающих: \(model.tasteCalibrationExamples), проверочных: \(model.tasteHeldOutExamples)."
                  : "Можно начать без настройки. После анализа выберите лучший из пары кадров.")
                 .foregroundStyle(.secondary)
             if let pair = model.tastePair {
@@ -1008,7 +1014,8 @@ struct SettingsView: View {
             }
             Section("Персональный вкус") {
                 LabeledContent("Профиль", value: model.tasteStatusTitle)
-                LabeledContent("Сравнений", value: "\(model.tasteExamples)")
+                LabeledContent("Обучающих сравнений", value: "\(model.tasteCalibrationExamples)")
+                LabeledContent("Проверочных сравнений", value: "\(model.tasteHeldOutExamples)")
                 HStack {
                     Button(model.tasteStatus == "paused" ? "Возобновить" : "Поставить на паузу") {
                         model.toggleTasteProfile()

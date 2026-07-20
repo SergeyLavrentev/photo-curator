@@ -135,9 +135,27 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     coordinator.run(project_id, from_stage="decisions")
     reranked = worker.dispatch("assets", {"project_id": project_id})["items"]
     assert any(abs(item["personal_delta"] or 0) > 0.1 for item in reranked)
+    next_pair = worker.dispatch("taste_pair", {"project_id": project_id})["pair"]
+    held_out = worker.dispatch(
+        "taste_preference",
+        {
+            "project_id": project_id,
+            "left_uuid": next_pair["left"]["asset_uuid"],
+            "right_uuid": next_pair["right"]["asset_uuid"],
+            "preferred_uuid": next_pair["left"]["asset_uuid"],
+            "split": "calibration",
+        },
+    )
+    assert held_out["split"] == "held_out"
+    assert held_out["profile"]["calibration_count"] == 3
+    assert held_out["profile"]["held_out_count"] == 1
+    assert held_out["profile"]["status"] == "ready"
+    evaluated = worker.dispatch("taste_train", {})
+    assert evaluated["evidence"]["held_out_pairs"] == 1
+    assert evaluated["evidence"]["held_out_accuracy"] in {0.0, 1.0}
     exported = worker.dispatch("taste_export", {})
     assert exported["schema_version"] == 1
-    assert len(exported["examples"]) == 3
+    assert len(exported["examples"]) == 4
     assert exported["profile"]["weights_base64"]
     assert worker.dispatch("taste_status", {"paused": True})["status"] == "paused"
     assert worker.dispatch("taste_reset", {}) == {"status": "deleted"}
