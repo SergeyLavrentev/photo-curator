@@ -46,17 +46,7 @@ app build:
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" packaging/macos/build_app.sh
 
 verify-app:
-	test -d "$(APP)"
-	/usr/bin/codesign --verify --deep --strict --verbose=2 "$(APP)"
-	/usr/bin/plutil -lint "$(APP)/Contents/Info.plist"
-	test -x "$(APP)/Contents/MacOS/PhotoCurator"
-	test -x "$(APP)/Contents/Resources/backend/photo-curator-backend"
-	test ! -e "$(APP)/Contents/Resources/backend/_internal/osxphotos"
-	test ! -e "$(APP)/Contents/Resources/backend/_internal/fastapi"
-	test ! -e "$(APP)/Contents/Resources/backend/_internal/jinja2"
-	test -x "$(APP)/Contents/Resources/native/photo-curator-vision"
-	test -x "$(APP)/Contents/Resources/native/photo-curator-photokit"
-	test -x "$(APP)/Contents/Resources/native/photo-curator-publish"
+	bash packaging/macos/verify_app.sh "$(APP)"
 
 install: app
 	mkdir -p "$(INSTALL_DIR)"

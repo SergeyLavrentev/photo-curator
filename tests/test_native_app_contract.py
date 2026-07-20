@@ -93,6 +93,18 @@ def test_local_signing_identity_is_stable_and_optional() -> None:
     assert "--timestamp --sign" in build
 
 
+def test_bundle_verifier_guards_tcc_identity_and_native_only_contents() -> None:
+    verifier = (ROOT / "packaging/macos/verify_app.sh").read_text()
+    makefile = (ROOT / "Makefile").read_text()
+
+    assert 'require_identifier "$MAIN" "local.photo-curator.app"' in verifier
+    assert 'require_identifier "$SOURCE" "local.photo-curator.source-helper"' in verifier
+    assert 'require_identifier "$PUBLISH" "local.photo-curator.publish-helper"' in verifier
+    assert "PhotoKit helper has no signed embedded Info.plist" in verifier
+    assert "web assets are present in the native bundle" in verifier
+    assert 'bash packaging/macos/verify_app.sh "$(APP)"' in makefile
+
+
 def test_native_review_localizes_swipe_reasons() -> None:
     models = (ROOT / "packaging/macos/PhotoCuratorModels.swift").read_text()
 
