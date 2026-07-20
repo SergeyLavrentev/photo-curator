@@ -49,6 +49,16 @@ final class AppModel: ObservableObject {
         return jobs.map(\.progress).reduce(0, +) / Double(jobs.count)
     }
 
+    var tasteStatusTitle: String {
+        [
+            "collecting": "Настраивается",
+            "ready": "Активен",
+            "stale": "Нужно переобучить",
+            "paused": "На паузе",
+            "incompatible": "Нужна повторная настройка после обновления анализа",
+        ][tasteStatus] ?? tasteStatus
+    }
+
     var progressMessage: String {
         if let active = jobs.last(where: { $0.status == "running" }) {
             return active.message.isEmpty ? stageName(active.stage) : active.message
@@ -712,7 +722,7 @@ struct RootView: View {
     private var tasteSection: some View {
         StepCard(number: 2, title: "Персональный вкус — опционально", symbol: "heart.text.square") {
             Text(model.tasteExamples > 0
-                 ? "Профиль: \(model.tasteStatus), сравнений: \(model.tasteExamples)."
+                 ? "Профиль: \(model.tasteStatusTitle), сравнений: \(model.tasteExamples)."
                  : "Можно начать без настройки. После анализа выберите лучший из пары кадров.")
                 .foregroundStyle(.secondary)
             if let pair = model.tastePair {
@@ -997,7 +1007,7 @@ struct SettingsView: View {
                 Button("Перезапустить движок") { model.restartWorker() }
             }
             Section("Персональный вкус") {
-                LabeledContent("Профиль", value: model.tasteStatus)
+                LabeledContent("Профиль", value: model.tasteStatusTitle)
                 LabeledContent("Сравнений", value: "\(model.tasteExamples)")
                 HStack {
                     Button(model.tasteStatus == "paused" ? "Возобновить" : "Поставить на паузу") {

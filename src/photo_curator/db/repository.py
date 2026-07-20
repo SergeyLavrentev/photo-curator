@@ -820,6 +820,32 @@ def set_taste_profile_paused(
     return get_taste_profile(connection, profile_id)
 
 
+def set_taste_profile_compatibility(
+    connection: sqlite3.Connection,
+    *,
+    compatible: bool,
+    observed_feature_schemas: list[str],
+    profile_id: str = "default",
+) -> dict[str, object]:
+    profile = get_taste_profile(connection, profile_id)
+    evidence = dict(profile.get("evidence") or {})
+    evidence["compatibility"] = {
+        "compatible": compatible,
+        "profile_feature_schema": profile.get("feature_schema"),
+        "observed_feature_schemas": observed_feature_schemas,
+    }
+    status = str(profile["status"])
+    if not compatible:
+        status = "incompatible"
+    elif status == "incompatible":
+        status = "ready"
+    connection.execute(
+        "UPDATE taste_profiles SET status=?, evidence_json=?, updated_at=? WHERE id=?",
+        (status, json.dumps(evidence, sort_keys=True), utc_now(), profile_id),
+    )
+    return get_taste_profile(connection, profile_id)
+
+
 def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
     rows = connection.execute(
         """

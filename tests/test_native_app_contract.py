@@ -34,6 +34,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'call("taste_status"' in app
     assert 'call("taste_reset")' in app
     assert "refreshDecisionsForTaste" in app
+    assert '"incompatible": "Нужна повторная настройка после обновления анализа"' in app
     assert "Удалить профиль и все сравнения" in app
     assert ".accessibilityHint" in app
     assert "localhost" not in app + worker

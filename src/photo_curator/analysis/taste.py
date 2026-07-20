@@ -150,6 +150,43 @@ def load_taste_model(connection, profile_id: str = "default") -> TasteModel | No
     )
 
 
+def compatible_taste_model(
+    connection,
+    signals_by_asset: dict[str, dict[str, dict[str, object]]],
+    profile_id: str = "default",
+) -> TasteModel | None:
+    """Return a model only when every current Vision feature uses its trained schema."""
+    try:
+        profile = repository.get_taste_profile(connection, profile_id)
+    except KeyError:
+        return None
+    if profile.get("status") == "paused":
+        return None
+    model = load_taste_model(connection, profile_id)
+    if model is None:
+        return None
+    observed: set[str] = set()
+    for signals in signals_by_asset.values():
+        feature = signals.get("feature_print")
+        if not feature:
+            continue
+        try:
+            schema, _, _ = feature_vector(feature)
+        except TasteProfileError:
+            continue
+        observed.add(schema)
+    if not observed:
+        return None
+    compatible = observed == {model.feature_schema}
+    repository.set_taste_profile_compatibility(
+        connection,
+        compatible=compatible,
+        observed_feature_schemas=sorted(observed),
+        profile_id=profile_id,
+    )
+    return model if compatible else None
+
+
 def feature_vector(signal: dict[str, object]) -> tuple[str, np.ndarray, str]:
     if signal.get("status") != "ready":
         raise TasteProfileError("Feature print не готов")

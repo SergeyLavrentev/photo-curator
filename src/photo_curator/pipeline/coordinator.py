@@ -15,7 +15,7 @@ from photo_curator.analysis.image_loader import load_normalized
 from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
 from photo_curator.analysis.normalization import percentile_ranks
 from photo_curator.analysis.swipe_score import apple_score_percentiles, calculate_swipe_score
-from photo_curator.analysis.taste import TasteProfileError, load_taste_model
+from photo_curator.analysis.taste import TasteProfileError, compatible_taste_model
 from photo_curator.analysis.technical import technical_metrics
 from photo_curator.analysis.vision import analyze_faces, vision_available
 from photo_curator.db import repository
@@ -548,7 +548,7 @@ class PipelineCoordinator:
             duplicate_by_asset = repository.duplicate_context(connection, project_id)
             signal_by_asset = repository.analysis_signals_by_asset(connection, project_id)
             try:
-                taste_model = load_taste_model(connection)
+                taste_model = compatible_taste_model(connection, signal_by_asset)
             except TasteProfileError:
                 LOGGER.exception("Taste profile is invalid; generic ranking will be used")
                 taste_model = None

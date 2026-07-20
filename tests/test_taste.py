@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from photo_curator.analysis.taste import (
     TasteProfileError,
     capture_preference,
+    compatible_taste_model,
     load_taste_model,
     train_taste_profile,
 )
@@ -65,6 +66,50 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
         scores = repository.list_swipe_scores(connection, project_id)
     assert any(abs(float(score["personal_delta"])) >= 2 for score in scores)
     assert all("personal_taste" in score["model_versions"] for score in scores)
+
+
+def test_taste_model_is_explicitly_invalidated_when_vision_schema_changes(
+    tmp_path: Path,
+) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        _capture_training_pairs(connection, project_id)
+        train_taste_profile(connection)
+        original_version = connection.execute(
+            "SELECT engine_version FROM analysis_signals "
+            "WHERE project_id=? AND signal_kind='feature_print' LIMIT 1",
+            (project_id,),
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE analysis_signals SET engine_version='future-v2' "
+            "WHERE project_id=? AND signal_kind='feature_print'",
+            (project_id,),
+        )
+        signals = repository.analysis_signals_by_asset(connection, project_id)
+        assert compatible_taste_model(connection, signals) is None
+        profile = repository.get_taste_profile(connection)
+
+    assert profile["status"] == "incompatible"
+    assert profile["evidence"]["compatibility"]["compatible"] is False
+    coordinator.run(project_id, from_stage="decisions")
+    with database_connection(paths.database) as connection:
+        scores = repository.list_swipe_scores(connection, project_id)
+    assert all(float(score["personal_delta"]) == 0 for score in scores)
+    assert all("personal_taste" not in score["model_versions"] for score in scores)
+
+    with database_connection(paths.database) as connection:
+        connection.execute(
+            "UPDATE analysis_signals SET engine_version=? "
+            "WHERE project_id=? AND signal_kind='feature_print'",
+            (original_version, project_id),
+        )
+    coordinator.run(project_id, from_stage="decisions")
+    with database_connection(paths.database) as connection:
+        restored = repository.get_taste_profile(connection)
+        restored_scores = repository.list_swipe_scores(connection, project_id)
+    assert restored["status"] == "ready"
+    assert any(abs(float(score["personal_delta"])) >= 2 for score in restored_scores)
 
 
 def test_preference_vectors_survive_project_deletion_and_reset_is_complete(tmp_path: Path) -> None:
