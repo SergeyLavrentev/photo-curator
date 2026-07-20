@@ -68,6 +68,19 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "-framework QuickLookUI" in build
 
 
+def test_local_signing_identity_is_stable_and_optional() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    helper = (ROOT / "packaging/macos/local_signing_identity.sh").read_text()
+    build = (ROOT / "packaging/macos/build_app.sh").read_text()
+
+    assert "local-signing-identity" in makefile
+    assert "Photo Curator Local Development" in helper
+    assert "extendedKeyUsage = critical,codeSigning" in helper
+    assert "security add-trusted-cert" in helper
+    assert 'SIGN_IDENTITY" == "Photo Curator Local Development"' in build
+    assert "--timestamp --sign" in build
+
+
 def test_native_review_localizes_swipe_reasons() -> None:
     models = (ROOT / "packaging/macos/PhotoCuratorModels.swift").read_text()
 

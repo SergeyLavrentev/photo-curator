@@ -95,6 +95,8 @@ done
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   /usr/bin/codesign --force --deep --sign - "$APP"
+elif [[ "$SIGN_IDENTITY" == "Photo Curator Local Development" ]]; then
+  /usr/bin/codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP"
 else
   /usr/bin/codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
 fi

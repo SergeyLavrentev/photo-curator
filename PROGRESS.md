@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: packaging получил idempotent stable local signing identity и
+  `make local-signing-identity`; `make app` автоматически выберет его после trust.
+  Certificate/private key уже импортированы в login Keychain, но macOS отклонила
+  trust authorization; до ручного подтверждения сборка fail-safe остаётся ad-hoc.
 - 2026-07-20: native pipeline lifecycle стал восстанавливаемым: worker startup
   переводит оставшиеся running jobs в `interrupted`, resume начинает с того же
   stage, а cooperative cancel проверяется между stages и в per-asset loops. SwiftUI
