@@ -220,3 +220,73 @@ def test_native_worker_marks_restart_interrupted_and_resumes_same_stage(tmp_path
     assert resumed["from_stage"] == "metrics"
     assert coordinator.started == [(project_id, "metrics")]
     assert worker.dispatch("cancel_analysis", {"project_id": project_id})["status"] == "cancelling"
+
+
+def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    assets = worker.dispatch("assets", {"project_id": project_id})["items"]
+
+    first, second, third = assets[:3]
+    for asset in (first, second, third):
+        worker.dispatch(
+            "quality_top_k",
+            {"project_id": project_id, "asset_uuid": asset["asset_uuid"], "selected": True},
+        )
+    worker.dispatch(
+        "quality_top_k",
+        {"project_id": project_id, "asset_uuid": second["asset_uuid"], "selected": False},
+    )
+    refreshed = worker.dispatch("assets", {"project_id": project_id})["items"]
+    ranks = {
+        asset["asset_uuid"]: asset["quality_top_k_rank"]
+        for asset in refreshed
+        if asset["quality_top_k_rank"] is not None
+    }
+    assert ranks == {first["asset_uuid"]: 1, third["asset_uuid"]: 2}
+
+    grouped = next(asset for asset in refreshed if asset["duplicate_group"])
+    decision_result = worker.dispatch(
+        "decision",
+        {
+            "project_id": project_id,
+            "asset_uuid": grouped["asset_uuid"],
+            "disposition": "keep",
+        },
+    )
+    assert decision_result["duplicate_group"] == grouped["duplicate_group"]
+    same_group = [
+        asset for asset in refreshed if asset["duplicate_group"] == grouped["duplicate_group"]
+    ]
+    labelled = worker.dispatch(
+        "quality_series",
+        {
+            "project_id": project_id,
+            "group_id": grouped["duplicate_group"],
+            "leader_uuid": grouped["asset_uuid"],
+        },
+    )
+    assert labelled["leader_uuid"] == grouped["asset_uuid"]
+    assert sorted(labelled["members"]) == sorted(asset["asset_uuid"] for asset in same_group)
+    after_series = worker.dispatch("assets", {"project_id": project_id})["items"]
+    labelled_assets = [
+        asset
+        for asset in after_series
+        if asset["quality_duplicate_group"] == labelled["duplicate_group"]
+    ]
+    assert len(labelled_assets) == len(same_group)
+    assert sum(asset["quality_expected_leader"] for asset in labelled_assets) == 1
+
+    ungrouped = [asset for asset in after_series if asset["duplicate_group"] is None][:2]
+    assert len(ungrouped) == 2
+    custom = worker.dispatch(
+        "quality_custom_series",
+        {
+            "project_id": project_id,
+            "member_uuids": [asset["asset_uuid"] for asset in ungrouped],
+            "leader_uuid": ungrouped[1]["asset_uuid"],
+        },
+    )
+    assert custom["leader_uuid"] == ungrouped[1]["asset_uuid"]
+    assert custom["duplicate_group"].startswith("human-")

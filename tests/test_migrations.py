@@ -36,6 +36,7 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "taste_profiles",
         "preference_examples",
         "model_registry",
+        "quality_asset_labels",
     } <= tables
     assert "destination_album_id" in publish_columns
 
@@ -46,3 +47,30 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
         migrate(connection)
 
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_schema_nine_database_upgrades_without_recreating_project_data(tmp_path: Path) -> None:
+    with database_connection(tmp_path / "v9.sqlite3") as connection:
+        connection.executescript(
+            """
+            CREATE TABLE assets (
+                project_id TEXT NOT NULL,
+                asset_uuid TEXT NOT NULL,
+                PRIMARY KEY (project_id, asset_uuid)
+            );
+            INSERT INTO assets VALUES ('project', 'asset');
+            PRAGMA user_version = 9;
+            """
+        )
+
+        migrate(connection)
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert connection.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='quality_asset_labels'"
+            ).fetchone()[0]
+            == 1
+        )

@@ -245,6 +245,45 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
     assert report["release_eligible"] is False
 
 
+def test_native_quality_export_becomes_ready_only_from_complete_human_annotations() -> None:
+    assets = _assets(50)
+    for index, asset in enumerate(assets):
+        asset.update(
+            swipe_score=100 - index,
+            swipe_schema_version=2,
+            swipe_model_versions={"generic": "vision-v2"},
+            manual_override=True,
+            manual_disposition="keep" if index < 10 else "review",
+            quality_top_k_rank=index + 1 if index < 5 else None,
+            quality_duplicate_group="human-series" if index < 2 else None,
+            quality_expected_leader=index == 0,
+        )
+    examples = [
+        {
+            "project_id": "trip",
+            "left_uuid": f"asset-{index:02d}",
+            "right_uuid": f"asset-{index + 20:02d}",
+            "preferred_uuid": f"asset-{index:02d}",
+            "split": "held_out",
+        }
+        for index in range(10)
+    ]
+
+    evidence = build_native_quality_evidence("trip", assets, examples)
+
+    assert evidence["summary"]["release_ready"] is True
+    assert evidence["summary"]["human_duplicate_groups"] == 1
+    assert evidence["manifest"]["expected_top_k"] == [
+        "asset-00",
+        "asset-01",
+        "asset-02",
+        "asset-03",
+        "asset-04",
+    ]
+    assert evidence["manifest"]["assets"][0]["expected_leader"] is True
+    assert evidence["manifest"]["assets"][1]["duplicate_group"] == "human-series"
+
+
 def test_cli_exports_template_from_analyzed_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

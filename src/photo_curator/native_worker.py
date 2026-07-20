@@ -166,6 +166,9 @@ class NativeWorker:
         limit = max(1, min(5000, int(params.get("limit") or 5000)))
         with database_connection(self.paths.database) as connection:
             assets = repository.list_assets(connection, project_id)
+            duplicate_context = repository.duplicate_context(connection, project_id)
+        for asset in assets:
+            asset["duplicate_context"] = duplicate_context.get(str(asset["asset_uuid"]), {})
         assets.sort(
             key=lambda asset: (
                 -float(asset.get("swipe_score") or -1),
@@ -186,7 +189,11 @@ class NativeWorker:
         note = str(params["note"])[:1000] if params.get("note") is not None else None
         with database_connection(self.paths.database) as connection:
             repository.set_manual_decision(connection, project_id, asset_uuid, disposition, note)
-            return _asset_payload(repository.get_asset(connection, project_id, asset_uuid))
+            asset = repository.get_asset(connection, project_id, asset_uuid)
+            asset["duplicate_context"] = repository.duplicate_context(connection, project_id).get(
+                asset_uuid, {}
+            )
+            return _asset_payload(asset)
 
     def _handle_taste_profile(self, params: dict[str, object]) -> dict[str, object]:
         del params
@@ -273,6 +280,41 @@ class NativeWorker:
             assets = repository.list_assets(connection, project_id)
             examples = repository.list_preference_examples(connection)
         return build_native_quality_evidence(project_id, assets, examples)
+
+    def _handle_quality_top_k(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        asset_uuid = _required_string(params, "asset_uuid")
+        selected = params.get("selected")
+        if not isinstance(selected, bool):
+            raise NativeWorkerError("selected must be boolean")
+        with database_connection(self.paths.database) as connection:
+            ordered = repository.set_quality_top_k(connection, project_id, asset_uuid, selected)
+        return {"top_k": ordered, "count": len(ordered)}
+
+    def _handle_quality_series(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            return repository.label_quality_duplicate_group(
+                connection,
+                project_id,
+                _required_string(params, "group_id"),
+                _required_string(params, "leader_uuid"),
+            )
+
+    def _handle_quality_custom_series(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        raw_members = params.get("member_uuids")
+        if not isinstance(raw_members, list) or not all(
+            isinstance(value, str) and value for value in raw_members
+        ):
+            raise NativeWorkerError("member_uuids must be a non-empty string array")
+        with database_connection(self.paths.database) as connection:
+            return repository.label_quality_custom_group(
+                connection,
+                project_id,
+                raw_members,
+                _required_string(params, "leader_uuid"),
+            )
 
     def _handle_quality_evaluate(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -413,6 +455,11 @@ def _asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "confidence": asset.get("swipe_confidence"),
         "components": asset.get("swipe_components") or {},
         "reasons": asset.get("swipe_reasons") or [],
+        "duplicate_group": (asset.get("duplicate_context") or {}).get("group_id"),
+        "duplicate_is_leader": bool((asset.get("duplicate_context") or {}).get("is_leader")),
+        "quality_top_k_rank": asset.get("quality_top_k_rank"),
+        "quality_duplicate_group": asset.get("quality_duplicate_group"),
+        "quality_expected_leader": bool(asset.get("quality_expected_leader")),
     }
 
 

@@ -3,8 +3,10 @@
 - 2026-07-20: нативный Settings экспортирует воспроизводимый S0 quality corpus:
   только явные manual decisions и project-scoped A/B choices попадают в human manifest,
   а текущий Swipe Score сохраняется отдельно с schema/model provenance. Predicted
-  dispositions, duplicate groups и Top-K не маскируются под truth; экспорт честно сообщает
-  оставшиеся требования 50–100 labels, 10 held-out pairs, series leaders и Top-K. Заполненные
+  dispositions, duplicate groups и автоматический Top-K не маскируются под truth. Schema v10
+  и review-галерея сохраняют явный ordered Top-K и выбранного человеком лидера серии отдельно
+  от prediction state. Произвольная multi-selection размечает и пропущенные алгоритмом серии,
+  не завышая recall; серия готова только после manual decisions всех её кадров. Заполненные
   labels и frozen score snapshot можно импортировать обратно и получить PASS/FAIL без CLI.
 - 2026-07-20: native Personal Taste больше не обучается и оценивается на одних данных:
   первые три выбора server-assigned calibration, затем blind held-out/calibration

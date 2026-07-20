@@ -77,6 +77,10 @@ struct PhotoItem: Identifiable {
     let reasons: [String]
     var disposition: String?
     var manualDisposition: String?
+    let duplicateGroup: String?
+    let qualityTopKRank: Int?
+    let qualityDuplicateGroup: String?
+    let qualityExpectedLeader: Bool
 
     init?(_ value: [String: Any]) {
         guard let id = value["asset_uuid"] as? String else { return nil }
@@ -89,6 +93,10 @@ struct PhotoItem: Identifiable {
         confidence = (value["confidence"] as? NSNumber)?.doubleValue
         disposition = value["final_disposition"] as? String
         manualDisposition = value["manual_disposition"] as? String
+        duplicateGroup = value["duplicate_group"] as? String
+        qualityTopKRank = (value["quality_top_k_rank"] as? NSNumber)?.intValue
+        qualityDuplicateGroup = value["quality_duplicate_group"] as? String
+        qualityExpectedLeader = value["quality_expected_leader"] as? Bool ?? false
         reasons = (value["reasons"] as? [[String: Any]] ?? []).compactMap {
             ($0["code"] as? String).map(reasonTitle)
         }

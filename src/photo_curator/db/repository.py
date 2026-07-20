@@ -859,17 +859,161 @@ def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[st
             s.generic_score AS swipe_generic_score, s.personal_delta AS swipe_personal_delta,
             s.confidence AS swipe_confidence, s.components_json AS swipe_components_json,
             s.reasons_json AS swipe_reasons_json, s.model_versions_json AS swipe_models_json,
-            s.schema_version AS swipe_schema_version
+            s.schema_version AS swipe_schema_version,
+            q.top_k_rank AS quality_top_k_rank,
+            q.duplicate_group AS quality_duplicate_group,
+            q.expected_leader AS quality_expected_leader
         FROM assets a
         LEFT JOIN metrics m USING (project_id, asset_uuid)
         LEFT JOIN decisions d USING (project_id, asset_uuid)
         LEFT JOIN swipe_scores s USING (project_id, asset_uuid)
+        LEFT JOIN quality_asset_labels q USING (project_id, asset_uuid)
         WHERE a.project_id = ?
         ORDER BY a.taken_at, a.asset_uuid
         """,
         (project_id,),
     ).fetchall()
     return [_decode_asset_row(dict(row)) for row in rows]
+
+
+def set_quality_top_k(
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuid: str,
+    selected: bool,
+) -> list[str]:
+    get_asset(connection, project_id, asset_uuid)
+    now = utc_now()
+    if selected:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(top_k_rank), 0) + 1 FROM quality_asset_labels WHERE project_id=?",
+            (project_id,),
+        ).fetchone()
+        next_rank = int(row[0])
+        connection.execute(
+            """
+            INSERT INTO quality_asset_labels (project_id, asset_uuid, top_k_rank, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
+                top_k_rank=excluded.top_k_rank, updated_at=excluded.updated_at
+            """,
+            (project_id, asset_uuid, next_rank, now),
+        )
+    else:
+        connection.execute(
+            """
+            UPDATE quality_asset_labels SET top_k_rank=NULL, updated_at=?
+            WHERE project_id=? AND asset_uuid=?
+            """,
+            (now, project_id, asset_uuid),
+        )
+    rows = connection.execute(
+        """
+        SELECT asset_uuid FROM quality_asset_labels
+        WHERE project_id=? AND top_k_rank IS NOT NULL
+        ORDER BY top_k_rank, asset_uuid
+        """,
+        (project_id,),
+    ).fetchall()
+    ordered = [str(row["asset_uuid"]) for row in rows]
+    for rank, current_uuid in enumerate(ordered, start=1):
+        connection.execute(
+            """
+            UPDATE quality_asset_labels SET top_k_rank=?, updated_at=?
+            WHERE project_id=? AND asset_uuid=?
+            """,
+            (rank, now, project_id, current_uuid),
+        )
+    return ordered
+
+
+def label_quality_duplicate_group(
+    connection: sqlite3.Connection,
+    project_id: str,
+    predicted_group_id: str,
+    leader_uuid: str,
+) -> dict[str, object]:
+    row = connection.execute(
+        """
+        SELECT 1 FROM duplicate_members
+        WHERE project_id=? AND group_id=? AND asset_uuid=?
+        """,
+        (project_id, predicted_group_id, leader_uuid),
+    ).fetchone()
+    if not row:
+        raise ValueError("Выбранный лидер не входит в эту серию")
+    members = [
+        str(item["asset_uuid"])
+        for item in connection.execute(
+            """
+            SELECT asset_uuid FROM duplicate_members
+            WHERE project_id=? AND group_id=? ORDER BY asset_uuid
+            """,
+            (project_id, predicted_group_id),
+        ).fetchall()
+    ]
+    return label_quality_custom_group(connection, project_id, members, leader_uuid)
+
+
+def label_quality_custom_group(
+    connection: sqlite3.Connection,
+    project_id: str,
+    member_uuids: list[str],
+    leader_uuid: str,
+) -> dict[str, object]:
+    members = sorted(set(member_uuids))
+    if len(members) < 2:
+        raise ValueError("Серия должна содержать не менее двух разных фото")
+    if leader_uuid not in members:
+        raise ValueError("Выбранный лидер не входит в эту серию")
+    known = {
+        str(row["asset_uuid"])
+        for row in connection.execute(
+            """
+            SELECT asset_uuid FROM assets
+            WHERE project_id=? AND asset_uuid IN ({})
+            """.format(",".join("?" for _ in members)),
+            (project_id, *members),
+        ).fetchall()
+    }
+    if known != set(members):
+        raise ValueError("Серия содержит фото из другого или удалённого проекта")
+    digest = hashlib.sha256("\n".join(members).encode()).hexdigest()[:16]
+    human_group = f"human-{digest}"
+    now = utc_now()
+    previous_groups = [
+        str(row["duplicate_group"])
+        for row in connection.execute(
+            """
+            SELECT DISTINCT duplicate_group FROM quality_asset_labels
+            WHERE project_id=? AND asset_uuid IN ({}) AND duplicate_group IS NOT NULL
+            """.format(",".join("?" for _ in members)),
+            (project_id, *members),
+        ).fetchall()
+    ]
+    for previous_group in previous_groups:
+        connection.execute(
+            """
+            UPDATE quality_asset_labels
+            SET duplicate_group=NULL, expected_leader=0, updated_at=?
+            WHERE project_id=? AND duplicate_group=?
+            """,
+            (now, project_id, previous_group),
+        )
+    for member_uuid in members:
+        connection.execute(
+            """
+            INSERT INTO quality_asset_labels (
+                project_id, asset_uuid, duplicate_group, expected_leader, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
+                duplicate_group=excluded.duplicate_group,
+                expected_leader=excluded.expected_leader,
+                updated_at=excluded.updated_at
+            """,
+            (project_id, member_uuid, human_group, int(member_uuid == leader_uuid), now),
+        )
+    return {"duplicate_group": human_group, "leader_uuid": leader_uuid, "members": members}
 
 
 def get_asset(

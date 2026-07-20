@@ -85,6 +85,31 @@ def build_native_quality_evidence(
         if bool(asset.get("manual_override"))
         and asset.get("manual_disposition") in ALLOWED_DISPOSITIONS
     ]
+    manually_labelled_ids = {str(asset["asset_uuid"]) for asset in manually_labelled}
+    annotated_groups: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for asset in active_assets:
+        group = asset.get("quality_duplicate_group")
+        if isinstance(group, str) and group:
+            annotated_groups[group].append(asset)
+    complete_groups = {
+        group
+        for group, members in annotated_groups.items()
+        if len(members) >= 2
+        and {str(member["asset_uuid"]) for member in members} <= manually_labelled_ids
+        and sum(bool(member.get("quality_expected_leader")) for member in members) == 1
+    }
+    top_k = [
+        str(asset["asset_uuid"])
+        for asset in sorted(
+            (
+                asset
+                for asset in active_assets
+                if isinstance(asset.get("quality_top_k_rank"), int)
+                and not isinstance(asset.get("quality_top_k_rank"), bool)
+            ),
+            key=lambda asset: (int(asset["quality_top_k_rank"]), str(asset["asset_uuid"])),
+        )
+    ]
     project_ids = {str(asset["asset_uuid"]) for asset in active_assets}
     pairs = [
         {
@@ -103,16 +128,20 @@ def build_native_quality_evidence(
         "project_id": project_id,
         "thresholds": DEFAULT_THRESHOLDS.copy(),
         "preference_pairs": pairs,
-        # A keep decision is not an explicit Top-K ordering. The user must fill this separately.
-        "expected_top_k": [],
+        "expected_top_k": top_k,
         "assets": [
             {
                 "asset_uuid": str(asset["asset_uuid"]),
                 "filename": asset.get("current_filename"),
                 "expected_disposition": asset["manual_disposition"],
-                # Predicted duplicate groups must never become ground truth implicitly.
-                "duplicate_group": None,
-                "expected_leader": False,
+                "duplicate_group": (
+                    asset.get("quality_duplicate_group")
+                    if asset.get("quality_duplicate_group") in complete_groups
+                    else None
+                ),
+                "expected_leader": bool(asset.get("quality_expected_leader"))
+                if asset.get("quality_duplicate_group") in complete_groups
+                else False,
             }
             for asset in manually_labelled
         ],
@@ -149,6 +178,12 @@ def build_native_quality_evidence(
         "scores": score_rows,
     }
     held_out = sum(pair["split"] == "held_out" for pair in pairs)
+    release_ready = (
+        50 <= len(manually_labelled) <= 100
+        and held_out >= MIN_HELD_OUT_PAIRS
+        and len(top_k) >= MIN_TOP_K
+        and bool(complete_groups)
+    )
     return {
         "schema_version": 1,
         "project_id": project_id,
@@ -158,13 +193,14 @@ def build_native_quality_evidence(
             "manual_labels": len(manually_labelled),
             "preference_pairs": len(pairs),
             "held_out_pairs": held_out,
-            "expected_top_k": 0,
-            "human_duplicate_groups": 0,
+            "expected_top_k": len(top_k),
+            "human_duplicate_groups": len(complete_groups),
+            "incomplete_human_duplicate_groups": len(annotated_groups) - len(complete_groups),
             "required_manual_labels_min": 50,
             "required_manual_labels_max": 100,
             "required_held_out_pairs": MIN_HELD_OUT_PAIRS,
             "required_top_k": MIN_TOP_K,
-            "release_ready": False,
+            "release_ready": release_ready,
         },
     }
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -314,6 +314,26 @@ CREATE TABLE model_registry (
 CREATE INDEX model_registry_status ON model_registry(status, name, version);
 """
 
+MIGRATION_10 = """
+CREATE TABLE quality_asset_labels (
+    project_id TEXT NOT NULL,
+    asset_uuid TEXT NOT NULL,
+    top_k_rank INTEGER,
+    duplicate_group TEXT,
+    expected_leader INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, asset_uuid),
+    FOREIGN KEY (project_id, asset_uuid)
+      REFERENCES assets(project_id, asset_uuid) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX quality_asset_labels_top_k
+ON quality_asset_labels(project_id, top_k_rank)
+WHERE top_k_rank IS NOT NULL;
+CREATE INDEX quality_asset_labels_duplicate_group
+ON quality_asset_labels(project_id, duplicate_group)
+WHERE duplicate_group IS NOT NULL;
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -356,4 +376,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 9:
         connection.executescript(MIGRATION_9)
         connection.execute("PRAGMA user_version = 9")
+        version = 9
+    if version < 10:
+        connection.executescript(MIGRATION_10)
+        connection.execute("PRAGMA user_version = 10")
     connection.commit()

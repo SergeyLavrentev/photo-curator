@@ -31,6 +31,7 @@ final class AppModel: ObservableObject {
     @Published var tasteRemaining = 0
     @Published var tasteMessage: String?
     @Published var qualityMessage: String?
+    @Published var qualitySeriesSelection: Set<String> = []
     @Published var isTasteBusy = false
     @Published var selectedPhotoID: String?
     @Published var photoAccessNeedsAction = false
@@ -175,22 +176,31 @@ final class AppModel: ObservableObject {
                 )
                 let labels = summary["manual_labels"] as? Int ?? 0
                 let heldOut = summary["held_out_pairs"] as? Int ?? 0
+                let topK = summary["expected_top_k"] as? Int ?? 0
+                let series = summary["human_duplicate_groups"] as? Int ?? 0
+                let releaseReady = summary["release_ready"] as? Bool ?? false
                 let instructions = """
                 Photo Curator quality evidence
 
                 Ручных решений: \(labels) (release gate: 50–100).
                 Проверочных A/B-пар: \(heldOut) (release gate: не менее 10).
+                Top-K: \(topK) (release gate: не менее 5).
+                Подтверждённых серий: \(series) (release gate: не менее 1).
+                Структура release fixture готова: \(releaseReady ? "да" : "нет").
 
                 photo-curator-labels.json содержит только явные решения пользователя.
-                Автоматические решения, найденные дубли и текущий Top-K не копируются в эталон.
-                Для полного acceptance вручную добавьте duplicate_group, expected_leader и expected_top_k.
+                Автоматические решения и найденные сервисом дубли не копируются в эталон.
+                Top-K и лучший кадр серии задаются пользователем в review-галерее.
+                Серия попадёт в manifest только после ручного решения для каждого её кадра.
                 photo-curator-swipe-scores.json фиксирует оценки и версии текущего движка.
                 """
                 try Data(instructions.utf8).write(
                     to: directory.appendingPathComponent("README-quality-evidence.txt"),
                     options: .atomic
                 )
-                qualityMessage = "Сохранено: \(labels) ручных решений, \(heldOut) проверочных A/B-пар."
+                qualityMessage = releaseReady
+                    ? "Quality fixture готов к evaluation."
+                    : "Сохранено: \(labels) решений, \(heldOut) A/B, Top‑K \(topK), серий \(series)."
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -251,6 +261,8 @@ final class AppModel: ObservableObject {
         decisionHistory = []
         tastePair = nil
         tasteMessage = nil
+        qualitySeriesSelection.removeAll()
+        qualityMessage = nil
         publishPlan = nil
         Task {
             do {
@@ -315,6 +327,75 @@ final class AppModel: ObservableObject {
                         decisionHistory.append(DecisionUndo(photoID: photoID, previous: previousManual))
                     }
                 }
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func toggleQualityTopK(photoID: String) {
+        guard let project, let photo = photos.first(where: { $0.id == photoID }) else { return }
+        Task {
+            do {
+                _ = try await call("quality_top_k", [
+                    "project_id": project.id,
+                    "asset_uuid": photoID,
+                    "selected": photo.qualityTopKRank == nil,
+                ])
+                await loadPhotos(projectID: project.id)
+                qualityMessage = photo.qualityTopKRank == nil
+                    ? "Фото добавлено в ваш Top‑K."
+                    : "Фото удалено из вашего Top‑K."
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func labelSeriesLeader(photoID: String) {
+        guard
+            let project,
+            let photo = photos.first(where: { $0.id == photoID }),
+            let groupID = photo.duplicateGroup
+        else { return }
+        Task {
+            do {
+                _ = try await call("quality_series", [
+                    "project_id": project.id,
+                    "group_id": groupID,
+                    "leader_uuid": photoID,
+                ])
+                await loadPhotos(projectID: project.id)
+                qualityMessage = "Выбор лучшего кадра серии сохранён как человеческая разметка."
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func toggleQualitySeriesSelection(photoID: String) {
+        if qualitySeriesSelection.contains(photoID) {
+            qualitySeriesSelection.remove(photoID)
+        } else {
+            qualitySeriesSelection.insert(photoID)
+        }
+    }
+
+    func saveCustomQualitySeries() {
+        guard
+            let project,
+            let leaderID = selectedPhotoID,
+            qualitySeriesSelection.count >= 2,
+            qualitySeriesSelection.contains(leaderID)
+        else {
+            qualityMessage = "Выберите минимум два кадра серии и один из них как текущий лидер."
+            return
+        }
+        let members = qualitySeriesSelection.sorted()
+        Task {
+            do {
+                _ = try await call("quality_custom_series", [
+                    "project_id": project.id,
+                    "member_uuids": members,
+                    "leader_uuid": leaderID,
+                ])
+                qualitySeriesSelection.removeAll()
+                await loadPhotos(projectID: project.id)
+                qualityMessage = "Ручная серия сохранена; текущий кадр назначен лидером."
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -907,6 +988,24 @@ struct RootView: View {
         StepCard(number: 4, title: "Проверьте и сохраните", symbol: "checkmark.rectangle.stack") {
             Text("Фото отсортированы по Swipe Score. Исправьте только спорные решения; причины спрятаны в ⓘ.")
                 .foregroundStyle(.secondary)
+            if !model.qualitySeriesSelection.isEmpty {
+                HStack {
+                    Text("В ручной серии: \(model.qualitySeriesSelection.count)")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button("Сбросить") { model.qualitySeriesSelection.removeAll() }
+                    Button("Сохранить; текущий кадр — лидер") {
+                        model.saveCustomQualitySeries()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        model.qualitySeriesSelection.count < 2
+                            || !model.qualitySeriesSelection.contains(model.selectedPhotoID ?? "")
+                    )
+                }
+                .padding(10)
+                .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 16) {
                 ForEach(model.photos) { photo in
                     PhotoCard(
@@ -916,7 +1015,13 @@ struct RootView: View {
                         preview: {
                             model.selectedPhotoID = photo.id
                             model.previewSelected()
-                        }
+                        },
+                        seriesSelected: model.qualitySeriesSelection.contains(photo.id),
+                        toggleTopK: { model.toggleQualityTopK(photoID: photo.id) },
+                        toggleSeriesSelection: {
+                            model.toggleQualitySeriesSelection(photoID: photo.id)
+                        },
+                        labelSeriesLeader: { model.labelSeriesLeader(photoID: photo.id) }
                     ) { disposition in
                         model.setDecision(photoID: photo.id, disposition: disposition)
                     }
@@ -984,6 +1089,10 @@ struct PhotoCard: View {
     let selected: Bool
     let select: () -> Void
     let preview: () -> Void
+    let seriesSelected: Bool
+    let toggleTopK: () -> Void
+    let toggleSeriesSelection: () -> Void
+    let labelSeriesLeader: () -> Void
     let decide: (String?) -> Void
     @State private var showDetails = false
 
@@ -1015,6 +1124,29 @@ struct PhotoCard: View {
             HStack {
                 Text(photo.filename).lineLimit(1).font(.subheadline.weight(.medium))
                 Spacer()
+                Button(action: toggleTopK) {
+                    HStack(spacing: 3) {
+                        Image(systemName: photo.qualityTopKRank == nil ? "star" : "star.fill")
+                        if let rank = photo.qualityTopKRank {
+                            Text("#\(rank)").font(.caption2.monospacedDigit())
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .help(photo.qualityTopKRank == nil ? "Добавить в мой Top‑K" : "Убрать из моего Top‑K")
+                .accessibilityLabel(
+                    photo.qualityTopKRank.map { "Позиция \($0) в моём Top-K" }
+                        ?? "Добавить в мой Top-K"
+                )
+                Button(action: toggleSeriesSelection) {
+                    Image(systemName: seriesSelected ? "square.stack.3d.up.fill" : "square.stack.3d.up")
+                        .foregroundStyle(seriesSelected ? Color.accentColor : Color.primary)
+                }
+                .buttonStyle(.plain)
+                .help(seriesSelected ? "Убрать из ручной серии" : "Добавить в ручную серию")
+                .accessibilityLabel(
+                    seriesSelected ? "Убрать фото из ручной серии" : "Добавить фото в ручную серию"
+                )
                 Button { showDetails.toggle() } label: { Image(systemName: "info.circle") }
                     .buttonStyle(.plain)
                     .popover(isPresented: $showDetails) {
@@ -1026,6 +1158,16 @@ struct PhotoCard: View {
                             ForEach(photo.reasons, id: \.self) { Text("• \($0)") }
                         }.padding().frame(width: 260)
                     }
+            }
+            if photo.duplicateGroup != nil {
+                Button(action: labelSeriesLeader) {
+                    Label(
+                        photo.qualityExpectedLeader ? "Лучший кадр серии подтверждён" : "Это лучший кадр серии",
+                        systemImage: photo.qualityExpectedLeader ? "checkmark.seal.fill" : "square.stack.3d.up"
+                    )
+                }
+                .buttonStyle(.borderless)
+                .font(.caption.weight(.semibold))
             }
             Picker("Решение", selection: Binding(
                 get: { photo.disposition ?? "review" },

@@ -1,8 +1,9 @@
 # Модель данных SQLite
 
 > Это схема переходного baseline плюс V2 migrations. `analysis_signals` хранит native
-> Vision provenance, `swipe_scores` — versioned ranking, а schema v8 — локальные pairwise
-> examples и Personal Taste Profile. Реальный personalization uplift ещё не принят.
+> Vision provenance, `swipe_scores` — versioned ranking, schema v8 — локальные pairwise
+> examples и Personal Taste Profile, а schema v10 — независимую human quality-разметку.
+> Реальный personalization uplift ещё не принят.
 
 ## V2 schema direction
 
@@ -16,6 +17,9 @@
   explicit commercial-use flag, Core ML compute policy, lifecycle status и versioned
   compatibility/runtime/held-out uplift evidence. Изменившаяся модель становится invalid;
   research-only или не доказавшая uplift модель не может стать approved.
+- `quality_asset_labels` (schema v10) с явным ordered Top-K и human duplicate-group/leader
+  labels. Они не имеют foreign key к predicted `duplicate_groups`, поэтому не меняются и не
+  исчезают после повторного запуска алгоритма.
 
 Manual decisions и safety protections остаются отдельными от learned preference state.
 
