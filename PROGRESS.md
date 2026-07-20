@@ -193,7 +193,7 @@ native app network surface                        — no TCP listener; Cmd+Q sto
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
 Core ML generic helper                           — compiled; capability v1; no model bundled
-pytest excluding native Vision file + face smoke — 140 passed; 1 face test deferred by SecurityAgent
+pytest excluding native Vision file + face smoke — 145 passed; macOS smoke waits for Photos TCC
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow
