@@ -130,20 +130,29 @@ uv run photo-curator vision-benchmark --project-id PROJECT_ID \
 
 ### Optional Core ML model benchmark
 
-S3 adapter принимает внешнюю `.mlmodel`, `.mlpackage` или `.mlmodelc`, запускает её
+S3 adapter принимает внешнюю `.mlmodel`, `.mlpackage` или `.mlmodelc`, но сначала
+регистрирует immutable checksum и лицензионный контракт. Затем он запускает модель
 через Vision/Core ML с `MLComputeUnits.all` и сохраняет versioned outputs и median
 latency по готовым preview проекта:
 
 ```bash
 make coreml-helper
+uv run photo-curator model-register \
+  --model /path/to/model.mlpackage --model-name NAME --model-version VERSION \
+  --license-id Apache-2.0 --source-url https://example/model \
+  --commercial-use-allowed
+uv run photo-curator model-list
 uv run photo-curator coreml-benchmark --project-id PROJECT_ID \
-  --model /path/to/model.mlpackage --warmup 1 --iterations 3 \
+  --model-id MODEL_ID --warmup 1 --iterations 3 \
   --output coreml-benchmark.json
 ```
 
 Модель не скачивается и не входит в bundle автоматически. Перед продуктовым включением
 обязательны совместимая коммерческая лицензия, checksum, held-out uplift над Vision-only
-baseline и отдельное измерение CPU/GPU/Neural Engine через Instruments. Публичные веса
+baseline и отдельное измерение CPU/GPU/Neural Engine через Instruments. Команда
+`model-approve --model-id MODEL_ID --evidence evidence.json` fail-closed требует
+`compatible`, `runtime_passed`, название held-out metric и положительный uplift не меньше
+заранее указанного порога. Публичные веса
 Apple MobileCLIP не являются продуктовым кандидатом: их model license разрешает только
 некоммерческое исследовательское использование.
 

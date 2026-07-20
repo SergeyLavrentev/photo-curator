@@ -4,8 +4,10 @@
   получает детерминированный streaming SHA-256, license/source/commercial-use contract,
   `.all` compute policy и compatibility evidence. Research-only модель или модель без
   compatibility pass не может стать approved; изменение/исчезновение файлов переводит
-  уже зарегистрированную модель в invalid. Foundation покрыт migration/domain tests;
-  CLI и реальная лицензированная модель идут следующим атомарным срезом.
+  уже зарегистрированную модель в invalid. CLI register/list/benchmark/approve не даёт
+  обойти registry; approval дополнительно требует runtime pass и положительный held-out
+  uplift над baseline не ниже predeclared threshold. Реальная лицензированная модель и
+  Instruments attribution остаются открытыми gates.
 - 2026-07-20: добавлен model-agnostic S3 Core ML benchmark adapter: Swift helper
   принимает внешние `.mlmodel`/`.mlpackage`/`.mlmodelc`, явно использует
   `MLComputeUnits.all`, возвращает versioned classification/vector outputs и median
@@ -168,7 +170,7 @@ native app network surface                        — no TCP listener; Cmd+Q sto
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
 Core ML generic helper                           — compiled; capability v1; no model bundled
-pytest excluding native Vision test file         — 137 passed; Core ML compile smoke included
+pytest excluding native Vision file + face smoke — 140 passed; 1 face test deferred by SecurityAgent
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

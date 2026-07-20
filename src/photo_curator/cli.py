@@ -23,6 +23,14 @@ from photo_curator.acceptance import (
     load_score_snapshot,
 )
 from photo_curator.analysis.coreml_benchmark import CoreMLBenchmarkEngine, CoreMLBenchmarkError
+from photo_curator.analysis.model_registry import (
+    ModelRegistryError,
+    approve_model,
+    get_model,
+    list_models,
+    register_model,
+    revalidate_model,
+)
 from photo_curator.analysis.native_vision import (
     NativeVisionEngine,
     NativeVisionError,
@@ -61,6 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
             "acceptance-evaluate",
             "vision-benchmark",
             "coreml-benchmark",
+            "model-register",
+            "model-list",
+            "model-approve",
             "release-benchmark",
             "native-worker",
         ],
@@ -94,7 +105,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model",
         type=Path,
-        help="Core ML .mlmodel/.mlpackage/.mlmodelc для optional benchmark",
+        help="Core ML .mlmodel/.mlpackage/.mlmodelc для регистрации",
+    )
+    parser.add_argument("--model-id", help="ID зарегистрированной Core ML модели")
+    parser.add_argument("--model-name", help="Человекочитаемое имя модели")
+    parser.add_argument("--model-version", help="Неизменяемая версия модели")
+    parser.add_argument("--license-id", help="SPDX или точный идентификатор лицензии")
+    parser.add_argument("--source-url", help="Источник модели и лицензии")
+    parser.add_argument(
+        "--commercial-use-allowed",
+        action="store_true",
+        help="Явно подтвердить допустимость коммерческого использования",
+    )
+    parser.add_argument(
+        "--evidence",
+        type=Path,
+        help="JSON compatibility/runtime/held-out evidence для model-approve",
     )
     parser.add_argument("--warmup", type=nonnegative_int, default=0)
     parser.add_argument("--iterations", type=positive_int, default=1)
@@ -269,8 +295,8 @@ def run_release_benchmark_command(args: argparse.Namespace) -> int:
 def run_coreml_benchmark_command(args: argparse.Namespace) -> int:
     if not args.project_id:
         raise CoreMLBenchmarkError("Укажите --project-id")
-    if not args.model:
-        raise CoreMLBenchmarkError("Укажите --model")
+    if not args.model_id:
+        raise CoreMLBenchmarkError("Укажите --model-id зарегистрированной модели")
     paths = default_application_paths()
     with database_connection(paths.database) as connection:
         migrate(connection)
@@ -278,6 +304,12 @@ def run_coreml_benchmark_command(args: argparse.Namespace) -> int:
             get_project(connection, args.project_id)
         except KeyError as error:
             raise CoreMLBenchmarkError(f"Проект не найден: {args.project_id}") from error
+        try:
+            model = get_model(connection, model_id=args.model_id)
+        except KeyError as error:
+            raise CoreMLBenchmarkError(f"Модель не найдена: {args.model_id}") from error
+        if not revalidate_model(connection, args.model_id):
+            raise CoreMLBenchmarkError("Файлы модели изменились после регистрации")
         assets = [
             (str(asset["asset_uuid"]), Path(str(asset["review_path"])))
             for asset in list_assets(connection, args.project_id)
@@ -286,11 +318,20 @@ def run_coreml_benchmark_command(args: argparse.Namespace) -> int:
     if not assets:
         raise CoreMLBenchmarkError("В проекте нет готовых preview для benchmark")
     report = CoreMLBenchmarkEngine(paths).benchmark(
-        args.model,
+        Path(str(model["model_path"])),
         assets,
         warmup_iterations=args.warmup,
         measured_iterations=args.iterations,
     )
+    report["registry"] = {
+        "id": model["id"],
+        "name": model["name"],
+        "version": model["version"],
+        "sha256": model["sha256"],
+        "license_id": model["license_id"],
+        "commercial_use_allowed": model["commercial_use_allowed"],
+        "status": model["status"],
+    }
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -300,6 +341,67 @@ def run_coreml_benchmark_command(args: argparse.Namespace) -> int:
         print(rendered, end="")
     failed = [row for row in report["assets"] if row.get("error")]
     return 1 if failed else 0
+
+
+def run_model_register_command(args: argparse.Namespace) -> int:
+    required = {
+        "--model": args.model,
+        "--model-name": args.model_name,
+        "--model-version": args.model_version,
+        "--license-id": args.license_id,
+    }
+    missing = [flag for flag, value in required.items() if not value]
+    if missing:
+        raise ModelRegistryError(f"Укажите {', '.join(missing)}")
+    paths = default_application_paths()
+    paths.ensure()
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        model = register_model(
+            connection,
+            name=args.model_name,
+            version=args.model_version,
+            model_path=args.model,
+            license_id=args.license_id,
+            source_url=args.source_url,
+            commercial_use_allowed=args.commercial_use_allowed,
+        )
+    print(json.dumps(model, ensure_ascii=False, indent=2))
+    return 0
+
+
+def run_model_list_command() -> int:
+    paths = default_application_paths()
+    paths.ensure()
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        models = list_models(connection)
+        for model in models:
+            revalidate_model(connection, str(model["id"]))
+        models = list_models(connection)
+    print(json.dumps(models, ensure_ascii=False, indent=2))
+    return 0
+
+
+def run_model_approve_command(args: argparse.Namespace) -> int:
+    if not args.model_id or not args.evidence:
+        raise ModelRegistryError("Укажите --model-id и --evidence")
+    try:
+        evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ModelRegistryError("Evidence должен быть читаемым JSON") from error
+    if not isinstance(evidence, dict):
+        raise ModelRegistryError("Evidence должен быть JSON object")
+    paths = default_application_paths()
+    paths.ensure()
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        try:
+            model = approve_model(connection, args.model_id, compatibility=evidence)
+        except KeyError as error:
+            raise ModelRegistryError(f"Модель не найдена: {args.model_id}") from error
+    print(json.dumps(model, ensure_ascii=False, indent=2))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -321,6 +423,22 @@ def main(argv: list[str] | None = None) -> None:
             result = run_coreml_benchmark_command(args)
         except (CoreMLBenchmarkError, OSError, ValueError) as error:
             print(f"Core ML benchmark error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
+    if args.command == "model-register":
+        try:
+            result = run_model_register_command(args)
+        except (ModelRegistryError, OSError) as error:
+            print(f"Model registry error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
+    if args.command == "model-list":
+        raise SystemExit(run_model_list_command())
+    if args.command == "model-approve":
+        try:
+            result = run_model_approve_command(args)
+        except (ModelRegistryError, OSError) as error:
+            print(f"Model registry error: {error}", file=sys.stderr)
             result = 2
         raise SystemExit(result)
     if args.command == "release-benchmark":

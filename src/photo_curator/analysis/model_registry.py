@@ -134,6 +134,22 @@ def approve_model(
         raise ModelRegistryError("Model license does not allow commercial product use")
     if not compatibility.get("compatible"):
         raise ModelRegistryError("Model compatibility has not passed")
+    if not compatibility.get("runtime_passed"):
+        raise ModelRegistryError("Model runtime gate has not passed")
+    metric = compatibility.get("held_out_metric")
+    baseline = compatibility.get("held_out_baseline")
+    candidate = compatibility.get("held_out_candidate")
+    minimum = compatibility.get("minimum_uplift")
+    if (
+        not isinstance(metric, str)
+        or not metric.strip()
+        or not isinstance(baseline, (int, float))
+        or not isinstance(candidate, (int, float))
+        or not isinstance(minimum, (int, float))
+        or minimum <= 0
+        or candidate - baseline < minimum
+    ):
+        raise ModelRegistryError("Model held-out uplift gate has not passed")
     if model_sha256(Path(str(model["model_path"]))) != model["sha256"]:
         connection.execute(
             "UPDATE model_registry SET status='invalid', updated_at=? WHERE id=?",

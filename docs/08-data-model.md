@@ -12,7 +12,10 @@
 - `swipe_scores` с generic score, personal delta, confidence, components и reasons;
 - `preference_examples` с явными A/B choices и provenance;
 - `taste_profiles` с feature schema, parameters, training/evaluation evidence и status;
-- `model_registry` с license, checksum, Core ML compute policy и compatibility.
+- `model_registry` с immutable name/version, streaming SHA-256, license/source,
+  explicit commercial-use flag, Core ML compute policy, lifecycle status и versioned
+  compatibility/runtime/held-out uplift evidence. Изменившаяся модель становится invalid;
+  research-only или не доказавшая uplift модель не может стать approved.
 
 Manual decisions и safety protections остаются отдельными от learned preference state.
 

@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 
 from photo_curator.analysis.coreml_benchmark import CoreMLBenchmarkEngine
+from photo_curator.analysis.model_registry import register_model
 from photo_curator.cli import run_coreml_benchmark_command
+from photo_curator.db.connection import database_connection
 from photo_curator.paths import default_application_paths
 from photo_curator.utils.subprocesses import CommandResult
 from tests.test_pipeline import build_pipeline
@@ -20,6 +22,7 @@ def test_engine_validates_coreml_result_and_removes_requests(tmp_path: Path) -> 
     paths.ensure()
     model = tmp_path / "scorer.mlmodelc"
     model.mkdir()
+    (model / "model.bin").write_bytes(b"test-model")
     image = tmp_path / "image.jpg"
     image.write_bytes(b"jpeg-placeholder")
     requests: list[dict[str, object]] = []
@@ -82,6 +85,7 @@ def test_cli_benchmarks_ready_project(tmp_path: Path, monkeypatch: pytest.Monkey
     coordinator.run(project_id)
     model = tmp_path / "scorer.mlmodelc"
     model.mkdir()
+    (model / "model.bin").write_bytes(b"test-model")
     calls: list[tuple[Path, list[tuple[str, Path]], int, int]] = []
 
     class FakeEngine:
@@ -102,12 +106,22 @@ def test_cli_benchmarks_ready_project(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("photo_curator.cli.default_application_paths", lambda: paths)
     monkeypatch.setattr("photo_curator.cli.CoreMLBenchmarkEngine", FakeEngine)
+    with database_connection(paths.database) as connection:
+        registered = register_model(
+            connection,
+            name="Test scorer",
+            version="1",
+            model_path=model,
+            license_id="Apache-2.0",
+            source_url=None,
+            commercial_use_allowed=True,
+        )
     output = tmp_path / "coreml.json"
 
     result = run_coreml_benchmark_command(
         Namespace(
             project_id=project_id,
-            model=model,
+            model_id=registered["id"],
             warmup=1,
             iterations=3,
             output=output,
@@ -119,3 +133,4 @@ def test_cli_benchmarks_ready_project(tmp_path: Path, monkeypatch: pytest.Monkey
     assert calls[0][0] == model
     assert calls[0][2:] == (1, 3)
     assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert json.loads(output.read_text(encoding="utf-8"))["registry"]["sha256"]
