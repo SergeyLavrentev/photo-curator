@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -294,6 +294,26 @@ CREATE INDEX preference_examples_profile_split
 ON preference_examples(profile_id, split, created_at);
 """
 
+MIGRATION_9 = """
+CREATE TABLE model_registry (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    model_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    license_id TEXT NOT NULL,
+    source_url TEXT,
+    commercial_use_allowed INTEGER NOT NULL DEFAULT 0,
+    compute_policy TEXT NOT NULL,
+    status TEXT NOT NULL,
+    compatibility_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(name, version)
+);
+CREATE INDEX model_registry_status ON model_registry(status, name, version);
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -332,4 +352,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 8:
         connection.executescript(MIGRATION_8)
         connection.execute("PRAGMA user_version = 8")
+        version = 8
+    if version < 9:
+        connection.executescript(MIGRATION_9)
+        connection.execute("PRAGMA user_version = 9")
     connection.commit()

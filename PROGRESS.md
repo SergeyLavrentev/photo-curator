@@ -1,5 +1,11 @@
 # Progress
 
+- 2026-07-20: schema v9 реализовала отсутствовавший `model_registry`: Core ML package
+  получает детерминированный streaming SHA-256, license/source/commercial-use contract,
+  `.all` compute policy и compatibility evidence. Research-only модель или модель без
+  compatibility pass не может стать approved; изменение/исчезновение файлов переводит
+  уже зарегистрированную модель в invalid. Foundation покрыт migration/domain tests;
+  CLI и реальная лицензированная модель идут следующим атомарным срезом.
 - 2026-07-20: добавлен model-agnostic S3 Core ML benchmark adapter: Swift helper
   принимает внешние `.mlmodel`/`.mlpackage`/`.mlmodelc`, явно использует
   `MLComputeUnits.all`, возвращает versioned classification/vector outputs и median
