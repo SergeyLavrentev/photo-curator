@@ -43,6 +43,10 @@ These signals protect correctness and break close ties. They do not define aesth
 
 MobileCLIP or another aesthetics model may add content/semantic appeal only after a licensed
 Core ML build beats the Vision-only baseline on held-out data within runtime budgets.
+Approved Core ML inference sends all cache misses through one model-loading process and stores
+only successful raw outputs under a key derived from the registered model SHA-256 and immutable
+review-render fingerprint. A changed model, changed render, corrupt entry or prior error is
+always a miss; unapproved models never enter the production inference path.
 
 ## Scenes, series and duplicates
 

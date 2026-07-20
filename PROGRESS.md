@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: S3 production inference foundation добавляет batch-only miss execution и
+  content-addressed Core ML output cache по approved model SHA-256 + immutable render
+  fingerprint. Cache write атомарен, corrupt/stale/error entries не принимаются, порядок
+  caller сохраняется; смена render/model автоматически даёт miss. Неподтверждённая,
+  изменившаяся или не `.all` модель fail-closed не запускается.
 - 2026-07-20: schema v9 реализовала отсутствовавший `model_registry`: Core ML package
   получает детерминированный streaming SHA-256, license/source/commercial-use contract,
   `.all` compute policy и compatibility evidence. Research-only модель или модель без
