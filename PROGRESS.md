@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: удалён небезопасный in-process PyObjC Vision fallback: на macOS 26.5.2
+  `VNDetectFaceLandmarksRequest.performRequests` мог зависнуть навсегда и остановить весь
+  pipeline. Production coordinator теперь требует native Swift helper и честно даёт warning
+  без него; legacy compatibility-вызов изолирован subprocess с трёхсекундным timeout и
+  нейтральным fail-safe. Native Swift Vision остаётся единственным production path.
 - 2026-07-20: нативный Settings экспортирует воспроизводимый S0 quality corpus:
   только явные manual decisions и project-scoped A/B choices попадают в human manifest,
   а текущий Swipe Score сохраняется отдельно с schema/model provenance. Predicted

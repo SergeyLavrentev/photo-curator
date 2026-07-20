@@ -17,7 +17,6 @@ from photo_curator.analysis.normalization import percentile_ranks
 from photo_curator.analysis.swipe_score import apple_score_percentiles, calculate_swipe_score
 from photo_curator.analysis.taste import TasteProfileError, compatible_taste_model
 from photo_curator.analysis.technical import technical_metrics
-from photo_curator.analysis.vision import analyze_faces, vision_available
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
@@ -364,49 +363,14 @@ class PipelineCoordinator:
         if self.vision_engine is not None:
             self._stage_native_vision(project_id, job_id, assets)
             return
-        if not vision_available():
-            with database_connection(self.database_path) as connection:
-                repository.update_job(
-                    connection,
-                    job_id,
-                    status="warning",
-                    processed=0,
-                    warnings=1,
-                    message="Apple Vision недоступен; используется технический рейтинг",
-                )
-            return
-        errors = 0
-        for index, asset in enumerate(assets, start=1):
-            self._check_cancelled(project_id)
-            try:
-                result = analyze_faces(Path(str(asset["review_path"])))
-                with database_connection(self.database_path) as connection:
-                    repository.update_vision_metrics(
-                        connection,
-                        project_id,
-                        str(asset["asset_uuid"]),
-                        face_count=result.face_count,
-                        face_capture_quality=result.face_capture_quality,
-                        eyes_detected=result.eyes_detected,
-                    )
-            except Exception:
-                errors += 1
-                LOGGER.exception("Vision analysis failed for %s", asset["asset_uuid"])
-            with database_connection(self.database_path) as connection:
-                repository.update_job(
-                    connection,
-                    job_id,
-                    processed=index,
-                    errors=errors,
-                    message=f"Лица и глаза {index} из {len(assets)}",
-                )
         with database_connection(self.database_path) as connection:
             repository.update_job(
                 connection,
                 job_id,
-                status="warning" if errors else "done",
-                processed=len(assets),
-                errors=errors,
+                status="warning",
+                processed=0,
+                warnings=1,
+                message="Native Apple Vision helper не настроен; сигнал пропущен",
             )
 
     def _stage_native_vision(

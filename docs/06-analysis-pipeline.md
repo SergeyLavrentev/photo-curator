@@ -1,5 +1,9 @@
 # Swipe Score analysis pipeline
 
+> Production Apple Vision выполняется только отдельным Swift helper. Старый PyObjC
+> compatibility path не запускается coordinator-ом: framework hang не должен блокировать
+> проект. Его прямой диагностический вызов изолирован в subprocess с жёстким timeout.
+
 ## Product pipeline
 
 ```text

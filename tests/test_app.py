@@ -170,9 +170,9 @@ def test_pipeline_api_exposes_truthful_aggregated_analysis_stage(tmp_path: Path)
 
     assert len(payload["stages"]) == 6
     analysis = next(stage for stage in payload["stages"] if stage["code"] == "metrics")
-    assert analysis["status"] == "done"
-    assert analysis["processed"] == analysis["total"]
-    assert analysis["warnings"] >= 0
+    assert analysis["status"] == "warning"
+    assert analysis["processed"] < analysis["total"]
+    assert analysis["warnings"] == 1
     assert "throughput" in analysis
 
 

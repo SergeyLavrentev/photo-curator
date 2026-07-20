@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
+from subprocess import TimeoutExpired
+from time import monotonic
 
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -72,8 +74,21 @@ def test_local_vision_face_analysis_is_capability_gated(tmp_path: Path) -> None:
     image_path = tmp_path / "plain.jpg"
     Image.new("RGB", (160, 120), "#345d78").save(image_path)
 
+    started = monotonic()
     result = analyze_faces(image_path)
 
     assert result.face_count == 0
     assert result.eyes_detected == 0
+    assert monotonic() - started < 5
     assert vision_available() in {True, False}
+
+
+def test_legacy_vision_timeout_is_neutral(monkeypatch) -> None:
+    def timeout(*args, **kwargs):
+        raise TimeoutExpired(cmd=args[0], timeout=3)
+
+    monkeypatch.setattr("photo_curator.analysis.vision.subprocess.run", timeout)
+
+    result = analyze_faces(Path("never-opened.jpg"))
+
+    assert result == type(result)(face_count=0, face_capture_quality=None, eyes_detected=0)
