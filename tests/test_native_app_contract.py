@@ -31,6 +31,10 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "Продолжить с прерванного этапа" in app
     assert "UserDefaults.standard" in app
     assert 'call("taste_export")' in app
+    assert 'call("quality_export"' in app
+    assert "photo-curator-labels.json" in app
+    assert "photo-curator-swipe-scores.json" in app
+    assert "Автоматические решения, найденные дубли и текущий Top-K не копируются" in app
     assert 'call("taste_status"' in app
     assert 'call("taste_reset")' in app
     assert "refreshDecisionsForTaste" in app

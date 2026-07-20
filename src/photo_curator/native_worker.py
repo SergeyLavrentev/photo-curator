@@ -4,6 +4,7 @@ import json
 import sys
 from typing import TextIO
 
+from photo_curator.acceptance import build_native_quality_evidence
 from photo_curator.analysis.native_vision import NativeVisionEngine
 from photo_curator.analysis.taste import (
     capture_preference,
@@ -264,6 +265,14 @@ class NativeWorker:
         with database_connection(self.paths.database) as connection:
             repository.reset_taste_profile(connection)
         return {"status": "deleted"}
+
+    def _handle_quality_export(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            repository.get_project(connection, project_id)
+            assets = repository.list_assets(connection, project_id)
+            examples = repository.list_preference_examples(connection)
+        return build_native_quality_evidence(project_id, assets, examples)
 
     def _handle_publish_dry_run(self, params: dict[str, object]) -> dict[str, object]:
         return _publish_payload(

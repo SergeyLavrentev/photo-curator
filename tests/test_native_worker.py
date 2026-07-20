@@ -157,6 +157,20 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     assert exported["schema_version"] == 1
     assert len(exported["examples"]) == 4
     assert exported["profile"]["weights_base64"]
+    worker.dispatch(
+        "decision",
+        {
+            "project_id": project_id,
+            "asset_uuid": reranked[0]["asset_uuid"],
+            "disposition": "keep",
+        },
+    )
+    quality = worker.dispatch("quality_export", {"project_id": project_id})
+    assert quality["manifest"]["assets"][0]["expected_disposition"] == "keep"
+    assert len(quality["manifest"]["preference_pairs"]) == 4
+    assert quality["summary"]["manual_labels"] == 1
+    assert quality["summary"]["held_out_pairs"] == 1
+    assert len(quality["score_snapshot"]["scores"]) == 12
     assert worker.dispatch("taste_status", {"paused": True})["status"] == "paused"
     assert worker.dispatch("taste_reset", {}) == {"status": "deleted"}
     assert worker.dispatch("taste_profile", {})["preference_count"] == 0

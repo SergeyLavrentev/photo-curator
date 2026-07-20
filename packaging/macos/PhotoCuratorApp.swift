@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     @Published var tastePair: TastePair?
     @Published var tasteRemaining = 0
     @Published var tasteMessage: String?
+    @Published var qualityMessage: String?
     @Published var isTasteBusy = false
     @Published var selectedPhotoID: String?
     @Published var photoAccessNeedsAction = false
@@ -133,6 +134,63 @@ final class AppModel: ObservableObject {
                 tastePair = nil
                 tasteMessage = "Профиль вкуса удалён. Используется общий Swipe Score."
                 await refreshDecisionsForTaste()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func exportQualityEvidence() {
+        guard let project else { return }
+        Task {
+            do {
+                let result = try await call("quality_export", ["project_id": project.id])
+                guard
+                    let value = result as? [String: Any],
+                    let manifest = value["manifest"],
+                    let snapshot = value["score_snapshot"],
+                    let summary = value["summary"] as? [String: Any]
+                else { throw NativeWorkerClientError.invalidResponse }
+
+                let panel = NSOpenPanel()
+                panel.title = "Куда сохранить проверочный набор?"
+                panel.prompt = "Сохранить"
+                panel.canChooseFiles = false
+                panel.canChooseDirectories = true
+                panel.canCreateDirectories = true
+                panel.allowsMultipleSelection = false
+                guard panel.runModal() == .OK, let directory = panel.url else { return }
+
+                let manifestData = try JSONSerialization.data(
+                    withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]
+                )
+                let snapshotData = try JSONSerialization.data(
+                    withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys]
+                )
+                try manifestData.write(
+                    to: directory.appendingPathComponent("photo-curator-labels.json"),
+                    options: .atomic
+                )
+                try snapshotData.write(
+                    to: directory.appendingPathComponent("photo-curator-swipe-scores.json"),
+                    options: .atomic
+                )
+                let labels = summary["manual_labels"] as? Int ?? 0
+                let heldOut = summary["held_out_pairs"] as? Int ?? 0
+                let instructions = """
+                Photo Curator quality evidence
+
+                Ручных решений: \(labels) (release gate: 50–100).
+                Проверочных A/B-пар: \(heldOut) (release gate: не менее 10).
+
+                photo-curator-labels.json содержит только явные решения пользователя.
+                Автоматические решения, найденные дубли и текущий Top-K не копируются в эталон.
+                Для полного acceptance вручную добавьте duplicate_group, expected_leader и expected_top_k.
+                photo-curator-swipe-scores.json фиксирует оценки и версии текущего движка.
+                """
+                try Data(instructions.utf8).write(
+                    to: directory.appendingPathComponent("README-quality-evidence.txt"),
+                    options: .atomic
+                )
+                qualityMessage = "Сохранено: \(labels) ручных решений, \(heldOut) проверочных A/B-пар."
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -1027,6 +1085,18 @@ struct SettingsView: View {
                         confirmsTasteReset = true
                     }
                     .disabled(model.tasteExamples == 0)
+                }
+            }
+            Section("Проверка качества") {
+                Text("Экспортирует только ваши явные решения и A/B-сравнения вместе с замороженным Swipe Score.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Экспортировать проверочный набор…") {
+                    model.exportQualityEvidence()
+                }
+                .disabled(model.project?.state != "ready")
+                if let message = model.qualityMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Text("Все вычисления и предпочтения остаются на этом Mac.")

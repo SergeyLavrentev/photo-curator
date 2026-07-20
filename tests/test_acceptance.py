@@ -7,6 +7,7 @@ import pytest
 from photo_curator.acceptance import (
     AcceptanceManifestError,
     build_manifest_template,
+    build_native_quality_evidence,
     build_score_snapshot,
     evaluate_acceptance,
     format_report,
@@ -183,6 +184,55 @@ def test_score_snapshot_freezes_engine_identity_and_current_scores() -> None:
         build_score_snapshot(
             "trip", incomplete, engine_name="technical-first", engine_version="legacy-v1"
         )
+
+
+def test_native_quality_export_never_promotes_predictions_to_human_truth() -> None:
+    assets = _assets(3)
+    for index, asset in enumerate(assets):
+        asset.update(
+            swipe_score=90 - index,
+            swipe_schema_version=2,
+            swipe_model_versions={"generic": "vision-v2"},
+            manual_override=index == 0,
+            manual_disposition="keep" if index == 0 else None,
+            final_disposition="reject" if index == 1 else "keep",
+        )
+    evidence = build_native_quality_evidence(
+        "trip",
+        assets,
+        [
+            {
+                "project_id": "trip",
+                "left_uuid": "asset-00",
+                "right_uuid": "asset-01",
+                "preferred_uuid": "asset-00",
+                "split": "held_out",
+            },
+            {
+                "project_id": "another-project",
+                "left_uuid": "asset-01",
+                "right_uuid": "asset-02",
+                "preferred_uuid": "asset-02",
+                "split": "calibration",
+            },
+        ],
+    )
+
+    assert evidence["manifest"]["assets"] == [
+        {
+            "asset_uuid": "asset-00",
+            "filename": "IMG_0000.JPG",
+            "expected_disposition": "keep",
+            "duplicate_group": None,
+            "expected_leader": False,
+        }
+    ]
+    assert len(evidence["manifest"]["preference_pairs"]) == 1
+    assert evidence["manifest"]["expected_top_k"] == []
+    assert evidence["score_snapshot"]["scores"]["asset-01"] == 89.0
+    assert evidence["score_snapshot"]["engine"]["version"].startswith("native-")
+    assert evidence["summary"]["manual_labels"] == 1
+    assert evidence["summary"]["release_ready"] is False
 
 
 def test_cli_exports_template_from_analyzed_project(

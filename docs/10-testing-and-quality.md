@@ -107,6 +107,12 @@ uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
   --labels labels.json --scores baseline.json --json
 ```
 
+Нативный Settings → «Проверка качества» экспортирует manifest из явных ручных решений
+и project-scoped A/B-пар, а также отдельный immutable Swipe Score snapshot с schema/model
+provenance. Экспорт fail-honest: predicted dispositions, duplicate groups и текущий Top-K
+не копируются в truth labels. Поэтому summary остаётся `release_ready: false`, пока человек
+не закончит разметку серий и ожидаемого Top-K и не прогонит evaluator.
+
 ## S1 native Vision benchmark
 
 Swift helper должен собираться с deployment target macOS 13, а aesthetics capability

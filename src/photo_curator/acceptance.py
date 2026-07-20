@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -68,6 +69,103 @@ def build_score_snapshot(
         "project_id": project_id,
         "engine": {"name": engine_name, "version": engine_version},
         "scores": scores,
+    }
+
+
+def build_native_quality_evidence(
+    project_id: str,
+    assets: list[dict[str, object]],
+    preference_examples: list[dict[str, object]],
+) -> dict[str, object]:
+    """Build an honest, portable quality corpus from explicit native-app feedback."""
+    active_assets = [asset for asset in assets if not asset.get("no_longer_exists")]
+    manually_labelled = [
+        asset
+        for asset in active_assets
+        if bool(asset.get("manual_override"))
+        and asset.get("manual_disposition") in ALLOWED_DISPOSITIONS
+    ]
+    project_ids = {str(asset["asset_uuid"]) for asset in active_assets}
+    pairs = [
+        {
+            "left_uuid": str(example["left_uuid"]),
+            "right_uuid": str(example["right_uuid"]),
+            "preferred_uuid": str(example["preferred_uuid"]),
+            "split": str(example["split"]),
+        }
+        for example in preference_examples
+        if example.get("project_id") == project_id
+        and example.get("left_uuid") in project_ids
+        and example.get("right_uuid") in project_ids
+    ]
+    manifest = {
+        "schema_version": 2,
+        "project_id": project_id,
+        "thresholds": DEFAULT_THRESHOLDS.copy(),
+        "preference_pairs": pairs,
+        # A keep decision is not an explicit Top-K ordering. The user must fill this separately.
+        "expected_top_k": [],
+        "assets": [
+            {
+                "asset_uuid": str(asset["asset_uuid"]),
+                "filename": asset.get("current_filename"),
+                "expected_disposition": asset["manual_disposition"],
+                # Predicted duplicate groups must never become ground truth implicitly.
+                "duplicate_group": None,
+                "expected_leader": False,
+            }
+            for asset in manually_labelled
+        ],
+    }
+
+    score_rows: dict[str, float] = {}
+    schema_versions: set[int] = set()
+    model_versions: set[str] = set()
+    for asset in active_assets:
+        score = asset.get("swipe_score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            raise AcceptanceManifestError(
+                f"Проект не содержит завершённый Swipe Score для {asset['asset_uuid']}"
+            )
+        score_rows[str(asset["asset_uuid"])] = float(score)
+        schema = asset.get("swipe_schema_version")
+        if isinstance(schema, int) and not isinstance(schema, bool):
+            schema_versions.add(schema)
+        models = asset.get("swipe_model_versions")
+        if isinstance(models, dict):
+            model_versions.add(json.dumps(models, sort_keys=True, separators=(",", ":")))
+    provenance = {
+        "score_schema_versions": sorted(schema_versions),
+        "model_versions": [json.loads(value) for value in sorted(model_versions)],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(provenance, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+    snapshot = {
+        "schema_version": 1,
+        "project_id": project_id,
+        "engine": {"name": "swipe-score", "version": f"native-{fingerprint}"},
+        "provenance": provenance,
+        "scores": score_rows,
+    }
+    held_out = sum(pair["split"] == "held_out" for pair in pairs)
+    return {
+        "schema_version": 1,
+        "project_id": project_id,
+        "manifest": manifest,
+        "score_snapshot": snapshot,
+        "summary": {
+            "manual_labels": len(manually_labelled),
+            "preference_pairs": len(pairs),
+            "held_out_pairs": held_out,
+            "expected_top_k": 0,
+            "human_duplicate_groups": 0,
+            "required_manual_labels_min": 50,
+            "required_manual_labels_max": 100,
+            "required_held_out_pairs": MIN_HELD_OUT_PAIRS,
+            "required_top_k": MIN_TOP_K,
+            "release_ready": False,
+        },
     }
 
 

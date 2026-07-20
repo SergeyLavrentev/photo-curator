@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: нативный Settings экспортирует воспроизводимый S0 quality corpus:
+  только явные manual decisions и project-scoped A/B choices попадают в human manifest,
+  а текущий Swipe Score сохраняется отдельно с schema/model provenance. Predicted
+  dispositions, duplicate groups и Top-K не маскируются под truth; экспорт честно сообщает
+  оставшиеся требования 50–100 labels, 10 held-out pairs, series leaders и Top-K.
 - 2026-07-20: native Personal Taste больше не обучается и оценивается на одних данных:
   первые три выбора server-assigned calibration, затем blind held-out/calibration
   чередуются независимо от client params. Held-out выбор не делает готовую модель stale;
