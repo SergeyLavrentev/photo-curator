@@ -113,6 +113,18 @@ uv run photo-curator vision-benchmark --project-id PROJECT_ID \
 `vision-scores.json` совместим с `acceptance-evaluate --scores`, поэтому Vision baseline
 сравнивается с technical-first scorer на неизменной held-out разметке.
 
+Release hot paths для inventories 100/2 000/5 000 воспроизводимо проверяются
+отдельно от Photos Library:
+
+```bash
+uv run photo-curator release-benchmark --iterations 3 \
+  --counts 100,2000,5000 --output build/evidence/release-benchmark.json
+```
+
+Отчёт измеряет candidate reduction, Swipe Score, подбор A/B-пары и JSONL
+payload serialization. Energy честно помечается `not_measured` до отдельного
+Instruments/MetricKit release run.
+
 ### Swipe Score v1
 
 Real-project pipeline сохраняет versioned Swipe Score отдельно от review decision. В нём

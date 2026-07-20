@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: S8 получил versioned `release-benchmark` для coordinator hot paths:
+  на этом arm64 Mac median из трёх запусков составил 0.002/0.045/0.132 s для
+  100/2 000/5 000 rows. Измеряются duplicate candidate reduction, Swipe Score,
+  taste-pair selection и JSONL serialization; это не подменяет будущий full-image,
+  SwiftUI scrolling и Instruments energy acceptance.
 - 2026-07-20: runtime QA нашёл и устранил frozen-path defect native Vision:
   backend искал helper в `Contents/native` вместо `Contents/Resources/native`,
   из-за чего aesthetics/faces/feature prints молча становились `unavailable`.

@@ -36,6 +36,7 @@ from photo_curator.native_worker import run_native_worker
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.doctor import run_doctor
 from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
+from photo_curator.release_benchmark import run_release_benchmark
 from photo_curator.web.security import SessionSecrets
 
 
@@ -58,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
             "acceptance-score-export",
             "acceptance-evaluate",
             "vision-benchmark",
+            "release-benchmark",
             "native-worker",
         ],
     )
@@ -89,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--warmup", type=nonnegative_int, default=0)
     parser.add_argument("--iterations", type=positive_int, default=1)
+    parser.add_argument(
+        "--counts",
+        type=positive_int_list,
+        default=(100, 2_000, 5_000),
+        help="Размеры synthetic inventories через запятую",
+    )
     parser.add_argument("--json", action="store_true", help="Вывести acceptance-отчёт как JSON")
     return parser
 
@@ -112,6 +120,16 @@ def positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("значение должно быть положительным")
     return parsed
+
+
+def positive_int_list(value: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("counts должны быть целыми числами") from error
+    if not values or any(item < 2 for item in values):
+        raise argparse.ArgumentTypeError("каждый count должен быть не меньше 2")
+    return values
 
 
 def choose_port(requested_port: int) -> int:
@@ -229,6 +247,18 @@ def run_vision_benchmark_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_release_benchmark_command(args: argparse.Namespace) -> int:
+    report = run_release_benchmark(counts=tuple(args.counts), iterations=args.iterations)
+    rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+        print(f"Release benchmark: {args.output}")
+    else:
+        print(rendered, end="")
+    return 0 if report["passed"] else 1
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "version":
@@ -243,6 +273,8 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Vision benchmark error: {error}", file=sys.stderr)
             result = 2
         raise SystemExit(result)
+    if args.command == "release-benchmark":
+        raise SystemExit(run_release_benchmark_command(args))
     if args.command == "native-worker":
         paths = default_application_paths()
         paths.ensure()
