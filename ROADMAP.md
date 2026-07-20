@@ -142,8 +142,9 @@ Top-K evaluation without increasing false exclusions.
 
 ## S3 — semantic appeal and hardware acceleration
 
-- Benchmark Apple MobileCLIP and at least one licensed image-aesthetics model against the
-  native Vision baseline; do not ship a model merely because it is fashionable.
+- Keep Apple MobileCLIP code as a reference only: Apple's published pretrained weights
+  are research-only/non-commercial and cannot be used for this product. Benchmark only
+  weights with an explicit compatible commercial license against the native Vision baseline.
 - Convert the winning model to Core ML and use `.all` compute units where compatible.
 - Cache embeddings by immutable render fingerprint.
 - Batch inference and prevent duplicate image decoding across requests.

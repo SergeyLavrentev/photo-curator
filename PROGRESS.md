@@ -1,5 +1,12 @@
 # Progress
 
+- 2026-07-20: добавлен model-agnostic S3 Core ML benchmark adapter: Swift helper
+  принимает внешние `.mlmodel`/`.mlpackage`/`.mlmodelc`, явно использует
+  `MLComputeUnits.all`, возвращает versioned classification/vector outputs и median
+  latency, а Python/CLI слой проверяет полноту результата и удаляет временные requests.
+  Helper реально компилируется на этом Mac; модель и hardware attribution не заявлены.
+  Публичные Apple MobileCLIP weights исключены из продуктового кандидата из-за
+  research-only non-commercial model license.
 - 2026-07-20: native settings теперь замыкают весь Personal Taste lifecycle:
   pause/resume, локальный JSON export и подтверждённое полное удаление preferences.
   После pause/resume/reset текущий ready-project пересчитывает только decisions,
@@ -154,7 +161,8 @@ real native PhotoKit album inventory              — Cape Town 2024 · 394; no 
 native app network surface                        — no TCP listener; Cmd+Q stopped GUI + worker
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 135 passed before latest slice; 16 changed-path tests passed
+Core ML generic helper                           — compiled; capability v1; no model bundled
+pytest excluding native Vision test file         — 137 passed; Core ML compile smoke included
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

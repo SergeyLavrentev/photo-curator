@@ -6,13 +6,14 @@ INSTALL_DIR ?= /Applications
 INSTALLED_APP := $(INSTALL_DIR)/PhotoCurator.app
 SIGN_IDENTITY ?= $(shell bash packaging/macos/local_signing_identity.sh --print)
 
-.PHONY: help sync test lint vision-helper local-signing-identity app build install run stop verify-app uninstall clean
+.PHONY: help sync test lint vision-helper coreml-helper local-signing-identity app build install run stop verify-app uninstall clean
 
 help:
 	@echo "Photo Curator"
 	@echo "  make sync        установить Python-зависимости"
 	@echo "  make test        запустить тесты"
 	@echo "  make vision-helper собрать нативный Apple Vision benchmark"
+	@echo "  make coreml-helper собрать optional Core ML benchmark"
 	@echo "  make local-signing-identity создать стабильную локальную подпись"
 	@echo "  make app         собрать и локально подписать .app"
 	@echo "  make install     установить в $(INSTALL_DIR) и запустить"
@@ -38,6 +39,14 @@ vision-helper:
 	  -framework Vision -framework CoreVideo \
 	  src/photo_curator/analysis/native/photo_curator_vision.swift \
 	  -o "$(CURDIR)/build/native/photo-curator-vision"
+
+coreml-helper:
+	mkdir -p "$(CURDIR)/build/native"
+	xcrun swiftc -swift-version 5 -O \
+	  -target "$$(uname -m)-apple-macosx13.0" \
+	  -framework Vision -framework CoreML -framework AppKit \
+	  src/photo_curator/analysis/native/photo_curator_coreml.swift \
+	  -o "$(CURDIR)/build/native/photo-curator-coreml"
 
 local-signing-identity:
 	bash packaging/macos/local_signing_identity.sh --create

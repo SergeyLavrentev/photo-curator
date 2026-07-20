@@ -128,6 +128,25 @@ uv run photo-curator vision-benchmark --project-id PROJECT_ID \
 `vision-scores.json` совместим с `acceptance-evaluate --scores`, поэтому Vision baseline
 сравнивается с technical-first scorer на неизменной held-out разметке.
 
+### Optional Core ML model benchmark
+
+S3 adapter принимает внешнюю `.mlmodel`, `.mlpackage` или `.mlmodelc`, запускает её
+через Vision/Core ML с `MLComputeUnits.all` и сохраняет versioned outputs и median
+latency по готовым preview проекта:
+
+```bash
+make coreml-helper
+uv run photo-curator coreml-benchmark --project-id PROJECT_ID \
+  --model /path/to/model.mlpackage --warmup 1 --iterations 3 \
+  --output coreml-benchmark.json
+```
+
+Модель не скачивается и не входит в bundle автоматически. Перед продуктовым включением
+обязательны совместимая коммерческая лицензия, checksum, held-out uplift над Vision-only
+baseline и отдельное измерение CPU/GPU/Neural Engine через Instruments. Публичные веса
+Apple MobileCLIP не являются продуктовым кандидатом: их model license разрешает только
+некоммерческое исследовательское использование.
+
 Release hot paths для inventories 100/2 000/5 000 воспроизводимо проверяются
 отдельно от Photos Library:
 

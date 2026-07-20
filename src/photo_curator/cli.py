@@ -22,6 +22,7 @@ from photo_curator.acceptance import (
     load_manifest,
     load_score_snapshot,
 )
+from photo_curator.analysis.coreml_benchmark import CoreMLBenchmarkEngine, CoreMLBenchmarkError
 from photo_curator.analysis.native_vision import (
     NativeVisionEngine,
     NativeVisionError,
@@ -59,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
             "acceptance-score-export",
             "acceptance-evaluate",
             "vision-benchmark",
+            "coreml-benchmark",
             "release-benchmark",
             "native-worker",
         ],
@@ -88,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--score-output",
         type=Path,
         help="Для vision-benchmark записать отдельный acceptance score snapshot",
+    )
+    parser.add_argument(
+        "--model",
+        type=Path,
+        help="Core ML .mlmodel/.mlpackage/.mlmodelc для optional benchmark",
     )
     parser.add_argument("--warmup", type=nonnegative_int, default=0)
     parser.add_argument("--iterations", type=positive_int, default=1)
@@ -259,6 +266,42 @@ def run_release_benchmark_command(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def run_coreml_benchmark_command(args: argparse.Namespace) -> int:
+    if not args.project_id:
+        raise CoreMLBenchmarkError("Укажите --project-id")
+    if not args.model:
+        raise CoreMLBenchmarkError("Укажите --model")
+    paths = default_application_paths()
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        try:
+            get_project(connection, args.project_id)
+        except KeyError as error:
+            raise CoreMLBenchmarkError(f"Проект не найден: {args.project_id}") from error
+        assets = [
+            (str(asset["asset_uuid"]), Path(str(asset["review_path"])))
+            for asset in list_assets(connection, args.project_id)
+            if asset.get("cache_state") == "ready" and asset.get("review_path")
+        ]
+    if not assets:
+        raise CoreMLBenchmarkError("В проекте нет готовых preview для benchmark")
+    report = CoreMLBenchmarkEngine(paths).benchmark(
+        args.model,
+        assets,
+        warmup_iterations=args.warmup,
+        measured_iterations=args.iterations,
+    )
+    rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+        print(f"Core ML benchmark: {args.output}")
+    else:
+        print(rendered, end="")
+    failed = [row for row in report["assets"] if row.get("error")]
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "version":
@@ -271,6 +314,13 @@ def main(argv: list[str] | None = None) -> None:
             result = run_vision_benchmark_command(args)
         except (NativeVisionError, OSError) as error:
             print(f"Vision benchmark error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
+    if args.command == "coreml-benchmark":
+        try:
+            result = run_coreml_benchmark_command(args)
+        except (CoreMLBenchmarkError, OSError, ValueError) as error:
+            print(f"Core ML benchmark error: {error}", file=sys.stderr)
             result = 2
         raise SystemExit(result)
     if args.command == "release-benchmark":

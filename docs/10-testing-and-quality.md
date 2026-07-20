@@ -118,3 +118,13 @@ request durations и отсутствие per-signal errors.
 OS/architecture, capability map, mean/p95 stage durations и request revisions. Отдельный
 aesthetics score snapshot нормализует публичный диапазон Apple `-1...1` в `0...100` только
 для ranking/evaluation; исходное значение сохраняется в benchmark report.
+
+## S3 optional Core ML benchmark
+
+Swift helper компилируется независимо от конкретной модели и сообщает capability
+`coreml-image-benchmark-v1`. Integration tests подменяют runner и проверяют schema,
+точное соответствие asset IDs, `MLComputeUnits.all`, warmup/measured iterations и удаление
+временных request/result JSON. Реальная модель допускается в продукт только с коммерчески
+совместимой лицензией, checksum и доказанным held-out uplift. Значение `.all` разрешает
+Core ML выбирать CPU/GPU/Neural Engine, но само по себе не доказывает использование ANE;
+hardware attribution и energy требуют отдельного Instruments acceptance run.
