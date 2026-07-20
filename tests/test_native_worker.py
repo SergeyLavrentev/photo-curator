@@ -135,6 +135,13 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     coordinator.run(project_id, from_stage="decisions")
     reranked = worker.dispatch("assets", {"project_id": project_id})["items"]
     assert any(abs(item["personal_delta"] or 0) > 0.1 for item in reranked)
+    exported = worker.dispatch("taste_export", {})
+    assert exported["schema_version"] == 1
+    assert len(exported["examples"]) == 3
+    assert exported["profile"]["weights_base64"]
+    assert worker.dispatch("taste_status", {"paused": True})["status"] == "paused"
+    assert worker.dispatch("taste_reset", {}) == {"status": "deleted"}
+    assert worker.dispatch("taste_profile", {})["preference_count"] == 0
 
 
 def test_native_worker_rejects_unknown_resume_stage(tmp_path: Path) -> None:

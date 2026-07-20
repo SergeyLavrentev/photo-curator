@@ -30,6 +30,11 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'call("cancel_analysis"' in app
     assert "Продолжить с прерванного этапа" in app
     assert "UserDefaults.standard" in app
+    assert 'call("taste_export")' in app
+    assert 'call("taste_status"' in app
+    assert 'call("taste_reset")' in app
+    assert "refreshDecisionsForTaste" in app
+    assert "Удалить профиль и все сравнения" in app
     assert ".accessibilityHint" in app
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker

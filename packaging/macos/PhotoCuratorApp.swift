@@ -3,6 +3,7 @@ import Combine
 import Photos
 import QuickLookUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -77,6 +78,49 @@ final class AppModel: ObservableObject {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    func toggleTasteProfile() {
+        let paused = tasteStatus != "paused"
+        Task {
+            do {
+                let result = try await call("taste_status", ["paused": paused])
+                if let value = result as? [String: Any] { applyTasteProfile(value) }
+                tasteMessage = paused ? "Профиль вкуса поставлен на паузу." : "Профиль вкуса снова активен."
+                await refreshDecisionsForTaste()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func exportTasteProfile() {
+        Task {
+            do {
+                let result = try await call("taste_export")
+                let data = try JSONSerialization.data(
+                    withJSONObject: result,
+                    options: [.prettyPrinted, .sortedKeys]
+                )
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = "photo-curator-taste-profile.json"
+                panel.allowedContentTypes = [.json]
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                try data.write(to: url, options: .atomic)
+                tasteMessage = "Профиль вкуса экспортирован."
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func resetTasteProfile() {
+        Task {
+            do {
+                _ = try await call("taste_reset")
+                tasteStatus = "collecting"
+                tasteExamples = 0
+                tastePair = nil
+                tasteMessage = "Профиль вкуса удалён. Используется общий Swipe Score."
+                await refreshDecisionsForTaste()
+            } catch { errorMessage = error.localizedDescription }
+        }
     }
 
     func restartWorker() {
@@ -410,6 +454,17 @@ final class AppModel: ObservableObject {
         tasteStatus = value["status"] as? String ?? "Не настроен"
     }
 
+    private func refreshDecisionsForTaste() async {
+        guard let project, project.state == "ready" else { return }
+        do {
+            _ = try await call("start_analysis", [
+                "project_id": project.id,
+                "from_stage": "decisions",
+            ])
+            startPolling(projectID: project.id)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
     private func call(_ method: String, _ params: [String: Any] = [:]) async throws -> Any {
         let worker = worker
         return try await Task.detached(priority: .userInitiated) {
@@ -528,7 +583,7 @@ struct PhotoCuratorApplication: App {
         Settings {
             SettingsView()
                 .environmentObject(model)
-                .frame(width: 480, height: 230)
+                .frame(width: 560, height: 300)
         }
     }
 }
@@ -928,6 +983,7 @@ private func dispositionTitle(_ disposition: String?) -> String {
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var confirmsTasteReset = false
 
     var body: some View {
         Form {
@@ -943,9 +999,34 @@ struct SettingsView: View {
             Section("Персональный вкус") {
                 LabeledContent("Профиль", value: model.tasteStatus)
                 LabeledContent("Сравнений", value: "\(model.tasteExamples)")
+                HStack {
+                    Button(model.tasteStatus == "paused" ? "Возобновить" : "Поставить на паузу") {
+                        model.toggleTasteProfile()
+                    }
+                    .disabled(model.tasteExamples == 0)
+                    Button("Экспортировать…") { model.exportTasteProfile() }
+                        .disabled(model.tasteExamples == 0)
+                    Button("Удалить профиль…", role: .destructive) {
+                        confirmsTasteReset = true
+                    }
+                    .disabled(model.tasteExamples == 0)
+                }
             }
             Text("Все вычисления и предпочтения остаются на этом Mac.")
                 .font(.caption).foregroundStyle(.secondary)
-        }.padding(20)
+        }
+        .padding(20)
+        .confirmationDialog(
+            "Удалить профиль вкуса?",
+            isPresented: $confirmsTasteReset,
+            titleVisibility: .visible
+        ) {
+            Button("Удалить профиль и все сравнения", role: .destructive) {
+                model.resetTasteProfile()
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Фотографии и альбомы не изменятся. Персональные оценки будут пересчитаны по общему Swipe Score.")
+        }
     }
 }

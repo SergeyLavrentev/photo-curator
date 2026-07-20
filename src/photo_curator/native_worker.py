@@ -242,6 +242,17 @@ class NativeWorker:
             count = len(repository.list_preference_examples(connection))
         return _taste_payload(profile, count)
 
+    def _handle_taste_export(self, params: dict[str, object]) -> dict[str, object]:
+        del params
+        with database_connection(self.paths.database) as connection:
+            profile = repository.ensure_taste_profile(connection)
+            examples = repository.list_preference_examples(connection)
+        return {
+            "schema_version": 1,
+            "profile": profile,
+            "examples": examples,
+        }
+
     def _handle_taste_reset(self, params: dict[str, object]) -> dict[str, str]:
         del params
         with database_connection(self.paths.database) as connection:
