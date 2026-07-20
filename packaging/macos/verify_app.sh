@@ -62,6 +62,16 @@ require_photos_entitlement "$MAIN"
 require_photos_entitlement "$SOURCE"
 require_photos_entitlement "$PUBLISH"
 
+backend_entitlements="$(/usr/bin/codesign -d --entitlements :- "$BACKEND" 2>/dev/null)"
+backend_team="$(/usr/bin/codesign -d --verbose=4 "$BACKEND" 2>&1 \
+  | /usr/bin/sed -n 's/^TeamIdentifier=//p' | /usr/bin/head -1)"
+if [[ -z "$backend_team" || "$backend_team" == "not set" ]]; then
+  /usr/bin/grep -Eq \
+    '<key>com.apple.security.cs.disable-library-validation</key>.*<true/>' \
+    <<<"$backend_entitlements" \
+    || fail "ad-hoc/local backend cannot load its signed Python framework"
+fi
+
 for helper in "$SOURCE" "$PUBLISH"; do
   helper_signature="$(/usr/bin/codesign -d --verbose=4 "$helper" 2>&1)"
   /usr/bin/grep -Eq '^Info.plist entries=[1-9][0-9]*$' <<<"$helper_signature" \
@@ -79,5 +89,18 @@ fi
 
 size_kib="$(/usr/bin/du -sk "$APP" | /usr/bin/awk '{print $1}')"
 [[ "$size_kib" -le 81920 ]] || fail "bundle is larger than 80 MiB: ${size_kib} KiB"
+
+SMOKE_HOME="$(mktemp -d)"
+trap '/bin/rm -rf "$SMOKE_HOME"' EXIT
+smoke_output="$(
+  /usr/bin/printf '%s\n' \
+    '{"schema_version":1,"id":"verify-albums","method":"albums","params":{}}' \
+    '{"schema_version":1,"id":"verify-shutdown","method":"shutdown","params":{}}' \
+  | HOME="$SMOKE_HOME" "$BACKEND" native-worker --demo
+)" || fail "frozen native worker smoke failed"
+/usr/bin/grep -Eq '"id":[[:space:]]*"verify-albums"' <<<"$smoke_output" \
+  || fail "frozen native worker returned no albums response"
+/usr/bin/grep -Eq '"id":[[:space:]]*"verify-shutdown"' <<<"$smoke_output" \
+  || fail "frozen native worker did not shut down cleanly"
 
 echo "Bundle verified: $APP (${size_kib} KiB)"

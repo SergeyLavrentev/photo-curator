@@ -114,6 +114,10 @@ def test_bundle_verifier_guards_tcc_identity_and_native_only_contents() -> None:
     assert "require_photos_entitlement" in verifier
     assert "Photos Library entitlement is disabled" in verifier
     assert "web assets are present in the native bundle" in verifier
+    assert "disable-library-validation" in verifier
+    assert '"method":"albums"' in verifier
+    assert '"method":"shutdown"' in verifier
+    assert "frozen native worker smoke failed" in verifier
     assert 'bash packaging/macos/verify_app.sh "$(APP)"' in makefile
 
 

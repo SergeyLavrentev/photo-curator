@@ -116,7 +116,13 @@ done
 /usr/bin/codesign "${SIGN_OPTIONS[@]}" \
   --entitlements "$SCRIPT_DIR/Photos.entitlements" \
   "$CONTENTS/MacOS/PhotoCurator"
-/usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep "$RESOURCES/backend/photo-curator-backend"
+if [[ "$SIGN_IDENTITY" == "-" || "$SIGN_IDENTITY" == "Photo Curator Local Development" ]]; then
+  /usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep \
+    --entitlements "$SCRIPT_DIR/Backend.entitlements" \
+    "$RESOURCES/backend/photo-curator-backend"
+else
+  /usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep "$RESOURCES/backend/photo-curator-backend"
+fi
 /usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep \
   --entitlements "$SCRIPT_DIR/Photos.entitlements" \
   "$APP"

@@ -1,5 +1,10 @@
 # Progress
 
+- 2026-07-20: real packaged demo QA поймал Hardened Runtime failure: ad-hoc backend не
+  мог загрузить embedded Python framework из-за library validation/CDHash mismatch.
+  Local/ad-hoc backend теперь получает узкий `disable-library-validation` entitlement;
+  Developer ID path его не получает. Bundle verifier запускает реальный frozen JSONL
+  worker, получает albums response и проверяет clean shutdown, а не доверяет только codesign.
 - 2026-07-20: S8 packaging получил воспроизводимый notarization flow: только Developer
   ID Application + TeamIdentifier, credentials только в заранее созданном Keychain profile,
   pre-submit bundle audit, `notarytool --wait`, stapling, validation и Gatekeeper assess.
