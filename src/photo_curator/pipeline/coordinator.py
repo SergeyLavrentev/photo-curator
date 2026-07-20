@@ -5,11 +5,11 @@ import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 from threading import Lock, Semaphore
 
 from photo_curator.analysis.decision_engine import DecisionResult, decide_asset
+from photo_curator.analysis.diversity import diversity_evidence
 from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_equivalence_hash
 from photo_curator.analysis.image_loader import load_normalized
 from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
@@ -544,16 +544,33 @@ class PipelineCoordinator:
                 )
                 for asset, swipe_score in zip(assets, swipe_scores, strict=True)
             ]
-            demoted = _diversity_demotions(assets, decisions)
+            diversity = diversity_evidence(assets, decisions, signal_by_asset)
+            swipe_scores = [
+                _apply_diversity_to_score(score, diversity[str(asset["asset_uuid"])])
+                for asset, score in zip(assets, swipe_scores, strict=True)
+            ]
+            decisions = [
+                decide_asset(
+                    asset,
+                    duplicate_by_asset.get(str(asset["asset_uuid"])),
+                    density,
+                    swipe_score,
+                )
+                for asset, swipe_score in zip(assets, swipe_scores, strict=True)
+            ]
             for index, (asset, swipe_score, decision) in enumerate(
                 zip(assets, swipe_scores, decisions, strict=True), start=1
             ):
-                if str(asset["asset_uuid"]) in demoted:
+                diversity_item = diversity[str(asset["asset_uuid"])]
+                if diversity_item.demoted:
                     decision = replace(
                         decision,
                         disposition="review",
                         flags=sorted({*decision.flags, "diversity_limit"}),
-                        reasons=[*decision.reasons, {"code": "diversity_limit"}],
+                        reasons=[
+                            *decision.reasons,
+                            _diversity_reason(diversity_item, demoted=True),
+                        ],
                     )
                 repository.upsert_swipe_score(
                     connection,
@@ -629,36 +646,32 @@ def _signal_revision(signal_kind: str, value: object) -> int | None:
 def _diversity_demotions(
     assets: list[dict[str, object]], decisions: list[DecisionResult]
 ) -> set[str]:
-    candidates = []
-    for asset, decision in zip(assets, decisions, strict=True):
-        if decision.disposition != "keep":
-            continue
-        if asset.get("favorite") or asset.get("has_adjustments"):
-            continue
-        if "duplicate_leader" in decision.flags:
-            continue
-        try:
-            taken_at = datetime.fromisoformat(str(asset.get("taken_at")))
-        except (TypeError, ValueError):
-            continue
-        candidates.append((taken_at, asset, decision))
-    candidates.sort(key=lambda item: item[0])
-    scenes: list[list[tuple[datetime, dict[str, object], DecisionResult]]] = []
-    for candidate in candidates:
-        if not scenes or (candidate[0] - scenes[-1][0][0]).total_seconds() > 120:
-            scenes.append([candidate])
-        else:
-            scenes[-1].append(candidate)
-    demoted = set()
-    for scene in scenes:
-        ranked = sorted(
-            scene,
-            key=lambda item: (
-                int(item[2].score),
-                int(item[1].get("width") or 0) * int(item[1].get("height") or 0),
-                str(item[1]["asset_uuid"]),
-            ),
-            reverse=True,
-        )
-        demoted.update(str(item[1]["asset_uuid"]) for item in ranked[3:])
-    return demoted
+    evidence = diversity_evidence(assets, decisions, {})
+    return {asset_uuid for asset_uuid, item in evidence.items() if item.demoted}
+
+
+def _apply_diversity_to_score(score, evidence):
+    components = {**score.components, "diversity_value": evidence.value}
+    reasons = list(score.reasons)
+    if evidence.demoted:
+        reasons.append(_diversity_reason(evidence, demoted=True))
+    elif evidence.reason in {"semantic_anchor", "semantic_distance"} and evidence.value >= 65:
+        reasons.append(_diversity_reason(evidence, demoted=False))
+    models = dict(score.model_versions)
+    if evidence.model_version:
+        models["diversity"] = evidence.model_version
+    return replace(score, components=components, reasons=reasons[:4], model_versions=models)
+
+
+def _diversity_reason(evidence, *, demoted: bool) -> dict[str, object]:
+    reason: dict[str, object] = {
+        "code": "similar_scene" if demoted else "adds_variety",
+        "value": evidence.value,
+    }
+    if evidence.nearest_uuid:
+        reason["nearest_uuid"] = evidence.nearest_uuid
+    if evidence.similarity is not None:
+        reason["similarity"] = evidence.similarity
+    if evidence.reason:
+        reason["method"] = evidence.reason
+    return reason

@@ -125,6 +125,11 @@ best-in-series, portrait signal, technical penalty, confidence и model provenan
 понизить рекомендацию или защитить решение, но сильный визуальный кадр способен обогнать
 технически идеальный слабый кадр. Качество формулы остаётся гипотезой до S0 held-out report.
 
+Финальный Keep-набор дополнительно проверяется на разнообразие по Apple Vision feature
+prints. Для визуально близкой сцены автоматически остаются до трёх сильнейших кадров,
+остальные переходят в Review с причиной `similar_scene`; Favorites, edited assets и
+лидеры серий этим правилом не понижаются.
+
 ### Personal Taste Profile
 
 Локальный profile обучается на явных A/B comparisons поверх native Vision feature prints.

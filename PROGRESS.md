@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: S7 diversity vertical slice заменил placeholder `diversity_value=50`:
+  финальный Keep-набор теперь получает versioned evidence из Apple Vision feature prints,
+  семантически близкие четвёртые кадры переводятся в Review, а temporal fallback ограничивает
+  одну сцену тремя кадрами. Favorites, edited assets и лидеры серий остаются защищёнными.
 - 2026-07-20: S6 native PhotoKit source vertical slice заменил filesystem-доступ
   установленного приложения к `Photos.sqlite`: обычные и Shared albums читаются через
   публичный PhotoKit, review-renders сохраняются только в service cache, source assets

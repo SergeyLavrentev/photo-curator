@@ -112,6 +112,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     assert len(swipe_scores) == 12
     assert all(score["schema_version"] == 1 for score in swipe_scores)
     assert all("generic_aesthetics" in score["components"] for score in swipe_scores)
+    assert any(score["components"]["diversity_value"] != 50 for score in swipe_scores)
     assert all(asset["swipe_score"] is not None for asset in assets)
     assert all(asset["swipe_personal_delta"] == 0 for asset in assets)
     assert {job["stage"] for job in jobs} == {
