@@ -1,5 +1,17 @@
 # Progress
 
+- 2026-07-20: native settings теперь замыкают весь Personal Taste lifecycle:
+  pause/resume, локальный JSON export и подтверждённое полное удаление preferences.
+  После pause/resume/reset текущий ready-project пересчитывает только decisions,
+  поэтому generic/personal ranking в галерее не остаётся устаревшим.
+- 2026-07-20: исправлен TCC-контракт native Photos доступа: GUI запрашивает
+  разрешение до запуска worker, все PhotoKit executables получают официальный
+  `com.apple.security.personal-information.photos-library` entitlement и Hardened
+  Runtime, а bundle audit проверяет identities, signed embedded Info.plist,
+  entitlement, отсутствие web/osxphotos runtime и лимит размера. Для зависшего
+  системного prompt UI через 5 секунд показывает понятную причину и кнопку ровно
+  в Privacy & Security → Photos. Stable local certificate trust ждёт ручного
+  подтверждения macOS; реальный inventory после этой сборки ещё не перепроверен.
 - 2026-07-20: native bundle перешёл на отдельный minimal worker entrypoint:
   FastAPI/Jinja/web assets и `osxphotos` больше не пакуются в `.app`; размер уменьшился
   с 103 MB до 50 MB. Frozen production status/shutdown и demo albums JSONL проверены
@@ -142,7 +154,7 @@ real native PhotoKit album inventory              — Cape Town 2024 · 394; no 
 native app network surface                        — no TCP listener; Cmd+Q stopped GUI + worker
 temporary Montenegro snapshot/project/cache     — removed; recoverable copies moved to Trash
 legacy 39-photo Photos test album                — removed; library assets left untouched
-pytest                                           — 120 passed
+pytest                                           — 135 passed before latest slice; 16 changed-path tests passed
 ```
 
 The browser opened `127.0.0.1` directly and verified the compact workflow

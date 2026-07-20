@@ -47,6 +47,13 @@ macOS попросит подтвердить trust settings в login Keychain. 
 используется ad-hoc `-`. Локальный certificate не заменяет Developer ID и notarization
 для распространения другим пользователям.
 
+Сборка подписывает GUI и оба PhotoKit helper с Hardened Runtime и entitlement
+`com.apple.security.personal-information.photos-library`. `make verify-app` проверяет
+не только внешнюю подпись `.app`, но и identities/entitlements вложенных executables,
+отсутствие legacy web/osxphotos runtime и размер bundle. При первом запуске macOS
+попросит доступ к Фото; если системный prompt скрыт, приложение покажет кнопку перехода
+непосредственно в Privacy & Security → Photos.
+
 Переходный web baseline всё ещё можно запустить из репозитория для диагностики. Demo
 использует 12 синтетических изображений и проходит workflow без доступа к Photos Library:
 
@@ -169,6 +176,10 @@ PATCH  /api/taste-profile/status
 GET    /api/taste-profile/export
 DELETE /api/taste-profile
 ```
+
+В нативном приложении pause/resume, экспорт JSON и подтверждённое удаление доступны
+в Settings. После изменения статуса или удаления текущая подборка пересчитывается с
+этапа decisions без повторного декодирования изображений и Apple Vision.
 
 Минимум три calibration comparisons нужны для локального обучения; продуктовый quality
 gate требует больше примеров и отдельные held-out comparisons. Profile никогда не меняет
