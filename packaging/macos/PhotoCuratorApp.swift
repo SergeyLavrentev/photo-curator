@@ -195,6 +195,44 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func evaluateQualityEvidence() {
+        guard let project else { return }
+        Task {
+            do {
+                let labelsPanel = NSOpenPanel()
+                labelsPanel.title = "Выберите human-labelled manifest"
+                labelsPanel.prompt = "Выбрать labels"
+                labelsPanel.allowedContentTypes = [.json]
+                labelsPanel.allowsMultipleSelection = false
+                guard labelsPanel.runModal() == .OK, let labelsURL = labelsPanel.url else { return }
+
+                let scoresPanel = NSOpenPanel()
+                scoresPanel.title = "Выберите замороженный Swipe Score"
+                scoresPanel.prompt = "Оценить"
+                scoresPanel.allowedContentTypes = [.json]
+                scoresPanel.allowsMultipleSelection = false
+                guard scoresPanel.runModal() == .OK, let scoresURL = scoresPanel.url else { return }
+
+                let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: labelsURL))
+                let snapshot = try JSONSerialization.jsonObject(with: Data(contentsOf: scoresURL))
+                let result = try await call("quality_evaluate", [
+                    "project_id": project.id,
+                    "manifest": manifest,
+                    "score_snapshot": snapshot,
+                ])
+                guard let report = result as? [String: Any] else {
+                    throw NativeWorkerClientError.invalidResponse
+                }
+                let passed = report["passed"] as? Bool ?? false
+                let eligible = report["release_eligible"] as? Bool ?? false
+                let labels = report["labelled_assets"] as? Int ?? 0
+                qualityMessage = eligible
+                    ? "Acceptance: \(passed ? "PASS" : "FAIL"), \(labels) фото."
+                    : "Набор пока неполный: \(labels) фото; release gate не открыт."
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func restartWorker() {
         worker.stop()
         workerStatus = "Перезапуск…"
@@ -1093,6 +1131,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                 Button("Экспортировать проверочный набор…") {
                     model.exportQualityEvidence()
+                }
+                .disabled(model.project?.state != "ready")
+                Button("Оценить заполненный набор…") {
+                    model.evaluateQualityEvidence()
                 }
                 .disabled(model.project?.state != "ready")
                 if let message = model.qualityMessage {

@@ -112,6 +112,8 @@ uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
 provenance. Экспорт fail-honest: predicted dispositions, duplicate groups и текущий Top-K
 не копируются в truth labels. Поэтому summary остаётся `release_ready: false`, пока человек
 не закончит разметку серий и ожидаемого Top-K и не прогонит evaluator.
+Там же кнопка «Оценить заполненный набор…» запускает тот же versioned evaluator через
+локальный JSONL worker и не требует CLI.
 
 ## S1 native Vision benchmark
 

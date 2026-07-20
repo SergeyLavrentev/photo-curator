@@ -488,8 +488,7 @@ def _validated_score_map(
 ) -> tuple[dict[str, float], dict[str, str]]:
     if snapshot is None:
         raw_scores = {
-            asset_uuid: asset_by_uuid[asset_uuid].get("selection_score")
-            for asset_uuid in labelled_ids
+            asset_uuid: asset.get("selection_score") for asset_uuid, asset in asset_by_uuid.items()
         }
         scorer = {"name": "selection_score", "version": "legacy-db-v1"}
     else:
@@ -505,9 +504,14 @@ def _validated_score_map(
         if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
             raise AcceptanceManifestError("Score snapshot engine требует name и version")
         scorer = {"name": name, "version": version}
+    unknown = set(raw_scores) - set(asset_by_uuid)
+    if unknown:
+        raise AcceptanceManifestError(f"Score snapshot содержит неизвестное фото: {min(unknown)}")
+    missing_labels = labelled_ids - set(raw_scores)
+    if missing_labels:
+        raise AcceptanceManifestError(f"Нет числового score для {min(missing_labels)}")
     scores: dict[str, float] = {}
-    for asset_uuid in labelled_ids:
-        value = raw_scores.get(asset_uuid)
+    for asset_uuid, value in raw_scores.items():
         if (
             not isinstance(value, (int, float))
             or isinstance(value, bool)
@@ -515,9 +519,6 @@ def _validated_score_map(
         ):
             raise AcceptanceManifestError(f"Нет числового score для {asset_uuid}")
         scores[asset_uuid] = float(value)
-    unknown = set(raw_scores) - set(asset_by_uuid)
-    if unknown:
-        raise AcceptanceManifestError(f"Score snapshot содержит неизвестное фото: {min(unknown)}")
     return scores, scorer
 
 

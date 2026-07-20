@@ -171,6 +171,16 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     assert quality["summary"]["manual_labels"] == 1
     assert quality["summary"]["held_out_pairs"] == 1
     assert len(quality["score_snapshot"]["scores"]) == 12
+    report = worker.dispatch(
+        "quality_evaluate",
+        {
+            "project_id": project_id,
+            "manifest": quality["manifest"],
+            "score_snapshot": quality["score_snapshot"],
+        },
+    )
+    assert report["labelled_assets"] == 1
+    assert report["release_eligible"] is False
     assert worker.dispatch("taste_status", {"paused": True})["status"] == "paused"
     assert worker.dispatch("taste_reset", {}) == {"status": "deleted"}
     assert worker.dispatch("taste_profile", {})["preference_count"] == 0

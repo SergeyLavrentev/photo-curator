@@ -4,7 +4,7 @@ import json
 import sys
 from typing import TextIO
 
-from photo_curator.acceptance import build_native_quality_evidence
+from photo_curator.acceptance import build_native_quality_evidence, evaluate_acceptance
 from photo_curator.analysis.native_vision import NativeVisionEngine
 from photo_curator.analysis.taste import (
     capture_preference,
@@ -273,6 +273,26 @@ class NativeWorker:
             assets = repository.list_assets(connection, project_id)
             examples = repository.list_preference_examples(connection)
         return build_native_quality_evidence(project_id, assets, examples)
+
+    def _handle_quality_evaluate(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        manifest = params.get("manifest")
+        snapshot = params.get("score_snapshot")
+        if not isinstance(manifest, dict):
+            raise NativeWorkerError("manifest must be an object")
+        if not isinstance(snapshot, dict):
+            raise NativeWorkerError("score_snapshot must be an object")
+        with database_connection(self.paths.database) as connection:
+            repository.get_project(connection, project_id)
+            assets = repository.list_assets(connection, project_id)
+            groups = repository.list_duplicate_groups(connection, project_id)
+        return evaluate_acceptance(
+            manifest,
+            assets,
+            groups,
+            project_id=project_id,
+            score_snapshot=snapshot,
+        )
 
     def _handle_publish_dry_run(self, params: dict[str, object]) -> dict[str, object]:
         return _publish_payload(

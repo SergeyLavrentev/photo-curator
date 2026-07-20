@@ -233,6 +233,16 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
     assert evidence["score_snapshot"]["engine"]["version"].startswith("native-")
     assert evidence["summary"]["manual_labels"] == 1
     assert evidence["summary"]["release_ready"] is False
+    report = evaluate_acceptance(
+        evidence["manifest"],
+        assets,
+        [],
+        project_id="trip",
+        score_snapshot=evidence["score_snapshot"],
+    )
+    assert report["labelled_assets"] == 1
+    assert report["metrics"]["pairwise_accuracy"] == 1.0
+    assert report["release_eligible"] is False
 
 
 def test_cli_exports_template_from_analyzed_project(
