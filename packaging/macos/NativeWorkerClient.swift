@@ -124,6 +124,8 @@ final class NativeWorkerClient: @unchecked Sendable {
         environment["PYTHONUNBUFFERED"] = "1"
         environment["PHOTO_CURATOR_PHOTOKIT_HELPER"] = resources
             .appendingPathComponent("native/photo-curator-photokit").path
+        environment["PHOTO_CURATOR_VISION_HELPER"] = resources
+            .appendingPathComponent("native/photo-curator-vision").path
         environment["PHOTO_CURATOR_PUBLISH_HELPER"] = resources
             .appendingPathComponent("native/photo-curator-publish").path
         process.environment = environment

@@ -10,10 +10,28 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from photo_curator.analysis.native_vision import NativeVisionEngine, aesthetics_score_snapshot
+from photo_curator.analysis.native_vision import (
+    NativeVisionEngine,
+    _bundled_executable,
+    aesthetics_score_snapshot,
+)
 from photo_curator.cli import run_vision_benchmark_command
 from photo_curator.paths import default_application_paths
 from tests.test_pipeline import build_pipeline
+
+
+def test_frozen_worker_resolves_vision_helper_inside_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "PhotoCurator.app/Contents/Resources/backend/photo-curator-backend"
+    helper = executable.parents[1] / "native/photo-curator-vision"
+    helper.parent.mkdir(parents=True)
+    helper.touch()
+    monkeypatch.delenv("PHOTO_CURATOR_VISION_HELPER", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+
+    assert _bundled_executable() == helper
 
 
 @pytest.mark.skipif(

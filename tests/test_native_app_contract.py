@@ -13,6 +13,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert '"native-worker", "--demo"' in worker
     assert "PHOTO_CURATOR_NATIVE_DEMO" in worker
     assert "PHOTO_CURATOR_PHOTOKIT_HELPER" in worker
+    assert "PHOTO_CURATOR_VISION_HELPER" in worker
     assert "PHOTO_CURATOR_PUBLISH_HELPER" in worker
     native_worker = (ROOT / "src/photo_curator/native_worker.py").read_text()
     assert "PhotoKitProvider.from_environment" in native_worker

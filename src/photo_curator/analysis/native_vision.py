@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import platform
 import sys
 import uuid
@@ -191,7 +192,10 @@ def _xcrun_swiftc(runner: Callable[..., CommandResult]) -> str | None:
 
 
 def _bundled_executable() -> Path | None:
+    configured = os.environ.get("PHOTO_CURATOR_VISION_HELPER")
+    if configured:
+        return Path(configured)
     if not getattr(sys, "frozen", False):
         return None
-    candidate = Path(sys.executable).resolve().parents[2] / "native" / "photo-curator-vision"
+    candidate = Path(sys.executable).resolve().parents[1] / "native" / "photo-curator-vision"
     return candidate

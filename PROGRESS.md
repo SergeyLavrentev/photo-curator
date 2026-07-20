@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: runtime QA нашёл и устранил frozen-path defect native Vision:
+  backend искал helper в `Contents/native` вместо `Contents/Resources/native`,
+  из-за чего aesthetics/faces/feature prints молча становились `unavailable`.
+  Swift launcher теперь передаёт явный bundled path, а Python fallback исправлен и покрыт тестом.
 - 2026-07-20: native review получил клавиатурный workflow: стрелки меняют кадр,
   1/2/3 задают Keep/Review/Reject, Space открывает native Quick Look, Cmd+Z
   точно возвращает предыдущий manual override. Выбор альбома, density,
