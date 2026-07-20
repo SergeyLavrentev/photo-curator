@@ -17,7 +17,7 @@ from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.photokit_provider import PhotoKitProvider
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.publisher import PhotosPublisher
-from photo_curator.pipeline.coordinator import PipelineCoordinator
+from photo_curator.pipeline.coordinator import STAGES, PipelineCoordinator
 
 WORKER_SCHEMA_VERSION = 1
 
@@ -116,9 +116,12 @@ class NativeWorker:
 
     def _handle_start_analysis(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
+        from_stage = params.get("from_stage")
+        if from_stage is not None and from_stage not in STAGES:
+            raise NativeWorkerError("Unknown pipeline stage")
         with database_connection(self.paths.database) as connection:
             repository.get_project(connection, project_id)
-        self.coordinator.start(project_id)
+        self.coordinator.start(project_id, from_stage=from_stage)
         return {"status": "started", "project_id": project_id}
 
     def _handle_project(self, params: dict[str, object]) -> dict[str, object]:
@@ -166,6 +169,24 @@ class NativeWorker:
             profile = repository.ensure_taste_profile(connection)
             examples = repository.list_preference_examples(connection)
         return _taste_payload(profile, len(examples))
+
+    def _handle_taste_pair(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            repository.get_project(connection, project_id)
+            assets = repository.list_assets(connection, project_id)
+            signals = repository.analysis_signals_by_asset(connection, project_id)
+            duplicate_context = repository.duplicate_context(connection, project_id)
+            examples = repository.list_preference_examples(connection)
+        pair, remaining = _next_taste_pair(assets, signals, duplicate_context, examples)
+        return {
+            "pair": (
+                {"left": _asset_payload(pair[0]), "right": _asset_payload(pair[1])}
+                if pair
+                else None
+            ),
+            "remaining": remaining,
+        }
 
     def _handle_taste_preference(self, params: dict[str, object]) -> dict[str, object]:
         with database_connection(self.paths.database) as connection:
@@ -322,6 +343,63 @@ def _asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "components": asset.get("swipe_components") or {},
         "reasons": asset.get("swipe_reasons") or [],
     }
+
+
+def _next_taste_pair(
+    assets: list[dict[str, object]],
+    signals: dict[str, dict[str, dict[str, object]]],
+    duplicate_context: dict[str, dict[str, object]],
+    examples: list[dict[str, object]],
+) -> tuple[tuple[dict[str, object], dict[str, object]] | None, int]:
+    seen = {
+        tuple(sorted((str(example["left_uuid"]), str(example["right_uuid"]))))
+        for example in examples
+    }
+    candidates = [
+        asset
+        for asset in assets
+        if asset.get("cache_state") == "ready"
+        and asset.get("review_path")
+        and asset.get("final_disposition") in {"keep", "review"}
+        and signals.get(str(asset["asset_uuid"]), {}).get("feature_print", {}).get("status")
+        == "ready"
+    ]
+    candidates.sort(
+        key=lambda asset: (
+            -float(asset.get("swipe_score") or 0),
+            str(asset["asset_uuid"]),
+        )
+    )
+
+    ranked_pairs: list[tuple[float, float, str, str, dict[str, object], dict[str, object]]] = []
+    for index, left in enumerate(candidates):
+        left_uuid = str(left["asset_uuid"])
+        left_group = duplicate_context.get(left_uuid, {}).get("group_id")
+        for right in candidates[index + 1 : index + 9]:
+            right_uuid = str(right["asset_uuid"])
+            right_group = duplicate_context.get(right_uuid, {}).get("group_id")
+            if left_group and left_group == right_group:
+                continue
+            key = tuple(sorted((left_uuid, right_uuid)))
+            if key in seen:
+                continue
+            left_score = float(left.get("swipe_score") or 0)
+            right_score = float(right.get("swipe_score") or 0)
+            ranked_pairs.append(
+                (
+                    abs(left_score - right_score),
+                    -max(left_score, right_score),
+                    key[0],
+                    key[1],
+                    left,
+                    right,
+                )
+            )
+    if not ranked_pairs:
+        return None, 0
+    ranked_pairs.sort(key=lambda pair: pair[:4])
+    best = ranked_pairs[0]
+    return (best[4], best[5]), len(ranked_pairs)
 
 
 def _taste_payload(profile: dict[str, object], count: int) -> dict[str, object]:

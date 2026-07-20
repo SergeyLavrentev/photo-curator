@@ -134,7 +134,9 @@ prints. Для визуально близкой сцены автоматиче
 
 Локальный profile обучается на явных A/B comparisons поверх native Vision feature prints.
 Feature vectors копируются в profile storage, поэтому накопленный вкус не пропадает при
-удалении старого проекта. Pairwise linear model добавляет ограниченный `personal_delta`
+удалении проекта. В native UI три выбора между похожими по силе кадрами запускают
+первую калибровку; Swipe Score и review order обновляются сразу, без повтора тяжёлого
+Vision pipeline. Pairwise linear model добавляет ограниченный `personal_delta`
 от −20 до +20, а generic score всегда остаётся видимым отдельно.
 
 Profile API поддерживает capture, training, pause/resume, export и полное удаление:

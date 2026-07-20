@@ -17,6 +17,10 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     native_worker = (ROOT / "src/photo_curator/native_worker.py").read_text()
     assert "PhotoKitProvider.from_environment" in native_worker
     assert "OSXPhotosProvider" not in native_worker
+    assert 'call("taste_pair"' in app
+    assert 'call("taste_preference"' in app
+    assert '"from_stage": "decisions"' in app
+    assert "Какой кадр вы бы оставили?" in app
     assert "NSWorkspace.shared.open" not in app + worker
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker
@@ -51,3 +55,10 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "PHImageManager.default().requestImage" in helper
     assert "Photos.sqlite" not in helper
     assert "photo_curator_publish.swift" in build
+
+
+def test_native_review_localizes_swipe_reasons() -> None:
+    models = (ROOT / "packaging/macos/PhotoCuratorModels.swift").read_text()
+
+    assert '"strong_aesthetics": "Сильное первое впечатление"' in models
+    assert '"similar_scene": "Похожая сцена уже представлена"' in models

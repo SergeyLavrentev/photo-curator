@@ -85,8 +85,23 @@ struct PhotoItem: Identifiable {
         confidence = (value["confidence"] as? NSNumber)?.doubleValue
         disposition = value["final_disposition"] as? String
         reasons = (value["reasons"] as? [[String: Any]] ?? []).compactMap {
-            ($0["code"] as? String)?.replacingOccurrences(of: "_", with: " ")
+            ($0["code"] as? String).map(reasonTitle)
         }
+    }
+}
+
+struct TastePair {
+    let left: PhotoItem
+    let right: PhotoItem
+
+    init?(_ value: [String: Any]) {
+        guard let rawLeft = value["left"] as? [String: Any],
+              let rawRight = value["right"] as? [String: Any],
+              let left = PhotoItem(rawLeft),
+              let right = PhotoItem(rawRight)
+        else { return nil }
+        self.left = left
+        self.right = right
     }
 }
 
@@ -103,4 +118,21 @@ struct PublishPlan {
         itemCount = value["item_count"] as? Int ?? value["asset_count"] as? Int ?? 0
         albumName = value["album_name"] as? String ?? "Photo Curator — Best"
     }
+}
+
+private func reasonTitle(_ code: String) -> String {
+    [
+        "strong_aesthetics": "Сильное первое впечатление",
+        "strong_composition": "Удачная композиция",
+        "interesting_subject": "Интересный сюжет",
+        "strong_moment": "Удачный момент",
+        "personal_taste_match": "Совпадает с вашим вкусом",
+        "personal_taste_mismatch": "Меньше совпадает с вашим вкусом",
+        "best_in_series": "Лучший кадр серии",
+        "technical_penalty": "Есть технический недостаток",
+        "similar_scene": "Похожая сцена уже представлена",
+        "adds_variety": "Добавляет разнообразие",
+        "favorite_protected": "Отмечено как избранное",
+        "edited_protected": "Ручная обработка сохранена",
+    ][code] ?? code.replacingOccurrences(of: "_", with: " ")
 }

@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: S4/S7 native A/B calibration замкнула Personal Taste loop:
+  worker выбирает неоценённые близкие по Swipe Score пары вне duplicate group,
+  SwiftUI собирает три явных выбора, локально обучает profile и сразу
+  пересчитывает decisions без повторного Vision analysis.
 - 2026-07-20: native worker теперь fail-closed требует bundled PhotoKit helper:
   неполная сборка больше не откатывается на `osxphotos` и не пытается
   копировать `Photos.sqlite`.

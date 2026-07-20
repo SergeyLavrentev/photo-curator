@@ -18,6 +18,10 @@ final class AppModel: ObservableObject {
     @Published var publishMessage: String?
     @Published var tasteStatus = "Не настроен"
     @Published var tasteExamples = 0
+    @Published var tastePair: TastePair?
+    @Published var tasteRemaining = 0
+    @Published var tasteMessage: String?
+    @Published var isTasteBusy = false
 
     let worker = NativeWorkerClient()
     private var pollTask: Task<Void, Never>?
@@ -58,6 +62,8 @@ final class AppModel: ObservableObject {
         isBusy = true
         errorMessage = nil
         photos = []
+        tastePair = nil
+        tasteMessage = nil
         publishPlan = nil
         Task {
             do {
@@ -88,6 +94,43 @@ final class AppModel: ObservableObject {
                 _ = try await call("decision", params)
                 if let index = photos.firstIndex(where: { $0.id == photoID }) {
                     photos[index].disposition = disposition
+                }
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func chooseTaste(preferredID: String) {
+        guard let project, let pair = tastePair else { return }
+        isTasteBusy = true
+        tasteMessage = nil
+        Task {
+            defer { isTasteBusy = false }
+            do {
+                let result = try await call("taste_preference", [
+                    "project_id": project.id,
+                    "left_uuid": pair.left.id,
+                    "right_uuid": pair.right.id,
+                    "preferred_uuid": preferredID,
+                ])
+                if let value = result as? [String: Any],
+                   let profile = value["profile"] as? [String: Any]
+                {
+                    applyTasteProfile(profile)
+                }
+                if tasteExamples >= 3 {
+                    let trained = try await call("taste_train")
+                    if let profile = trained as? [String: Any] { applyTasteProfile(profile) }
+                    tastePair = nil
+                    tasteMessage = "Вкус обновлён. Пересчитываем Swipe Score…"
+                    _ = try await call("start_analysis", [
+                        "project_id": project.id,
+                        "from_stage": "decisions",
+                    ])
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                    startPolling(projectID: project.id)
+                } else {
+                    await loadTastePair(projectID: project.id)
+                    tasteMessage = "Выбор сохранён. Ещё \(max(0, 3 - tasteExamples))."
                 }
             } catch { errorMessage = error.localizedDescription }
         }
@@ -146,10 +189,7 @@ final class AppModel: ObservableObject {
                     selectedAlbumID = albums.first?.id ?? sharedAlbums.first?.id ?? ""
                 }
             }
-            if let taste = rawTaste as? [String: Any] {
-                tasteExamples = taste["preference_count"] as? Int ?? 0
-                tasteStatus = taste["status"] as? String ?? "Не настроен"
-            }
+            if let taste = rawTaste as? [String: Any] { applyTasteProfile(taste) }
         } catch {
             workerStatus = "Ошибка: \(error.localizedDescription)"
             errorMessage = error.localizedDescription
@@ -192,7 +232,27 @@ final class AppModel: ObservableObject {
             let result = try await call("assets", ["project_id": projectID])
             let value = result as? [String: Any]
             photos = (value?["items"] as? [[String: Any]] ?? []).compactMap(PhotoItem.init)
+            await loadTastePair(projectID: projectID)
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func loadTastePair(projectID: String) async {
+        do {
+            let result = try await call("taste_pair", ["project_id": projectID])
+            guard let value = result as? [String: Any] else {
+                throw NativeWorkerClientError.invalidResponse
+            }
+            tasteRemaining = value["remaining"] as? Int ?? 0
+            tastePair = (value["pair"] as? [String: Any]).flatMap(TastePair.init)
+            if tasteMessage?.contains("Пересчитываем") == true {
+                tasteMessage = "Swipe Score обновлён с учётом вашего вкуса."
+            }
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func applyTasteProfile(_ value: [String: Any]) {
+        tasteExamples = value["preference_count"] as? Int ?? tasteExamples
+        tasteStatus = value["status"] as? String ?? "Не настроен"
     }
 
     private func call(_ method: String, _ params: [String: Any] = [:]) async throws -> Any {
@@ -380,9 +440,28 @@ struct RootView: View {
     private var tasteSection: some View {
         StepCard(number: 2, title: "Персональный вкус — опционально", symbol: "heart.text.square") {
             Text(model.tasteExamples > 0
-                 ? "Профиль \(model.tasteStatus), сравнений: \(model.tasteExamples). Swipe Score уже учитывает ваши предпочтения."
-                 : "Можно начать без настройки. После первого анализа вы сможете сравнить пары кадров, и приложение запомнит ваш вкус.")
+                 ? "Профиль: \(model.tasteStatus), сравнений: \(model.tasteExamples)."
+                 : "Можно начать без настройки. После анализа выберите лучший из пары кадров.")
                 .foregroundStyle(.secondary)
+            if let pair = model.tastePair {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Какой кадр вы бы оставили?").font(.headline)
+                    HStack(spacing: 14) {
+                        TasteChoiceCard(photo: pair.left, disabled: model.isTasteBusy) {
+                            model.chooseTaste(preferredID: pair.left.id)
+                        }
+                        TasteChoiceCard(photo: pair.right, disabled: model.isTasteBusy) {
+                            model.chooseTaste(preferredID: pair.right.id)
+                        }
+                    }
+                    Text("Три выбора дают первую настройку. Фотографии и исходный альбом не изменяются.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if model.isTasteBusy { ProgressView("Запоминаем выбор…") }
+            if let message = model.tasteMessage {
+                Label(message, systemImage: "heart.fill").foregroundStyle(.pink)
+            }
         }
     }
 
@@ -541,6 +620,42 @@ struct PhotoCard: View {
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.separator.opacity(0.4)))
+    }
+}
+
+struct TasteChoiceCard: View {
+    let photo: PhotoItem
+    let disabled: Bool
+    let choose: () -> Void
+
+    var body: some View {
+        Button(action: choose) {
+            VStack(alignment: .leading, spacing: 8) {
+                Group {
+                    if let path = photo.imagePath, let image = NSImage(contentsOfFile: path) {
+                        Image(nsImage: image).resizable().scaledToFill()
+                    } else {
+                        Rectangle().fill(.quaternary).overlay(Image(systemName: "photo"))
+                    }
+                }
+                .frame(maxWidth: .infinity).frame(height: 190)
+                .clipped().clipShape(RoundedRectangle(cornerRadius: 12))
+                HStack {
+                    Text(photo.filename).lineLimit(1)
+                    Spacer()
+                    Text(photo.swipeScore.map(String.init) ?? "—")
+                        .font(.headline.monospacedDigit())
+                }
+                Text("Выбрать этот кадр").font(.caption.weight(.semibold))
+            }
+            .padding(10)
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .background(.background, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.tint, lineWidth: 1))
+        .disabled(disabled)
+        .accessibilityLabel("Выбрать \(photo.filename) для настройки вкуса")
     }
 }
 

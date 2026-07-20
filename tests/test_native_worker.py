@@ -99,3 +99,44 @@ def test_native_worker_can_create_project_directly_from_shared_album(tmp_path: P
 
     assert created["album_id"] == "demo-shared-album"
     assert created["album_name"] == "Семейный Shared Album"
+
+
+def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    seen: set[tuple[str, str]] = set()
+
+    for _ in range(3):
+        result = worker.dispatch("taste_pair", {"project_id": project_id})
+        pair = result["pair"]
+        assert pair and result["remaining"] > 0
+        left = pair["left"]["asset_uuid"]
+        right = pair["right"]["asset_uuid"]
+        key = tuple(sorted((left, right)))
+        assert key not in seen
+        seen.add(key)
+        worker.dispatch(
+            "taste_preference",
+            {
+                "project_id": project_id,
+                "left_uuid": left,
+                "right_uuid": right,
+                "preferred_uuid": left,
+            },
+        )
+
+    profile = worker.dispatch("taste_train", {})
+    assert profile["status"] == "ready"
+    assert profile["training_examples"] == 3
+    coordinator.run(project_id, from_stage="decisions")
+    reranked = worker.dispatch("assets", {"project_id": project_id})["items"]
+    assert any(abs(item["personal_delta"] or 0) > 0.1 for item in reranked)
+
+
+def test_native_worker_rejects_unknown_resume_stage(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    with pytest.raises(ValueError, match="Unknown pipeline stage"):
+        worker.dispatch("start_analysis", {"project_id": project_id, "from_stage": "unknown"})
