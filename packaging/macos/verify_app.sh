@@ -50,8 +50,8 @@ require_identifier "$SOURCE" "local.photo-curator.source-helper"
 require_identifier "$PUBLISH" "local.photo-curator.publish-helper"
 
 for helper in "$SOURCE" "$PUBLISH"; do
-  /usr/bin/codesign -d --verbose=4 "$helper" 2>&1 \
-    | /usr/bin/grep -Eq '^Info.plist entries=[1-9][0-9]*$' \
+  helper_signature="$(/usr/bin/codesign -d --verbose=4 "$helper" 2>&1)"
+  /usr/bin/grep -Eq '^Info.plist entries=[1-9][0-9]*$' <<<"$helper_signature" \
     || fail "PhotoKit helper has no signed embedded Info.plist: $helper"
 done
 
@@ -60,8 +60,7 @@ for excluded in osxphotos photoscript utitools fastapi jinja2; do
     || fail "legacy dependency is bundled: $excluded"
 done
 
-if /usr/bin/find "$APP" -type f \( -name '*.html' -o -name '*.js' \) -print -quit \
-  | /usr/bin/grep -q .; then
+if [[ -n "$(/usr/bin/find "$APP" -type f \( -name '*.html' -o -name '*.js' \) -print -quit)" ]]; then
   fail "web assets are present in the native bundle"
 fi
 
