@@ -47,6 +47,19 @@ macOS попросит подтвердить trust settings в login Keychain. 
 используется ad-hoc `-`. Локальный certificate не заменяет Developer ID и notarization
 для распространения другим пользователям.
 
+Release notarization не принимает пароль через Makefile или environment. Один раз создайте
+защищённый профиль стандартной командой Apple, затем подпишите и отправьте сборку:
+
+```bash
+xcrun notarytool store-credentials "PhotoCurator Notary"
+make app SIGN_IDENTITY="Developer ID Application: …"
+make notarize NOTARY_PROFILE="PhotoCurator Notary"
+```
+
+`make notarize` fail-closed проверяет Developer ID authority и TeamIdentifier, выполняет
+bundle audit, отправляет временный ZIP через `notarytool --wait`, stapling/validation и
+Gatekeeper assessment. Финальный stapled архив появляется в `build/dist/`.
+
 Сборка подписывает GUI и оба PhotoKit helper с Hardened Runtime и entitlement
 `com.apple.security.personal-information.photos-library`. `make verify-app` проверяет
 не только внешнюю подпись `.app`, но и identities/entitlements вложенных executables,

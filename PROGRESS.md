@@ -1,5 +1,9 @@
 # Progress
 
+- 2026-07-20: S8 packaging получил воспроизводимый notarization flow: только Developer
+  ID Application + TeamIdentifier, credentials только в заранее созданном Keychain profile,
+  pre-submit bundle audit, `notarytool --wait`, stapling, validation и Gatekeeper assess.
+  Скрипт не содержит Apple ID/password; реальная отправка требует developer credentials.
 - 2026-07-20: native Vision и Core ML benchmark reports теперь содержат измеренный
   process peak RSS (`getrusage.ru_maxrss`) и Python boundary fail-closed отклоняет отчёт
   без memory evidence. Это закрывает peak-memory instrumentation, но не подменяет

@@ -5,8 +5,9 @@ APP := $(CURDIR)/build/macos/PhotoCurator.app
 INSTALL_DIR ?= /Applications
 INSTALLED_APP := $(INSTALL_DIR)/PhotoCurator.app
 SIGN_IDENTITY ?= $(shell bash packaging/macos/local_signing_identity.sh --print)
+NOTARY_PROFILE ?=
 
-.PHONY: help sync test lint vision-helper coreml-helper local-signing-identity app build install run stop verify-app uninstall clean
+.PHONY: help sync test lint vision-helper coreml-helper local-signing-identity app build install run stop verify-app notarize uninstall clean
 
 help:
 	@echo "Photo Curator"
@@ -17,6 +18,7 @@ help:
 	@echo "  make local-signing-identity создать стабильную локальную подпись"
 	@echo "  make app         собрать и локально подписать .app"
 	@echo "  make install     установить в $(INSTALL_DIR) и запустить"
+	@echo "  make notarize    отправить Developer ID build в Apple notary service"
 	@echo "  make stop        завершить установленное приложение"
 	@echo "  make uninstall   переместить установленное приложение в Корзину"
 	@echo "  make clean       удалить build-артефакты"
@@ -56,6 +58,9 @@ app build:
 
 verify-app:
 	bash packaging/macos/verify_app.sh "$(APP)"
+
+notarize:
+	bash packaging/macos/notarize_app.sh "$(APP)" "$(NOTARY_PROFILE)"
 
 install: app
 	mkdir -p "$(INSTALL_DIR)"

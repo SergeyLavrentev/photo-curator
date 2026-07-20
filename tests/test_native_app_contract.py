@@ -117,6 +117,21 @@ def test_bundle_verifier_guards_tcc_identity_and_native_only_contents() -> None:
     assert 'bash packaging/macos/verify_app.sh "$(APP)"' in makefile
 
 
+def test_notarization_requires_developer_id_and_keychain_profile() -> None:
+    helper = (ROOT / "packaging/macos/notarize_app.sh").read_text()
+    makefile = (ROOT / "Makefile").read_text()
+
+    assert "NOTARY_PROFILE" in makefile
+    assert "notarytool submit" in helper
+    assert "--keychain-profile" in helper
+    assert "Developer ID Application:" in helper
+    assert "stapler staple" in helper
+    assert "stapler validate" in helper
+    assert "spctl --assess" in helper
+    assert "APPLE_ID" not in helper
+    assert "PASSWORD" not in helper
+
+
 def test_native_review_localizes_swipe_reasons() -> None:
     models = (ROOT / "packaging/macos/PhotoCuratorModels.swift").read_text()
 
