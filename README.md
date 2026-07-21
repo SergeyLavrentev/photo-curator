@@ -34,18 +34,17 @@ make uninstall # переместить установленный .app в Ко�
 ```
 
 `⌘Q` и завершение приложения из Dock сначала останавливают дочерний движок; из системных
-настроек приложения его можно перезапустить. Для подписи сертификатом разработчика используйте
-`make app SIGN_IDENTITY="Developer ID Application: …"`. Для стабильной локальной
-подписи, не меняющей designated requirement между сборками, один раз выполните:
+настроек приложения его можно перезапустить. По умолчанию `make app` использует ad-hoc
+подпись и не читает и не изменяет login Keychain. Для стабильной подписи передайте явно
+существующий Apple Developer identity:
 
 ```bash
-make local-signing-identity
+make app SIGN_IDENTITY="Developer ID Application: …"
 ```
 
-macOS попросит подтвердить trust settings в login Keychain. После этого `make app`
-автоматически выберет `Photo Curator Local Development`. Если identity ещё нет,
-используется ad-hoc `-`. Локальный certificate не заменяет Developer ID и notarization
-для распространения другим пользователям.
+Проект не создаёт самоподписанные сертификаты, не импортирует приватные ключи и не меняет
+trust settings. Управление Developer ID и доступом к его ключу остаётся за стандартными
+инструментами Apple.
 
 Release notarization не принимает пароль через Makefile или environment. Один раз создайте
 защищённый профиль стандартной командой Apple, затем подпишите и отправьте сборку:

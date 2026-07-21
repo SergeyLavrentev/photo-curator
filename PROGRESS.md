@@ -68,10 +68,13 @@
   FastAPI/Jinja/web assets и `osxphotos` больше не пакуются в `.app`; размер уменьшился
   с 103 MB до 50 MB. Frozen production status/shutdown и demo albums JSONL проверены
   на собранном bundle; web CLI остаётся только в development install.
-- 2026-07-20: packaging получил idempotent stable local signing identity и
-  `make local-signing-identity`; `make app` автоматически выберет его после trust.
-  Certificate/private key уже импортированы в login Keychain, но macOS отклонила
-  trust authorization; до ручного подтверждения сборка fail-safe остаётся ad-hoc.
+- 2026-07-22: небезопасный local-signing workflow удалён. `make app` всегда использует
+  ad-hoc подпись по умолчанию и не обращается к login Keychain; стабильная release-подпись
+  возможна только через явно переданный Apple Developer identity. Регрессионный contract
+  запрещает возвращать `security import`, `add-trusted-cert` и путь login Keychain в
+  build scripts.
+- 2026-07-20: packaging получил stable local signing identity через login Keychain.
+  Этот экспериментальный путь признан небезопасным и полностью удалён 2026-07-22.
 - 2026-07-20: native pipeline lifecycle стал восстанавливаемым: worker startup
   переводит оставшиеся running jobs в `interrupted`, resume начинает с того же
   stage, а cooperative cancel проверяется между stages и в per-asset loops. SwiftUI

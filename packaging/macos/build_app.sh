@@ -96,8 +96,6 @@ done
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   SIGN_OPTIONS=(--force --options runtime --sign -)
-elif [[ "$SIGN_IDENTITY" == "Photo Curator Local Development" ]]; then
-  SIGN_OPTIONS=(--force --options runtime --sign "$SIGN_IDENTITY")
 else
   SIGN_OPTIONS=(--force --options runtime --timestamp --sign "$SIGN_IDENTITY")
 fi
@@ -116,7 +114,7 @@ done
 /usr/bin/codesign "${SIGN_OPTIONS[@]}" \
   --entitlements "$SCRIPT_DIR/Photos.entitlements" \
   "$CONTENTS/MacOS/PhotoCurator"
-if [[ "$SIGN_IDENTITY" == "-" || "$SIGN_IDENTITY" == "Photo Curator Local Development" ]]; then
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
   /usr/bin/codesign "${SIGN_OPTIONS[@]}" --deep \
     --entitlements "$SCRIPT_DIR/Backend.entitlements" \
     "$RESOURCES/backend/photo-curator-backend"

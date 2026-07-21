@@ -4,10 +4,10 @@ SHELL := /bin/bash
 APP := $(CURDIR)/build/macos/PhotoCurator.app
 INSTALL_DIR ?= /Applications
 INSTALLED_APP := $(INSTALL_DIR)/PhotoCurator.app
-SIGN_IDENTITY ?= $(shell bash packaging/macos/local_signing_identity.sh --print)
+SIGN_IDENTITY ?= -
 NOTARY_PROFILE ?=
 
-.PHONY: help sync test lint vision-helper coreml-helper local-signing-identity app build install run stop verify-app notarize uninstall clean
+.PHONY: help sync test lint vision-helper coreml-helper app build install run stop verify-app notarize uninstall clean
 
 help:
 	@echo "Photo Curator"
@@ -15,8 +15,7 @@ help:
 	@echo "  make test        запустить тесты"
 	@echo "  make vision-helper собрать нативный Apple Vision benchmark"
 	@echo "  make coreml-helper собрать optional Core ML benchmark"
-	@echo "  make local-signing-identity создать стабильную локальную подпись"
-	@echo "  make app         собрать и локально подписать .app"
+	@echo "  make app         собрать и ad-hoc подписать .app"
 	@echo "  make install     установить в $(INSTALL_DIR) и запустить"
 	@echo "  make notarize    отправить Developer ID build в Apple notary service"
 	@echo "  make stop        завершить установленное приложение"
@@ -49,9 +48,6 @@ coreml-helper:
 	  -framework Vision -framework CoreML -framework AppKit \
 	  src/photo_curator/analysis/native/photo_curator_coreml.swift \
 	  -o "$(CURDIR)/build/native/photo-curator-coreml"
-
-local-signing-identity:
-	bash packaging/macos/local_signing_identity.sh --create
 
 app build:
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" packaging/macos/build_app.sh

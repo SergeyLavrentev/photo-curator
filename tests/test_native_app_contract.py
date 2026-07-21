@@ -103,16 +103,21 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert '--entitlements "$SCRIPT_DIR/Photos.entitlements"' in build
 
 
-def test_local_signing_identity_is_stable_and_optional() -> None:
+def test_build_never_reads_or_mutates_login_keychain() -> None:
     makefile = (ROOT / "Makefile").read_text()
-    helper = (ROOT / "packaging/macos/local_signing_identity.sh").read_text()
     build = (ROOT / "packaging/macos/build_app.sh").read_text()
+    packaging_scripts = "\n".join(
+        path.read_text() for path in (ROOT / "packaging" / "macos").glob("*.sh")
+    )
+    build_surface = f"{makefile}\n{packaging_scripts}"
 
-    assert "local-signing-identity" in makefile
-    assert "Photo Curator Local Development" in helper
-    assert "extendedKeyUsage = critical,codeSigning" in helper
-    assert "security add-trusted-cert" in helper
-    assert 'SIGN_IDENTITY" == "Photo Curator Local Development"' in build
+    assert "SIGN_IDENTITY ?= -" in makefile
+    assert "local-signing-identity" not in makefile
+    assert not (ROOT / "packaging/macos/local_signing_identity.sh").exists()
+    assert "Photo Curator Local Development" not in build
+    assert "security import" not in build_surface
+    assert "add-trusted-cert" not in build_surface
+    assert "login.keychain" not in build_surface
     assert "--timestamp --sign" in build
     entitlements = (ROOT / "packaging/macos/Photos.entitlements").read_text()
     assert "com.apple.security.personal-information.photos-library" in entitlements
