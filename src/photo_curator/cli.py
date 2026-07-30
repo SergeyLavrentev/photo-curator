@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
             "model-approve",
             "release-benchmark",
             "native-worker",
+            "legacy-web",
         ],
     )
     parser.add_argument("--demo", action="store_true", help="Запустить synthetic demo")
@@ -405,7 +406,13 @@ def run_model_approve_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.error(
+            "укажите команду; пользовательский интерфейс запускается через PhotoCurator.app, "
+            "переходный web — только через explicit legacy-web"
+        )
     if args.command == "version":
         print(__version__)
         return
@@ -459,6 +466,9 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Acceptance error: {error}", file=sys.stderr)
             result = 2
         raise SystemExit(result)
+
+    if args.command != "legacy-web":
+        parser.error(f"неподдерживаемая команда: {args.command}")
 
     paths = default_application_paths()
     paths.ensure()

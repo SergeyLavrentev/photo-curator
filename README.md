@@ -1,7 +1,7 @@
 # Photo Curator
 
 Локальный macOS-помощник, который превращает большой неразобранный альбом в
-персональную подборку фотографий, которые хочется «свайпнуть вправо». Будущий
+персональную подборку фотографий, которые хочется «свайпнуть вправо».
 `Swipe Score` соединяет Apple Vision, сравнение лучших кадров серии и запоминаемый
 вкус пользователя. Исходный альбом и оригиналы не изменяются; автоматического
 удаления нет.
@@ -16,7 +16,7 @@
 
 ```bash
 uv sync
-uv run photo-curator --demo
+make app
 ```
 
 ## Нативное приложение для macOS
@@ -46,13 +46,15 @@ make app SIGN_IDENTITY="Developer ID Application: …"
 trust settings. Управление Developer ID и доступом к его ключу остаётся за стандартными
 инструментами Apple.
 
-Release notarization не принимает пароль через Makefile или environment. Один раз создайте
-защищённый профиль стандартной командой Apple, затем подпишите и отправьте сборку:
+Release notarization также не использует Keychain. Передайте путь к App Store Connect API
+key-файлу и его несекретные идентификаторы:
 
 ```bash
-xcrun notarytool store-credentials "PhotoCurator Notary"
 make app SIGN_IDENTITY="Developer ID Application: …"
-make notarize NOTARY_PROFILE="PhotoCurator Notary"
+make notarize \
+  NOTARY_KEY="$HOME/.config/photo-curator/AuthKey_XXXXXXXXXX.p8" \
+  NOTARY_KEY_ID="XXXXXXXXXX" \
+  NOTARY_ISSUER_ID="00000000-0000-0000-0000-000000000000"
 ```
 
 `make notarize` fail-closed проверяет Developer ID authority и TeamIdentifier, выполняет
@@ -71,7 +73,7 @@ Gatekeeper assessment. Финальный stapled архив появляетс�
 
 ```bash
 uv run photo-curator doctor
-uv run photo-curator
+uv run photo-curator legacy-web --demo
 ```
 
 Этот server mode не запускается установленным SwiftUI-приложением.

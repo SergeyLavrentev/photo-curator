@@ -40,7 +40,9 @@
 
 ## Fake provider
 
-`FakePhotosProvider` позволяет выполнять полный pipeline на любой платформе. `photo-curator --demo` должен быть демонстрацией и integration test UI.
+`FakePhotosProvider` позволяет выполнять полный pipeline на любой платформе.
+`photo-curator legacy-web --demo` остаётся только явной диагностической демонстрацией;
+обычный запуск CLI не должен молча поднимать legacy web server.
 
 ## Publisher tests
 

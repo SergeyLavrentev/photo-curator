@@ -5,7 +5,9 @@ APP := $(CURDIR)/build/macos/PhotoCurator.app
 INSTALL_DIR ?= /Applications
 INSTALLED_APP := $(INSTALL_DIR)/PhotoCurator.app
 SIGN_IDENTITY ?= -
-NOTARY_PROFILE ?=
+NOTARY_KEY ?=
+NOTARY_KEY_ID ?=
+NOTARY_ISSUER_ID ?=
 
 .PHONY: help sync test lint vision-helper coreml-helper app build install run stop verify-app notarize uninstall clean
 
@@ -56,7 +58,7 @@ verify-app:
 	bash packaging/macos/verify_app.sh "$(APP)"
 
 notarize:
-	bash packaging/macos/notarize_app.sh "$(APP)" "$(NOTARY_PROFILE)"
+	bash packaging/macos/notarize_app.sh "$(APP)" "$(NOTARY_KEY)" "$(NOTARY_KEY_ID)" "$(NOTARY_ISSUER_ID)"
 
 install: app
 	mkdir -p "$(INSTALL_DIR)"

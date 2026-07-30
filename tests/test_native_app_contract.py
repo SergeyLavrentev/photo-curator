@@ -15,9 +15,12 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "PHOTO_CURATOR_PHOTOKIT_HELPER" in worker
     assert "PHOTO_CURATOR_VISION_HELPER" in worker
     assert "PHOTO_CURATOR_PUBLISH_HELPER" in worker
+    assert "maxLogBytes: UInt64 = 5 * 1024 * 1024" in worker
+    assert "native-worker.previous.log" in worker
     native_worker = (ROOT / "src/photo_curator/native_worker.py").read_text()
     assert "PhotoKitProvider.from_environment" in native_worker
     assert "OSXPhotosProvider" not in native_worker
+    assert "legacy_cli_enabled=False" in native_worker
     assert 'call("taste_pair"' in app
     assert 'call("taste_preference"' in app
     assert '"from_stage": "decisions"' in app
@@ -51,21 +54,41 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "tasteHeldOutExamples" in app
     assert '"incompatible": "Нужна повторная настройка после обновления анализа"' in app
     assert "Удалить профиль и все сравнения" in app
+    assert "PHOTO_CURATOR_DEVELOPER_TOOLS" in app
+    assert "if model.developerToolsEnabled" in app
     assert ".accessibilityHint" in app
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker
 
 
-def test_native_app_requests_photos_permission_before_worker_bootstrap() -> None:
+def test_native_app_explains_first_run_before_requesting_photos_permission() -> None:
     app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
 
     assert "import Photos" in app
+    assert "didCompleteOnboardingV1" in app
+    assert "OnboardingView" in app
+    assert "Продолжить и выбрать альбом" in app
+    assert "На следующем шаге macOS попросит доступ к Фото" in app
+    assert "guard hasCompletedOnboarding" in app
     assert "requestPhotoLibraryAccess" in app
     assert "PHPhotoLibrary.requestAuthorization(for: .readWrite)" in app
     assert "guard await requestPhotoLibraryAccess() else { return }" in app
     assert "photoAccessNeedsAction" in app
     assert "Открыть настройки доступа к Фото" in app
     assert "Privacy_Photos" in app
+
+
+def test_native_progress_uses_fixed_stages_and_exposes_current_work() -> None:
+    app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
+    models = (ROOT / "packaging/macos/PhotoCuratorModels.swift").read_text()
+
+    assert 'private let stageOrder = ["inventory", "previews", "metrics"' in app
+    assert "completed / Double(stageOrder.count)" in app
+    assert "Этап \\(stage) из \\(stageOrder.count)" in app
+    assert "operationMessage" in app
+    assert "Импортируем \\(publishPlan.itemCount) фото в Photos" in app
+    assert 'warnings = value["warnings"]' in models
+    assert 'errors = value["errors"]' in models
 
 
 def test_native_workflow_keeps_publish_behind_dry_run_and_confirmation() -> None:
@@ -103,21 +126,29 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert '--entitlements "$SCRIPT_DIR/Photos.entitlements"' in build
 
 
-def test_build_never_reads_or_mutates_login_keychain() -> None:
+def test_build_and_notarization_never_use_keychain() -> None:
     makefile = (ROOT / "Makefile").read_text()
     build = (ROOT / "packaging/macos/build_app.sh").read_text()
     packaging_scripts = "\n".join(
         path.read_text() for path in (ROOT / "packaging" / "macos").glob("*.sh")
     )
-    build_surface = f"{makefile}\n{packaging_scripts}"
+    runtime_sources = "\n".join(
+        path.read_text()
+        for root in (ROOT / "src", ROOT / "packaging")
+        for path in root.rglob("*")
+        if path.suffix in {".py", ".swift", ".sh"}
+    )
+    build_surface = f"{makefile}\n{packaging_scripts}\n{runtime_sources}"
 
     assert "SIGN_IDENTITY ?= -" in makefile
     assert "local-signing-identity" not in makefile
     assert not (ROOT / "packaging/macos/local_signing_identity.sh").exists()
     assert "Photo Curator Local Development" not in build
-    assert "security import" not in build_surface
+    assert "/usr/bin/security import" not in build_surface
     assert "add-trusted-cert" not in build_surface
-    assert "login.keychain" not in build_surface
+    assert "keychain" not in build_surface.lower()
+    assert "secitem" not in build_surface.lower()
+    assert "seckeychain" not in build_surface.lower()
     assert "--timestamp --sign" in build
     entitlements = (ROOT / "packaging/macos/Photos.entitlements").read_text()
     assert "com.apple.security.personal-information.photos-library" in entitlements
@@ -141,13 +172,18 @@ def test_bundle_verifier_guards_tcc_identity_and_native_only_contents() -> None:
     assert 'bash packaging/macos/verify_app.sh "$(APP)"' in makefile
 
 
-def test_notarization_requires_developer_id_and_keychain_profile() -> None:
+def test_notarization_requires_developer_id_and_api_key_file() -> None:
     helper = (ROOT / "packaging/macos/notarize_app.sh").read_text()
     makefile = (ROOT / "Makefile").read_text()
 
-    assert "NOTARY_PROFILE" in makefile
+    assert "NOTARY_KEY" in makefile
+    assert "NOTARY_KEY_ID" in makefile
+    assert "NOTARY_ISSUER_ID" in makefile
     assert "notarytool submit" in helper
-    assert "--keychain-profile" in helper
+    assert '--key "$API_KEY"' in helper
+    assert '--key-id "$API_KEY_ID"' in helper
+    assert '--issuer "$API_ISSUER_ID"' in helper
+    assert "--keychain-profile" not in helper
     assert "Developer ID Application:" in helper
     assert "stapler staple" in helper
     assert "stapler validate" in helper

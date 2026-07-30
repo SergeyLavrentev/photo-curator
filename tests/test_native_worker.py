@@ -222,6 +222,19 @@ def test_native_worker_marks_restart_interrupted_and_resumes_same_stage(tmp_path
     assert worker.dispatch("cancel_analysis", {"project_id": project_id})["status"] == "cancelling"
 
 
+def test_native_worker_returns_only_latest_job_for_each_stage(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    coordinator.run(project_id, from_stage="decisions")
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    jobs = worker.dispatch("project", {"project_id": project_id})["jobs"]
+
+    assert [job["stage"] for job in jobs].count("decisions") == 1
+    assert len(jobs) == len({job["stage"] for job in jobs})
+    assert jobs[-1]["stage"] == "decisions"
+
+
 def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Path) -> None:
     paths, provider, coordinator, project_id = build_pipeline(tmp_path)
     coordinator.run(project_id)

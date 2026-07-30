@@ -44,6 +44,8 @@ struct JobItem: Identifiable {
     let status: String
     let processed: Int
     let total: Int
+    let warnings: Int
+    let errors: Int
     let message: String
 
     init?(_ value: [String: Any]) {
@@ -56,6 +58,8 @@ struct JobItem: Identifiable {
         self.status = status
         processed = value["processed_items"] as? Int ?? 0
         total = value["total_items"] as? Int ?? 0
+        warnings = value["warnings"] as? Int ?? 0
+        errors = value["errors"] as? Int ?? 0
         message = value["current_message"] as? String ?? ""
     }
 

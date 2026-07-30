@@ -2,7 +2,9 @@
 
 ## Doctor
 
-Проверяет environment, `osxphotos`, Photos Library, `sips`, writable directories и loopback port.
+CLI `doctor` относится к explicit legacy workflow и проверяет `osxphotos`, Photos Library,
+`sips`, writable directories и loopback port. Нативное приложение проверяет доступность
+bundled PhotoKit/Vision helpers и разрешение Photos непосредственно при запуске.
 
 ## Logs
 
@@ -41,7 +43,7 @@ UI показывает размер и counts. Возможны очистка 
 
 Проверить `/usr/bin/sips`, сохранить stderr, попробовать derivative fallback.
 
-### `osxphotos` publish unavailable
+### `osxphotos` publish unavailable (legacy web)
 
 Оставить проект в read-only review mode. Не применять direct DB или UI scripting workaround.
 

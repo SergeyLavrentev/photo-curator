@@ -56,8 +56,8 @@ results. Manual decisions and explicit pairwise labels survive re-analysis.
 
 ## Migration architecture
 
-The current FastAPI/Jinja application is an implemented reference and diagnostic baseline.
-It remains temporarily runnable while native parity is measured. New product logic must be
+The FastAPI/Jinja application is a deprecated diagnostic baseline. It starts only through the
+explicit `legacy-web` CLI command and is never an implicit fallback. New product logic must be
 kept outside web route handlers so that the native client can call the same contracts.
 
 Migration order:

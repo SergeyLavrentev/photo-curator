@@ -1298,9 +1298,16 @@ def get_job(connection: sqlite3.Connection, job_id: str) -> dict[str, object]:
 
 def latest_jobs(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
     rows = connection.execute(
-        "SELECT * FROM jobs WHERE project_id=? ORDER BY started_at", (project_id,)
+        "SELECT * FROM jobs WHERE project_id=? ORDER BY started_at, id", (project_id,)
     ).fetchall()
-    return [dict(row) for row in rows]
+    latest_by_stage: dict[str, dict[str, object]] = {}
+    for row in rows:
+        job = dict(row)
+        latest_by_stage[str(job["stage"])] = job
+    return sorted(
+        latest_by_stage.values(),
+        key=lambda job: (str(job["started_at"]), str(job["id"])),
+    )
 
 
 def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str, int]:

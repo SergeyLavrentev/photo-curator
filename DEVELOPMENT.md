@@ -8,7 +8,7 @@
 
 ```bash
 uv sync
-uv run photo-curator --demo --no-browser
+uv run photo-curator legacy-web --demo --no-browser
 ```
 
 Runtime-данные хранятся в стандартных каталогах macOS:
@@ -17,9 +17,11 @@ Runtime-данные хранятся в стандартных каталога
 - `~/Library/Caches/PhotoCurator/` — review JPEG, thumbnails и publish UUID files;
 - `~/Library/Logs/PhotoCurator/photo-curator.log` — локальный log.
 
-Оригиналы Photos открываются только на чтение через публичный Python API `osxphotos`.
-Publisher вызывает документированный `osxphotos batch-edit` списком argv, сначала с
-`--dry-run`; прямые записи в Photos DB и UI scripting запрещены.
+Нативное приложение читает поддерживаемые альбомы через публичный PhotoKit helper и
+публикует подтверждённый Best-альбом через отдельный PhotoKit helper. Переходный
+`legacy-web` использует публичный Python API `osxphotos` только как read-only adapter и
+документированный `batch-edit` после dry-run. Прямые записи в Photos DB и UI scripting
+запрещены во всех режимах.
 
 ## Разрешения macOS
 

@@ -1,5 +1,11 @@
 # Progress
 
+- 2026-07-30: product-hardening audit убрал неявный legacy web fallback (`legacy-web`
+  теперь только explicit command), исправил выдачу latest job per stage и фиксированный
+  six-stage progress, добавил first-run onboarding до запроса Photos, показ текущей
+  операции анализа/publish и скрыл corpus-labeling controls за developer mode.
+  Runtime и notarization больше не используют Keychain: release принимает только явно
+  указанный App Store Connect API key file.
 - 2026-07-20: удалён небезопасный in-process PyObjC Vision fallback: на macOS 26.5.2
   `VNDetectFaceLandmarksRequest.performRequests` мог зависнуть навсегда и остановить весь
   pipeline. Production coordinator теперь требует native Swift helper и честно даёт warning

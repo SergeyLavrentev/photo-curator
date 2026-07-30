@@ -14,9 +14,17 @@ class PhotosProvider(Protocol):
     def asset_still_in_album(self, album_id: str, asset_uuid: str) -> bool: ...
 ```
 
-## `OSXPhotosProvider`
+## Native `PhotoKitProvider`
 
-Использует только публичные Python API `osxphotos`. Все optional properties получать через capability checks и `getattr`.
+Установленное приложение использует bundled Swift helper и только публичный PhotoKit API:
+читает regular/shared albums, получает локальные review-renders, повторно проверяет
+membership перед публикацией и передаёт Python worker только JSON и пути внутри cache.
+Публикация принятого набора также выполняется через отдельный PhotoKit helper.
+
+## Legacy `OSXPhotosProvider`
+
+Используется только explicit `legacy-web`/diagnostic workflow. Работает через публичные
+Python API `osxphotos`; optional properties получать через capability checks и `getattr`.
 
 Не полагаться на:
 
@@ -50,7 +58,15 @@ Unedited:
 
 ## Publish contract
 
-Для обычного Photos-проекта publisher:
+Для нативного PhotoKit-проекта publisher:
+
+1. получает local identifiers только из repository;
+2. повторно валидирует membership и текущие решения;
+3. сохраняет immutable dry-run;
+4. после явного подтверждения создаёт новый regular album публичным PhotoKit API;
+5. сохраняет destination album identifier и audit результата.
+
+Для legacy `OSXPhotosProvider` publisher:
 
 1. получает UUIDs только из repository;
 2. повторно валидирует их;
@@ -62,8 +78,8 @@ Unedited:
 
 Если `--add-to-album` или иной необходимый capability недоступен в текущей версии, publish отключается. Запрещены direct DB writes и UI scripting как fallback.
 
-Для проекта из service-owned disk snapshot финальный `Best` использует отдельный
-нативный PhotoKit helper:
+Для проекта из service-owned disk snapshot финальный `Best` использует тот же принцип
+через отдельный нативный PhotoKit helper:
 
 1. dry-run сохраняет неизменяемый список принятых UUID и не пишет в Photos;
 2. apply доступен только после явного подтверждения;

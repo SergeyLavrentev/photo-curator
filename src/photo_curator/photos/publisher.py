@@ -38,12 +38,13 @@ class PhotosPublisher:
         executable: str | None = None,
         enabled: bool = True,
         local_importer: NativePhotosImporter | None = None,
+        legacy_cli_enabled: bool = True,
     ) -> None:
         self.database_path = database_path
         self.paths = paths
         self.provider = provider
         self.runner = runner
-        self.executable = executable or find_executable("osxphotos")
+        self.executable = executable or find_executable("osxphotos") if legacy_cli_enabled else None
         self.enabled = enabled
         self.local_importer = local_importer or NativePhotosImporter(paths, enabled=enabled)
         self._capability: bool | None = None

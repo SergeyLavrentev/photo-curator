@@ -50,6 +50,7 @@ class NativeWorker:
             database_path=paths.database,
             paths=paths,
             provider=provider,
+            legacy_cli_enabled=False,
         )
         with database_connection(paths.database) as connection:
             migrate(connection)

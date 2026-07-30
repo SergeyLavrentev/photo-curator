@@ -21,6 +21,7 @@ final class AppModel: ObservableObject {
     @Published var photos: [PhotoItem] = []
     @Published var errorMessage: String?
     @Published var isBusy = false
+    @Published var operationMessage: String?
     @Published var publishPlan: PublishPlan?
     @Published var publishMessage: String?
     @Published var tasteStatus = "Не настроен"
@@ -40,22 +41,45 @@ final class AppModel: ObservableObject {
     @Published var isTasteBusy = false
     @Published var selectedPhotoID: String?
     @Published var photoAccessNeedsAction = false
+    @Published var hasCompletedOnboarding: Bool
 
     let worker = NativeWorkerClient()
+    let developerToolsEnabled =
+        ProcessInfo.processInfo.environment["PHOTO_CURATOR_DEVELOPER_TOOLS"] == "1"
+    private let stageOrder = ["inventory", "previews", "metrics", "duplicates", "vision", "decisions"]
     private var pollTask: Task<Void, Never>?
     private var permissionHelpTask: Task<Void, Never>?
     private var decisionHistory: [DecisionUndo] = []
+    private var hasStarted = false
 
     init() {
         selectedAlbumID = UserDefaults.standard.string(forKey: "selectedAlbumID") ?? ""
         let savedDensity = UserDefaults.standard.string(forKey: "selectionDensity") ?? "balanced"
         density = ["compact", "balanced", "broad"].contains(savedDensity)
             ? savedDensity : "balanced"
+        hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "didCompleteOnboardingV1")
     }
 
     var progress: Double {
-        guard !jobs.isEmpty else { return 0 }
-        return jobs.map(\.progress).reduce(0, +) / Double(jobs.count)
+        if project?.state == "ready" { return 1 }
+        let latest = Dictionary(jobs.map { ($0.stage, $0) }, uniquingKeysWith: { _, new in new })
+        let completed = stageOrder.reduce(0.0) { result, stage in
+            result + (latest[stage]?.progress ?? 0)
+        }
+        return completed / Double(stageOrder.count)
+    }
+
+    var activeJob: JobItem? {
+        jobs.last(where: { $0.status == "running" })
+    }
+
+    var progressDetail: String {
+        guard let activeJob else {
+            return project?.state == "ready" ? "Все 6 этапов завершены" : ""
+        }
+        let stage = (stageOrder.firstIndex(of: activeJob.stage) ?? 0) + 1
+        guard activeJob.total > 0 else { return "Этап \(stage) из \(stageOrder.count)" }
+        return "Этап \(stage) из \(stageOrder.count) · \(activeJob.processed) из \(activeJob.total)"
     }
 
     var tasteStatusTitle: String {
@@ -70,7 +94,7 @@ final class AppModel: ObservableObject {
 
     var progressMessage: String {
         if let active = jobs.last(where: { $0.status == "running" }) {
-            return active.message.isEmpty ? stageName(active.stage) : active.message
+            return active.message.isEmpty ? stageTitle(active.stage) : active.message
         }
         if project?.state == "interrupted" { return "Анализ остановлен — его можно продолжить" }
         if project?.state == "ready" { return "Анализ завершён — подборка готова к проверке" }
@@ -78,12 +102,23 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        guard hasCompletedOnboarding, !hasStarted else {
+            if !hasCompletedOnboarding { workerStatus = "Готов к первому запуску" }
+            return
+        }
+        hasStarted = true
         Task {
             if ProcessInfo.processInfo.environment["PHOTO_CURATOR_NATIVE_DEMO"] != "1" {
                 guard await requestPhotoLibraryAccess() else { return }
             }
             await bootstrap()
         }
+    }
+
+    func completeOnboarding() {
+        hasCompletedOnboarding = true
+        UserDefaults.standard.set(true, forKey: "didCompleteOnboardingV1")
+        start()
     }
 
     func shutdown() {
@@ -250,8 +285,9 @@ final class AppModel: ObservableObject {
 
     func restartWorker() {
         worker.stop()
+        hasStarted = false
         workerStatus = "Перезапуск…"
-        Task { await bootstrap() }
+        start()
     }
 
     func createAndAnalyze() {
@@ -260,6 +296,7 @@ final class AppModel: ObservableObject {
             return
         }
         isBusy = true
+        operationMessage = "Создаём локальный проект…"
         errorMessage = nil
         photos = []
         selectedPhotoID = nil
@@ -284,11 +321,14 @@ final class AppModel: ObservableObject {
                     throw NativeWorkerClientError.invalidResponse
                 }
                 self.project = project
+                operationMessage = "Запускаем анализ…"
                 _ = try await call("start_analysis", ["project_id": project.id])
                 isBusy = false
+                operationMessage = nil
                 startPolling(projectID: project.id)
             } catch {
                 isBusy = false
+                operationMessage = nil
                 errorMessage = error.localizedDescription
             }
         }
@@ -297,15 +337,18 @@ final class AppModel: ObservableObject {
     func resumeAnalysis() {
         guard let project else { return }
         isBusy = true
+        operationMessage = "Возобновляем анализ…"
         errorMessage = nil
         Task {
             do {
                 _ = try await call("resume_analysis", ["project_id": project.id])
                 isBusy = false
+                operationMessage = nil
                 try await Task.sleep(nanoseconds: 200_000_000)
                 startPolling(projectID: project.id)
             } catch {
                 isBusy = false
+                operationMessage = nil
                 errorMessage = error.localizedDescription
             }
         }
@@ -313,10 +356,14 @@ final class AppModel: ObservableObject {
 
     func cancelAnalysis() {
         guard let project else { return }
+        operationMessage = "Останавливаем после текущей безопасной операции…"
         Task {
             do {
                 _ = try await call("cancel_analysis", ["project_id": project.id])
-            } catch { errorMessage = error.localizedDescription }
+            } catch {
+                operationMessage = nil
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -476,8 +523,12 @@ final class AppModel: ObservableObject {
     func preparePublish() {
         guard let project else { return }
         isBusy = true
+        operationMessage = "Проверяем выбранные фото и готовим план импорта…"
         Task {
-            defer { isBusy = false }
+            defer {
+                isBusy = false
+                operationMessage = nil
+            }
             do {
                 let result = try await call("publish_dry_run", [
                     "project_id": project.id,
@@ -494,8 +545,12 @@ final class AppModel: ObservableObject {
     func applyPublish() {
         guard let publishPlan else { return }
         isBusy = true
+        operationMessage = "Импортируем \(publishPlan.itemCount) фото в Photos…"
         Task {
-            defer { isBusy = false }
+            defer {
+                isBusy = false
+                operationMessage = nil
+            }
             do {
                 let result = try await call("publish_apply", [
                     "publish_id": publishPlan.id,
@@ -590,18 +645,24 @@ final class AppModel: ObservableObject {
                     project = updated
                     jobs = (value["jobs"] as? [[String: Any]] ?? []).compactMap(JobItem.init)
                     if updated.state == "ready" {
+                        operationMessage = nil
                         await loadPhotos(projectID: projectID)
                         return
                     }
                     if updated.state == "error" {
+                        operationMessage = nil
                         errorMessage = "Анализ завершился с ошибкой. Детали сохранены в локальном журнале."
                         return
                     }
-                    if updated.state == "interrupted" { return }
+                    if updated.state == "interrupted" {
+                        operationMessage = nil
+                        return
+                    }
                     try await Task.sleep(nanoseconds: 1_000_000_000)
                 } catch is CancellationError {
                     return
                 } catch {
+                    operationMessage = nil
                     errorMessage = error.localizedDescription
                     return
                 }
@@ -703,7 +764,7 @@ final class AppModel: ObservableObject {
         throw lastError
     }
 
-    private func stageName(_ stage: String) -> String {
+    func stageTitle(_ stage: String) -> String {
         [
             "inventory": "Читаем альбом",
             "previews": "Готовим изображения",
@@ -812,6 +873,39 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        Group {
+            if model.hasCompletedOnboarding {
+                workflow
+            } else {
+                OnboardingView { model.completeOnboarding() }
+            }
+        }
+        .alert("Photo Curator", isPresented: Binding(
+            get: { model.errorMessage != nil },
+            set: { if !$0 { model.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+        .confirmationDialog(
+            "Сохранить подборку в Photos?",
+            isPresented: Binding(
+                get: { model.publishPlan != nil },
+                set: { if !$0 { model.publishPlan = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Создать альбом и импортировать \(model.publishPlan?.itemCount ?? 0) фото") {
+                model.applyPublish()
+            }
+            Button("Отмена", role: .cancel) { model.publishPlan = nil }
+        } message: {
+            Text("Исходный альбом не изменится. Будет создан только новый Best‑альбом.")
+        }
+    }
+
+    private var workflow: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 18) {
                 Label("Photo Curator", systemImage: "camera.aperture")
@@ -844,29 +938,6 @@ struct RootView: View {
                 .frame(maxWidth: 1280, alignment: .leading)
             }
             .background(Color(nsColor: .windowBackgroundColor))
-            .alert("Photo Curator", isPresented: Binding(
-                get: { model.errorMessage != nil },
-                set: { if !$0 { model.errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) { model.errorMessage = nil }
-            } message: {
-                Text(model.errorMessage ?? "")
-            }
-            .confirmationDialog(
-                "Сохранить подборку в Photos?",
-                isPresented: Binding(
-                    get: { model.publishPlan != nil },
-                    set: { if !$0 { model.publishPlan = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("Создать альбом и импортировать \(model.publishPlan?.itemCount ?? 0) фото") {
-                    model.applyPublish()
-                }
-                Button("Отмена", role: .cancel) { model.publishPlan = nil }
-            } message: {
-                Text("Исходный альбом не изменится. Будет создан только новый Best‑альбом.")
-            }
         }
     }
 
@@ -959,6 +1030,9 @@ struct RootView: View {
 
     private var analysisSection: some View {
         StepCard(number: 3, title: "Проанализируйте", symbol: "sparkles") {
+            if let operation = model.operationMessage {
+                ProgressView(operation)
+            }
             if model.project?.state == "running" || !model.jobs.isEmpty {
                 ProgressView(value: model.progress) {
                     Text(model.progressMessage)
@@ -966,13 +1040,19 @@ struct RootView: View {
                     Text("\(Int(model.progress * 100))%")
                 }
                 .progressViewStyle(.linear)
+                if !model.progressDetail.isEmpty {
+                    Text(model.progressDetail)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 DisclosureGroup("Детали этапов") {
                     ForEach(model.jobs) { job in
                         HStack {
-                            Image(systemName: job.status == "running" ? "arrow.triangle.2.circlepath" : "checkmark.circle")
-                            Text(job.stage)
+                            Image(systemName: jobStatusSymbol(job.status))
+                                .foregroundStyle(jobStatusColor(job.status))
+                            Text(model.stageTitle(job.stage))
                             Spacer()
-                            Text("\(job.processed) / \(job.total)")
+                            Text(job.total > 0 ? "\(job.processed) / \(job.total)" : job.status)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -1015,7 +1095,7 @@ struct RootView: View {
         StepCard(number: 4, title: "Проверьте и сохраните", symbol: "checkmark.rectangle.stack") {
             Text("Фото отсортированы по Swipe Score. Исправьте только спорные решения; причины спрятаны в ⓘ.")
                 .foregroundStyle(.secondary)
-            if !model.qualitySeriesSelection.isEmpty {
+            if model.developerToolsEnabled, !model.qualitySeriesSelection.isEmpty {
                 HStack {
                     Text("В ручной серии: \(model.qualitySeriesSelection.count)")
                         .font(.subheadline.weight(.semibold))
@@ -1038,6 +1118,7 @@ struct RootView: View {
                     PhotoCard(
                         photo: photo,
                         selected: model.selectedPhotoID == photo.id,
+                        developerToolsEnabled: model.developerToolsEnabled,
                         select: { model.selectedPhotoID = photo.id },
                         preview: {
                             model.selectedPhotoID = photo.id
@@ -1057,7 +1138,10 @@ struct RootView: View {
             Button {
                 model.preparePublish()
             } label: {
-                Label("Подготовить Best‑альбом", systemImage: "photo.badge.plus")
+                Label(
+                    model.isBusy ? "Подождите…" : "Подготовить Best‑альбом",
+                    systemImage: "photo.badge.plus"
+                )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
@@ -1065,8 +1149,80 @@ struct RootView: View {
             .tint(.green)
             .controlSize(.large)
             .disabled(model.isBusy)
+            if model.isBusy, let operation = model.operationMessage {
+                ProgressView(operation)
+            }
             if let message = model.publishMessage {
                 Label(message, systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+            }
+        }
+    }
+}
+
+struct OnboardingView: View {
+    let continueAction: () -> Void
+
+    var body: some View {
+        VStack(spacing: 28) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 54, weight: .medium))
+                .foregroundStyle(.tint)
+            VStack(spacing: 8) {
+                Text("Разберите большой альбом спокойно")
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                Text("Photo Curator работает локально и сначала только предлагает подборку.")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 20) {
+                OnboardingPoint(
+                    symbol: "photo.on.rectangle.angled",
+                    title: "1. Выберите альбом",
+                    detail: "Обычный или общий альбом Photos. Видео будут пропущены."
+                )
+                OnboardingPoint(
+                    symbol: "sparkles",
+                    title: "2. Дождитесь анализа",
+                    detail: "Вы увидите текущий этап, обработанное количество и общий прогресс."
+                )
+                OnboardingPoint(
+                    symbol: "checkmark.rectangle.stack",
+                    title: "3. Проверьте и сохраните",
+                    detail: "Исходники не меняются. Новый альбом создаётся только после подтверждения."
+                )
+            }
+            .frame(maxWidth: 620, alignment: .leading)
+            Button(action: continueAction) {
+                Label("Продолжить и выбрать альбом", systemImage: "arrow.right")
+                    .frame(minWidth: 300)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            Text("На следующем шаге macOS попросит доступ к Фото. Данные не отправляются в интернет.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(48)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+struct OnboardingPoint: View {
+    let symbol: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: symbol)
+                .font(.title2)
+                .frame(width: 32)
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline)
+                Text(detail).foregroundStyle(.secondary)
             }
         }
     }
@@ -1114,6 +1270,7 @@ struct StepLabel: View {
 struct PhotoCard: View {
     let photo: PhotoItem
     let selected: Bool
+    let developerToolsEnabled: Bool
     let select: () -> Void
     let preview: () -> Void
     let seriesSelected: Bool
@@ -1151,29 +1308,31 @@ struct PhotoCard: View {
             HStack {
                 Text(photo.filename).lineLimit(1).font(.subheadline.weight(.medium))
                 Spacer()
-                Button(action: toggleTopK) {
-                    HStack(spacing: 3) {
-                        Image(systemName: photo.qualityTopKRank == nil ? "star" : "star.fill")
-                        if let rank = photo.qualityTopKRank {
-                            Text("#\(rank)").font(.caption2.monospacedDigit())
+                if developerToolsEnabled {
+                    Button(action: toggleTopK) {
+                        HStack(spacing: 3) {
+                            Image(systemName: photo.qualityTopKRank == nil ? "star" : "star.fill")
+                            if let rank = photo.qualityTopKRank {
+                                Text("#\(rank)").font(.caption2.monospacedDigit())
+                            }
                         }
                     }
+                    .buttonStyle(.plain)
+                    .help(photo.qualityTopKRank == nil ? "Добавить в мой Top‑K" : "Убрать из моего Top‑K")
+                    .accessibilityLabel(
+                        photo.qualityTopKRank.map { "Позиция \($0) в моём Top-K" }
+                            ?? "Добавить в мой Top-K"
+                    )
+                    Button(action: toggleSeriesSelection) {
+                        Image(systemName: seriesSelected ? "square.stack.3d.up.fill" : "square.stack.3d.up")
+                            .foregroundStyle(seriesSelected ? Color.accentColor : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(seriesSelected ? "Убрать из ручной серии" : "Добавить в ручную серию")
+                    .accessibilityLabel(
+                        seriesSelected ? "Убрать фото из ручной серии" : "Добавить фото в ручную серию"
+                    )
                 }
-                .buttonStyle(.plain)
-                .help(photo.qualityTopKRank == nil ? "Добавить в мой Top‑K" : "Убрать из моего Top‑K")
-                .accessibilityLabel(
-                    photo.qualityTopKRank.map { "Позиция \($0) в моём Top-K" }
-                        ?? "Добавить в мой Top-K"
-                )
-                Button(action: toggleSeriesSelection) {
-                    Image(systemName: seriesSelected ? "square.stack.3d.up.fill" : "square.stack.3d.up")
-                        .foregroundStyle(seriesSelected ? Color.accentColor : Color.primary)
-                }
-                .buttonStyle(.plain)
-                .help(seriesSelected ? "Убрать из ручной серии" : "Добавить в ручную серию")
-                .accessibilityLabel(
-                    seriesSelected ? "Убрать фото из ручной серии" : "Добавить фото в ручную серию"
-                )
                 Button { showDetails.toggle() } label: { Image(systemName: "info.circle") }
                     .buttonStyle(.plain)
                     .popover(isPresented: $showDetails) {
@@ -1186,7 +1345,7 @@ struct PhotoCard: View {
                         }.padding().frame(width: 260)
                     }
             }
-            if photo.duplicateGroup != nil {
+            if developerToolsEnabled, photo.duplicateGroup != nil {
                 Button(action: labelSeriesLeader) {
                     Label(
                         photo.qualityExpectedLeader ? "Лучший кадр серии подтверждён" : "Это лучший кадр серии",
@@ -1262,6 +1421,28 @@ private func dispositionTitle(_ disposition: String?) -> String {
         ?? "Без решения"
 }
 
+private func jobStatusSymbol(_ status: String) -> String {
+    [
+        "pending": "circle",
+        "running": "arrow.triangle.2.circlepath",
+        "done": "checkmark.circle.fill",
+        "warning": "exclamationmark.triangle.fill",
+        "error": "xmark.octagon.fill",
+        "interrupted": "pause.circle.fill",
+        "cancelled": "pause.circle.fill",
+    ][status] ?? "questionmark.circle"
+}
+
+private func jobStatusColor(_ status: String) -> Color {
+    switch status {
+    case "done": return .green
+    case "warning": return .orange
+    case "error": return .red
+    case "running": return .accentColor
+    default: return .secondary
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var confirmsTasteReset = false
@@ -1294,29 +1475,31 @@ struct SettingsView: View {
                     .disabled(model.tasteExamples == 0)
                 }
             }
-            Section("Проверка качества") {
-                Text("Экспортирует только ваши явные решения и A/B-сравнения вместе с замороженным Swipe Score.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                LabeledContent("Ручные решения", value: "\(model.qualityManualLabels) / 50–100")
-                LabeledContent("Проверочные A/B", value: "\(model.qualityHeldOutPairs) / 10+")
-                LabeledContent("Top‑K", value: "\(model.qualityTopKCount) / 5+")
-                LabeledContent("Подтверждённые серии", value: "\(model.qualitySeriesCount) / 1+")
-                Label(
-                    model.qualityReleaseReady ? "Структура corpus готова" : "Разметка ещё не завершена",
-                    systemImage: model.qualityReleaseReady ? "checkmark.seal.fill" : "hourglass"
-                )
-                .foregroundStyle(model.qualityReleaseReady ? .green : .secondary)
-                Button("Экспортировать проверочный набор…") {
-                    model.exportQualityEvidence()
-                }
-                .disabled(model.project?.state != "ready")
-                Button("Оценить заполненный набор…") {
-                    model.evaluateQualityEvidence()
-                }
-                .disabled(model.project?.state != "ready")
-                if let message = model.qualityMessage {
-                    Text(message).font(.caption).foregroundStyle(.secondary)
+            if model.developerToolsEnabled {
+                Section("Проверка качества · Developer") {
+                    Text("Экспортирует явную разметку и замороженный Swipe Score.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    LabeledContent("Ручные решения", value: "\(model.qualityManualLabels) / 50–100")
+                    LabeledContent("Проверочные A/B", value: "\(model.qualityHeldOutPairs) / 10+")
+                    LabeledContent("Top‑K", value: "\(model.qualityTopKCount) / 5+")
+                    LabeledContent("Подтверждённые серии", value: "\(model.qualitySeriesCount) / 1+")
+                    Label(
+                        model.qualityReleaseReady ? "Структура corpus готова" : "Разметка ещё не завершена",
+                        systemImage: model.qualityReleaseReady ? "checkmark.seal.fill" : "hourglass"
+                    )
+                    .foregroundStyle(model.qualityReleaseReady ? .green : .secondary)
+                    Button("Экспортировать проверочный набор…") {
+                        model.exportQualityEvidence()
+                    }
+                    .disabled(model.project?.state != "ready")
+                    Button("Оценить заполненный набор…") {
+                        model.evaluateQualityEvidence()
+                    }
+                    .disabled(model.project?.state != "ready")
+                    if let message = model.qualityMessage {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             Text("Все вычисления и предпочтения остаются на этом Mac.")

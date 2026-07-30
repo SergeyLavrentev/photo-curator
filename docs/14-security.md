@@ -1,6 +1,19 @@
 # Security
 
-## Loopback only
+## Runtime secrets and Keychain
+
+Нативное приложение не использует macOS Keychain. Пользовательские настройки хранятся
+в `UserDefaults`, project/taste state — в локальной SQLite, review-renders — в cache.
+Runtime не вызывает `security`, `SecItem*` или `SecKeychain*` и не создаёт сертификаты.
+
+Release tooling также не сохраняет credentials в Keychain: notarization получает явно
+указанный App Store Connect API `.p8` file, key ID и issuer ID. Сам `.p8` не входит в
+репозиторий и должен иметь доступ только для владельца.
+
+## Legacy web: loopback only
+
+Этот раздел относится только к explicit `legacy-web`; нативное приложение не поднимает
+HTTP server и не слушает localhost.
 
 Server bind:
 

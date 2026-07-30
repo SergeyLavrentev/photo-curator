@@ -176,6 +176,20 @@ def test_publish_is_disabled_when_required_cli_flags_are_missing(tmp_path: Path)
     assert "osxphotos CLI недоступен" in publisher.validate(project_id).blockers
 
 
+def test_native_publisher_does_not_probe_legacy_osxphotos_cli(tmp_path: Path) -> None:
+    paths = default_application_paths(tmp_path)
+    paths.ensure()
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=FakePhotosProvider(paths.cache_dir / "sources"),
+        legacy_cli_enabled=False,
+    )
+
+    assert publisher.executable is None
+    assert publisher.capability_available is False
+
+
 def test_apply_requires_new_dry_run_after_source_drift(tmp_path: Path) -> None:
     paths, provider, coordinator, project_id = build_pipeline(tmp_path)
     coordinator.run(project_id)

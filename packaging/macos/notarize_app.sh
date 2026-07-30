@@ -3,7 +3,9 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP="${1:-$PROJECT_ROOT/build/macos/PhotoCurator.app}"
-KEYCHAIN_PROFILE="${2:-}"
+API_KEY="${2:-}"
+API_KEY_ID="${3:-}"
+API_ISSUER_ID="${4:-}"
 DIST_DIR="$PROJECT_ROOT/build/dist"
 
 fail() {
@@ -12,7 +14,9 @@ fail() {
 }
 
 [[ -d "$APP" ]] || fail "app not found: $APP"
-[[ -n "$KEYCHAIN_PROFILE" ]] || fail "set NOTARY_PROFILE to a notarytool Keychain profile"
+[[ -f "$API_KEY" ]] || fail "set NOTARY_KEY to an App Store Connect API .p8 file"
+[[ -n "$API_KEY_ID" ]] || fail "set NOTARY_KEY_ID to the App Store Connect key ID"
+[[ -n "$API_ISSUER_ID" ]] || fail "set NOTARY_ISSUER_ID to the App Store Connect issuer ID"
 command -v xcrun >/dev/null 2>&1 || fail "xcrun is unavailable"
 
 signature="$(/usr/bin/codesign -d --verbose=4 "$APP" 2>&1)"
@@ -29,7 +33,11 @@ release="$DIST_DIR/PhotoCurator-${version}.zip"
 /bin/rm -f "$submission" "$release"
 /usr/bin/ditto -c -k --keepParent "$APP" "$submission"
 
-xcrun notarytool submit "$submission" --keychain-profile "$KEYCHAIN_PROFILE" --wait
+xcrun notarytool submit "$submission" \
+  --key "$API_KEY" \
+  --key-id "$API_KEY_ID" \
+  --issuer "$API_ISSUER_ID" \
+  --wait
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 /usr/sbin/spctl --assess --type execute --verbose=2 "$APP"

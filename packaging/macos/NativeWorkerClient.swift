@@ -181,10 +181,17 @@ final class NativeWorkerClient: @unchecked Sendable {
     }
 
     private func logHandle() throws -> FileHandle {
+        let maxLogBytes: UInt64 = 5 * 1024 * 1024
         let directory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/PhotoCurator", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent("native-worker.log")
+        let previous = directory.appendingPathComponent("native-worker.previous.log")
+        let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        if UInt64(size ?? 0) >= maxLogBytes {
+            try? FileManager.default.removeItem(at: previous)
+            try FileManager.default.moveItem(at: file, to: previous)
+        }
         if !FileManager.default.fileExists(atPath: file.path) {
             FileManager.default.createFile(atPath: file.path, contents: nil)
         }
