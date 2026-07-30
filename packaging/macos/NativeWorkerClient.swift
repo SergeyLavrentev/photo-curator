@@ -33,7 +33,11 @@ final class NativeWorkerClient: @unchecked Sendable {
         try startLocked()
     }
 
-    func request(method: String, params: [String: Any] = [:]) throws -> Any {
+    func request(
+        method: String,
+        params: [String: Any] = [:],
+        progress: (([String: Any]) -> Void)? = nil
+    ) throws -> Any {
         lock.lock()
         defer { lock.unlock() }
         try startLocked()
@@ -51,17 +55,25 @@ final class NativeWorkerClient: @unchecked Sendable {
         data.append(0x0A)
         try writeAll(data, to: input)
 
-        let response = try readResponseLocked()
-        guard response["schema_version"] as? Int == 1,
-              response["id"] as? String == requestID
-        else { throw NativeWorkerClientError.invalidResponse }
-        if let error = response["error"] as? [String: Any] {
-            throw NativeWorkerClientError.worker(error["message"] as? String ?? "Ошибка движка")
+        while true {
+            let response = try readResponseLocked()
+            guard response["schema_version"] as? Int == 1,
+                  response["id"] as? String == requestID
+            else { throw NativeWorkerClientError.invalidResponse }
+            if let event = response["event"] as? [String: Any] {
+                progress?(event)
+                continue
+            }
+            if let error = response["error"] as? [String: Any] {
+                throw NativeWorkerClientError.worker(
+                    error["message"] as? String ?? "Ошибка движка"
+                )
+            }
+            guard let result = response["result"] else {
+                throw NativeWorkerClientError.invalidResponse
+            }
+            return result
         }
-        guard let result = response["result"] else {
-            throw NativeWorkerClientError.invalidResponse
-        }
-        return result
     }
 
     func stop() {

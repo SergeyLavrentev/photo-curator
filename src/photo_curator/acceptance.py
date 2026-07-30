@@ -52,16 +52,17 @@ def build_score_snapshot(
     *,
     engine_name: str,
     engine_version: str,
+    score_field: str = "selection_score",
 ) -> dict[str, object]:
     scores: dict[str, float] = {}
     for asset in assets:
         if asset.get("no_longer_exists"):
             continue
         asset_uuid = str(asset["asset_uuid"])
-        score = asset.get("selection_score")
+        score = asset.get(score_field)
         if not isinstance(score, (int, float)) or isinstance(score, bool):
             raise AcceptanceManifestError(
-                f"Проект не содержит завершённый selection_score для {asset_uuid}"
+                f"Проект не содержит завершённый {score_field} для {asset_uuid}"
             )
         scores[asset_uuid] = float(score)
     return {
@@ -69,6 +70,66 @@ def build_score_snapshot(
         "project_id": project_id,
         "engine": {"name": engine_name, "version": engine_version},
         "scores": scores,
+    }
+
+
+def compare_acceptance_scores(
+    manifest: dict[str, object],
+    assets: list[dict[str, object]],
+    predicted_groups: list[dict[str, object]],
+    *,
+    project_id: str,
+    candidate_snapshot: dict[str, object],
+    baseline_snapshot: dict[str, object],
+    min_pairwise_uplift: float = 0.05,
+    min_top_k_uplift: float = 0.10,
+) -> dict[str, object]:
+    """Require absolute quality gates and measurable uplift on one held-out corpus."""
+
+    candidate = evaluate_acceptance(
+        manifest,
+        assets,
+        predicted_groups,
+        project_id=project_id,
+        score_snapshot=candidate_snapshot,
+    )
+    baseline = evaluate_acceptance(
+        manifest,
+        assets,
+        predicted_groups,
+        project_id=project_id,
+        score_snapshot=baseline_snapshot,
+    )
+    candidate_metrics = candidate["metrics"]
+    baseline_metrics = baseline["metrics"]
+    assert isinstance(candidate_metrics, dict)
+    assert isinstance(baseline_metrics, dict)
+    pairwise_uplift = float(candidate_metrics["pairwise_accuracy"]) - float(
+        baseline_metrics["pairwise_accuracy"]
+    )
+    top_k_uplift = float(candidate_metrics["top_k_overlap"]) - float(
+        baseline_metrics["top_k_overlap"]
+    )
+    checks = {
+        "candidate_absolute_gates": bool(candidate["passed"]),
+        "pairwise_uplift": pairwise_uplift >= min_pairwise_uplift,
+        "top_k_uplift": top_k_uplift >= min_top_k_uplift,
+    }
+    return {
+        "schema_version": 1,
+        "project_id": project_id,
+        "passed": all(checks.values()),
+        "checks": checks,
+        "thresholds": {
+            "min_pairwise_uplift": min_pairwise_uplift,
+            "min_top_k_uplift": min_top_k_uplift,
+        },
+        "uplift": {
+            "pairwise_accuracy": pairwise_uplift,
+            "top_k_overlap": top_k_uplift,
+        },
+        "candidate": candidate,
+        "baseline": baseline,
     }
 
 

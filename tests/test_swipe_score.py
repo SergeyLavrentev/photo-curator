@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from photo_curator.analysis.decision_engine import decide_asset
+from photo_curator.analysis.decision_engine import album_selection_threshold, decide_asset
 from photo_curator.analysis.swipe_score import apple_score_percentiles, calculate_swipe_score
 
 
@@ -120,6 +120,45 @@ def test_decision_engine_uses_swipe_score_contract_when_provided() -> None:
 
     assert decision.score == result.score
     assert decision.disposition == "keep"
-    assert decision.reasons[0]["code"] == "selection_score"
-    assert decision.reasons[1]["code"] == "swipe_score"
+    assert decision.reasons[0]["code"].startswith("strong_")
+    assert any(reason["code"] == "selection_score" for reason in decision.reasons)
+    assert any(reason["code"] == "swipe_score" for reason in decision.reasons)
     assert decision.components["generic_aesthetics"] == 95
+
+
+def test_album_relative_threshold_makes_balanced_selection_meaningfully_strict() -> None:
+    scores = list(range(100, 57, -1))
+
+    compact = album_selection_threshold(scores, "compact")
+    balanced = album_selection_threshold(scores, "balanced")
+    broad = album_selection_threshold(scores, "broad")
+
+    assert compact > balanced > broad
+    assert sum(score >= balanced for score in scores) <= 20
+
+
+def test_rejected_photo_exposes_only_negative_user_facing_reasons() -> None:
+    photo = _asset("soft", sharpness_percentile=0.01)
+    score = calculate_swipe_score(photo, None, _signals(0.8))
+
+    decision = decide_asset(
+        photo,
+        None,
+        "balanced",
+        score,
+        selected_threshold=90,
+    )
+    visible_codes = {
+        reason["code"]
+        for reason in decision.reasons
+        if reason["code"] not in {"selection_score", "swipe_score"}
+    }
+
+    assert decision.disposition == "reject"
+    assert "possible_blur" in visible_codes
+    assert not visible_codes & {
+        "strong_aesthetics",
+        "strong_composition",
+        "interesting_subject",
+        "strong_moment",
+    }

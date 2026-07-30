@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
@@ -43,8 +44,41 @@ class LocalAlbumsProvider:
             return self._read_album(album_id)[1]
         return self.base.list_assets(album_id)
 
+    def list_assets_with_progress(
+        self, album_id: str, progress: Callable[[int, int], None]
+    ) -> list[PhotoAsset]:
+        if album_id.startswith(self.PREFIX):
+            assets = self._read_album(album_id)[1]
+            progress(len(assets), len(assets))
+            return assets
+        streaming = getattr(self.base, "list_assets_with_progress", None)
+        if streaming:
+            return streaming(album_id, progress)
+        assets = self.base.list_assets(album_id)
+        progress(len(assets), len(assets))
+        return assets
+
     def list_shared_assets(self, album_id: str) -> list[PhotoAsset]:
         return self.base.list_shared_assets(album_id)
+
+    def sample_assets(
+        self,
+        album_id: str,
+        *,
+        limit: int,
+        excluded_uuids: set[str],
+    ) -> list[PhotoAsset]:
+        if not album_id.startswith(self.PREFIX):
+            sampler = getattr(self.base, "sample_assets", None)
+            if sampler:
+                return sampler(
+                    album_id,
+                    limit=limit,
+                    excluded_uuids=excluded_uuids,
+                )
+        assets = [asset for asset in self.list_assets(album_id) if asset.uuid not in excluded_uuids]
+        assets.sort(key=lambda asset: (asset.taken_at or "", asset.uuid), reverse=True)
+        return assets[:limit]
 
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
         wanted = set(asset_uuids)

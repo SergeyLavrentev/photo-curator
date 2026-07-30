@@ -5,6 +5,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 
+from photo_curator.analysis.decision_engine import binary_disposition
 from photo_curator.photos.provider import PhotoAlbum, PhotoAsset, PhotoLibrary
 from photo_curator.utils.identifiers import new_id
 from photo_curator.utils.timestamps import utc_now
@@ -248,6 +249,20 @@ def set_project_state(connection: sqlite3.Connection, project_id: str, state: st
     connection.execute(
         "UPDATE projects SET state = ?, updated_at = ? WHERE id = ?",
         (state, utc_now(), project_id),
+    )
+
+
+def update_project_settings(
+    connection: sqlite3.Connection,
+    project_id: str,
+    updates: dict[str, object],
+) -> None:
+    project = get_project(connection, project_id)
+    settings = json.loads(str(project.get("settings_json") or "{}"))
+    settings.update(updates)
+    connection.execute(
+        "UPDATE projects SET settings_json=?, updated_at=? WHERE id=?",
+        (json.dumps(settings, sort_keys=True), utc_now(), project_id),
     )
 
 
@@ -775,6 +790,21 @@ def list_preference_examples(
     return [dict(row) for row in rows]
 
 
+def delete_incompatible_preference_examples(
+    connection: sqlite3.Connection,
+    feature_schema: str,
+    profile_id: str = "default",
+) -> int:
+    cursor = connection.execute(
+        """
+        DELETE FROM preference_examples
+        WHERE profile_id=? AND feature_schema<>?
+        """,
+        (profile_id, feature_schema),
+    )
+    return int(cursor.rowcount)
+
+
 def save_taste_model(
     connection: sqlite3.Connection,
     profile_id: str,
@@ -810,6 +840,202 @@ def save_taste_model(
 
 def reset_taste_profile(connection: sqlite3.Connection, profile_id: str = "default") -> None:
     connection.execute("DELETE FROM taste_profiles WHERE id=?", (profile_id,))
+
+
+def list_taste_rounds(
+    connection: sqlite3.Connection, profile_id: str = "default"
+) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT * FROM taste_rounds
+        WHERE profile_id=? ORDER BY round_index, created_at
+        """,
+        (profile_id,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        value = dict(row)
+        selected_json = value.pop("selected_json")
+        value["candidate_uuids"] = json.loads(str(value.pop("candidate_json")))
+        value["selected_uuids"] = json.loads(str(selected_json)) if selected_json else []
+        result.append(value)
+    return result
+
+
+def create_taste_round(
+    connection: sqlite3.Connection,
+    *,
+    album_id: str,
+    album_name: str,
+    round_index: int,
+    candidate_uuids: list[str],
+    profile_id: str = "default",
+) -> dict[str, object]:
+    if len(candidate_uuids) != 10 or len(set(candidate_uuids)) != 10:
+        raise ValueError("Taste round требует 10 уникальных фотографий")
+    ensure_taste_profile(connection, profile_id)
+    round_id = new_id()
+    now = utc_now()
+    connection.execute(
+        """
+        INSERT INTO taste_rounds (
+            id, profile_id, album_id, album_name, round_index, status,
+            candidate_json, selected_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?)
+        """,
+        (
+            round_id,
+            profile_id,
+            album_id,
+            album_name,
+            round_index,
+            json.dumps(candidate_uuids),
+            now,
+            now,
+        ),
+    )
+    return next(
+        item for item in list_taste_rounds(connection, profile_id) if item["id"] == round_id
+    )
+
+
+def discard_pending_taste_round(
+    connection: sqlite3.Connection, profile_id: str = "default"
+) -> list[str]:
+    pending = connection.execute(
+        """
+        SELECT candidate_json FROM taste_rounds
+        WHERE profile_id=? AND status='pending'
+        """,
+        (profile_id,),
+    ).fetchall()
+    candidate_uuids = [
+        str(asset_uuid) for row in pending for asset_uuid in json.loads(str(row["candidate_json"]))
+    ]
+    paths: list[str] = []
+    if candidate_uuids:
+        assets = taste_assets(connection, candidate_uuids, profile_id)
+        paths = [str(asset["review_path"]) for asset in assets.values()]
+        placeholders = ",".join("?" for _ in candidate_uuids)
+        connection.execute(
+            f"""
+            DELETE FROM taste_assets
+            WHERE profile_id=? AND asset_uuid IN ({placeholders})
+            """,
+            (profile_id, *candidate_uuids),
+        )
+    connection.execute(
+        "DELETE FROM taste_rounds WHERE profile_id=? AND status='pending'",
+        (profile_id,),
+    )
+    return paths
+
+
+def complete_taste_round(
+    connection: sqlite3.Connection,
+    round_id: str,
+    selected_uuids: list[str],
+    profile_id: str = "default",
+) -> dict[str, object]:
+    rounds = list_taste_rounds(connection, profile_id)
+    round_value = next((item for item in rounds if item["id"] == round_id), None)
+    if not round_value:
+        raise KeyError(round_id)
+    if round_value["status"] != "pending":
+        raise ValueError("Taste round уже завершён")
+    candidates = set(round_value["candidate_uuids"])
+    if len(selected_uuids) != 3 or len(set(selected_uuids)) != 3:
+        raise ValueError("Нужно выбрать ровно 3 фотографии")
+    if not set(selected_uuids).issubset(candidates):
+        raise ValueError("Выбрана фотография вне текущего раунда")
+    connection.execute(
+        """
+        UPDATE taste_rounds
+        SET status='completed', selected_json=?, updated_at=?
+        WHERE id=? AND profile_id=?
+        """,
+        (json.dumps(selected_uuids), utc_now(), round_id, profile_id),
+    )
+    return next(
+        item for item in list_taste_rounds(connection, profile_id) if item["id"] == round_id
+    )
+
+
+def upsert_taste_asset(
+    connection: sqlite3.Connection,
+    *,
+    asset_uuid: str,
+    album_id: str,
+    filename: str | None,
+    taken_at: str | None,
+    review_path: str,
+    feature_schema: str,
+    feature_base64: str,
+    profile_id: str = "default",
+) -> None:
+    ensure_taste_profile(connection, profile_id)
+    now = utc_now()
+    connection.execute(
+        """
+        INSERT INTO taste_assets (
+            profile_id, asset_uuid, album_id, filename, taken_at, review_path,
+            feature_schema, feature_base64, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile_id, asset_uuid) DO UPDATE SET
+            album_id=excluded.album_id,
+            filename=excluded.filename,
+            taken_at=excluded.taken_at,
+            review_path=excluded.review_path,
+            feature_schema=excluded.feature_schema,
+            feature_base64=excluded.feature_base64,
+            updated_at=excluded.updated_at
+        """,
+        (
+            profile_id,
+            asset_uuid,
+            album_id,
+            filename,
+            taken_at,
+            review_path,
+            feature_schema,
+            feature_base64,
+            now,
+            now,
+        ),
+    )
+
+
+def taste_assets(
+    connection: sqlite3.Connection,
+    asset_uuids: list[str],
+    profile_id: str = "default",
+) -> dict[str, dict[str, object]]:
+    if not asset_uuids:
+        return {}
+    placeholders = ",".join("?" for _ in asset_uuids)
+    rows = connection.execute(
+        f"""
+        SELECT * FROM taste_assets
+        WHERE profile_id=? AND asset_uuid IN ({placeholders})
+        """,
+        (profile_id, *asset_uuids),
+    ).fetchall()
+    return {str(row["asset_uuid"]): dict(row) for row in rows}
+
+
+def update_taste_evidence(
+    connection: sqlite3.Connection,
+    updates: dict[str, object],
+    profile_id: str = "default",
+) -> dict[str, object]:
+    profile = get_taste_profile(connection, profile_id)
+    evidence = dict(profile.get("evidence") or {})
+    evidence.update(updates)
+    connection.execute(
+        "UPDATE taste_profiles SET evidence_json=?, updated_at=? WHERE id=?",
+        (json.dumps(evidence, sort_keys=True), utc_now(), profile_id),
+    )
+    return get_taste_profile(connection, profile_id)
 
 
 def set_taste_profile_paused(
@@ -1204,6 +1430,60 @@ def set_manual_decision(
     )
     if not cursor.rowcount:
         raise KeyError(asset_uuid)
+
+
+def resolve_legacy_review_decisions(
+    connection: sqlite3.Connection,
+    project_id: str,
+) -> int:
+    """Convert stored three-way decisions to the current binary workflow."""
+    project = get_project(connection, project_id)
+    density = str(project.get("selection_density") or "balanced")
+    rows = connection.execute(
+        """
+        SELECT d.asset_uuid, d.auto_disposition, d.manual_disposition,
+            d.final_disposition, d.flags_json, s.score
+        FROM decisions d
+        LEFT JOIN swipe_scores s USING (project_id, asset_uuid)
+        WHERE d.project_id=?
+          AND (
+            d.auto_disposition='review'
+            OR d.manual_disposition='review'
+            OR d.final_disposition='review'
+          )
+        """,
+        (project_id,),
+    ).fetchall()
+    now = utc_now()
+    for row in rows:
+        flags = json.loads(row["flags_json"] or "[]")
+        resolved = binary_disposition(int(row["score"] or 0), density, flags)
+        automatic = (
+            resolved if row["auto_disposition"] == "review" else str(row["auto_disposition"])
+        )
+        manual = None if row["manual_disposition"] == "review" else row["manual_disposition"]
+        override = manual in {"keep", "reject"}
+        final = str(manual) if override else automatic
+        connection.execute(
+            """
+            UPDATE decisions
+            SET auto_disposition=?, manual_disposition=?, final_disposition=?,
+                manual_override=?, reviewed=CASE WHEN ? THEN reviewed ELSE 0 END,
+                updated_at=?
+            WHERE project_id=? AND asset_uuid=?
+            """,
+            (
+                automatic,
+                manual,
+                final,
+                int(override),
+                int(override),
+                now,
+                project_id,
+                row["asset_uuid"],
+            ),
+        )
+    return len(rows)
 
 
 def mark_best_candidates(

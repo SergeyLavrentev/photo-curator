@@ -16,13 +16,14 @@ source inventory
   → generic Swipe Score
   → best-in-series comparison
   → Personal Taste adjustment
-  → diverse Top K
-  → human review and approved publish plan
+  → album-relative selection cutoff
+  → diverse Good / Bad buckets
+  → approved publish plan
 ```
 
 Each stage is independently resumable and records processed/total, warnings, failures,
 versions and current message. A failed signal degrades confidence; it must not silently turn
-an asset into Excluded.
+an asset into Bad.
 
 ## Signal layers
 
@@ -85,11 +86,27 @@ step, so twenty near-identical sunset frames cannot dominate the result.
 The score ranks this corpus; it is not a probability or a universal beauty judgement.
 Missing components are not treated as zero. Weights and calibration are versioned.
 
+## Binary selection model
+
+The engine always produces two user-facing categories: Good and Bad. Compact, balanced and
+broad target approximately 25%, 45% and 65% of the current album, while retaining an absolute
+quality floor for each mode. This makes the control describe the future Best album instead of
+applying one weak universal cutoff to every corpus.
+
+Decision confidence is calibrated from the distance to that album's cutoff and the reliability
+of the available signals. It is not copied from the Swipe Score confidence. Explanations are
+category-specific: Good exposes only positive evidence, while Bad exposes only defects,
+weaker-duplicate evidence, taste mismatch or the fact that the frame lost to stronger photos in
+the same album. Internal score records remain stored for diagnostics but are hidden from the
+user-facing explanation.
+
 ## Personal Taste Profile
 
-The initial profile is a lightweight local pairwise ranker over stable native/Core ML
-features. Training data comes from explicit A/B choices and, only after consent, review
-corrections. Safety and integrity rules are never training targets.
+The initial profile is a lightweight local pairwise ranker over stable native/Core ML features.
+Onboarding collects three Top-3-of-10 rounds. Each chosen photo is paired against every unchosen
+photo in its round, producing 54 calibration and 9 held-out comparisons. The source album may
+change between rounds, and the sampled photos are not modified. Later training data can also come
+from explicit corrections. Safety and integrity rules are never training targets.
 
 The profile stores feature schema, training examples, model parameters, quality evidence and
 updated time. It supports pause, reset, export and deletion. Ranking explanations show the

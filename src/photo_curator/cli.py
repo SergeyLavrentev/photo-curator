@@ -2,21 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import signal
-import socket
 import sys
-import threading
-import webbrowser
 from pathlib import Path
-
-import uvicorn
 
 from photo_curator import __version__
 from photo_curator.acceptance import (
     AcceptanceManifestError,
     build_manifest_template,
     build_score_snapshot,
+    compare_acceptance_scores,
     evaluate_acceptance,
     format_report,
     load_manifest,
@@ -36,21 +30,16 @@ from photo_curator.analysis.native_vision import (
     NativeVisionError,
     aesthetics_score_snapshot,
 )
-from photo_curator.app import create_app
 from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
 from photo_curator.db.repository import get_project, list_assets, list_duplicate_groups
 from photo_curator.logging_setup import configure_logging
 from photo_curator.native_worker import run_native_worker
 from photo_curator.paths import default_application_paths
+from photo_curator.photokit_acceptance import run_photokit_acceptance
 from photo_curator.photos.doctor import run_doctor
 from photo_curator.photos.osxphotos_provider import OSXPhotosProvider
 from photo_curator.release_benchmark import run_release_benchmark
-from photo_curator.web.security import SessionSecrets
-
-
-def request_process_shutdown() -> None:
-    os.kill(os.getpid(), signal.SIGTERM)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,26 +56,32 @@ def build_parser() -> argparse.ArgumentParser:
             "acceptance-template",
             "acceptance-score-export",
             "acceptance-evaluate",
+            "acceptance-compare",
             "vision-benchmark",
             "coreml-benchmark",
             "model-register",
             "model-list",
             "model-approve",
             "release-benchmark",
+            "photokit-acceptance",
             "native-worker",
-            "legacy-web",
         ],
     )
     parser.add_argument("--demo", action="store_true", help="Запустить synthetic demo")
-    parser.add_argument("--no-browser", action="store_true", help="Не открывать браузер")
-    parser.add_argument("--port", type=valid_port, default=0, help="Loopback port; 0 — выбрать")
     parser.add_argument("--project-id", help="ID проекта для acceptance")
+    parser.add_argument("--album-name", help="Имя одноразового PhotoKit acceptance-альбома")
+    parser.add_argument(
+        "--confirm-create-test-album",
+        action="store_true",
+        help="Разрешить создание одного реального тестового альбома Photos",
+    )
     parser.add_argument("--labels", type=Path, help="JSON manifest с человеческой разметкой")
     parser.add_argument(
         "--scores",
         type=Path,
-        help="Versioned JSON score snapshot; без него используется текущий selection_score",
+        help="Candidate JSON score snapshot; без него используется текущий selection_score",
     )
+    parser.add_argument("--baseline-scores", type=Path, help="Замороженный baseline score snapshot")
     parser.add_argument(
         "--engine-name",
         default="technical-first-selection-score",
@@ -97,6 +92,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="legacy-v1",
         help="Версия scorer для acceptance-score-export",
     )
+    parser.add_argument(
+        "--score-field",
+        choices=["selection_score", "swipe_score"],
+        default="selection_score",
+        help="Поле проекта для acceptance-score-export",
+    )
+    parser.add_argument("--min-pairwise-uplift", type=float, default=0.05)
+    parser.add_argument("--min-top-k-uplift", type=float, default=0.10)
     parser.add_argument("--output", type=Path, help="Записать template в файл вместо stdout")
     parser.add_argument(
         "--score-output",
@@ -135,13 +138,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def valid_port(value: str) -> int:
-    port = int(value)
-    if not 0 <= port <= 65535:
-        raise argparse.ArgumentTypeError("port должен быть от 0 до 65535")
-    return port
-
-
 def nonnegative_int(value: str) -> int:
     parsed = int(value)
     if parsed < 0:
@@ -164,14 +160,6 @@ def positive_int_list(value: str) -> tuple[int, ...]:
     if not values or any(item < 2 for item in values):
         raise argparse.ArgumentTypeError("каждый count должен быть не меньше 2")
     return values
-
-
-def choose_port(requested_port: int) -> int:
-    if requested_port:
-        return requested_port
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def print_doctor() -> int:
@@ -209,6 +197,7 @@ def run_acceptance_command(args: argparse.Namespace) -> int:
                     assets,
                     engine_name=args.engine_name,
                     engine_version=args.engine_version,
+                    score_field=getattr(args, "score_field", "selection_score"),
                 )
             )
             rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -231,16 +220,39 @@ def run_acceptance_command(args: argparse.Namespace) -> int:
         if not args.labels:
             raise AcceptanceManifestError("Укажите --labels")
         manifest = load_manifest(args.labels)
-        report = evaluate_acceptance(
-            manifest,
-            assets,
-            list_duplicate_groups(connection, args.project_id),
-            project_id=args.project_id,
-            score_snapshot=load_score_snapshot(args.scores)
-            if getattr(args, "scores", None)
-            else None,
-        )
-    print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else format_report(report))
+        groups = list_duplicate_groups(connection, args.project_id)
+        if args.command == "acceptance-compare":
+            if not args.scores or not args.baseline_scores:
+                raise AcceptanceManifestError(
+                    "acceptance-compare требует --scores и --baseline-scores"
+                )
+            if not 0 <= args.min_pairwise_uplift <= 1 or not 0 <= args.min_top_k_uplift <= 1:
+                raise AcceptanceManifestError("Uplift thresholds должны быть от 0 до 1")
+            report = compare_acceptance_scores(
+                manifest,
+                assets,
+                groups,
+                project_id=args.project_id,
+                candidate_snapshot=load_score_snapshot(args.scores),
+                baseline_snapshot=load_score_snapshot(args.baseline_scores),
+                min_pairwise_uplift=args.min_pairwise_uplift,
+                min_top_k_uplift=args.min_top_k_uplift,
+            )
+        else:
+            report = evaluate_acceptance(
+                manifest,
+                assets,
+                groups,
+                project_id=args.project_id,
+                score_snapshot=load_score_snapshot(args.scores)
+                if getattr(args, "scores", None)
+                else None,
+            )
+    print(
+        json.dumps(report, ensure_ascii=False, indent=2)
+        if args.json or args.command == "acceptance-compare"
+        else format_report(report)
+    )
     return 0 if report["passed"] else 1
 
 
@@ -410,8 +422,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command is None:
         parser.error(
-            "укажите команду; пользовательский интерфейс запускается через PhotoCurator.app, "
-            "переходный web — только через explicit legacy-web"
+            "укажите команду; пользовательский интерфейс запускается через PhotoCurator.app"
         )
     if args.command == "version":
         print(__version__)
@@ -450,6 +461,29 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(result)
     if args.command == "release-benchmark":
         raise SystemExit(run_release_benchmark_command(args))
+    if args.command == "photokit-acceptance":
+        if not args.confirm_create_test_album:
+            parser.error("photokit-acceptance требует --confirm-create-test-album")
+        if not args.project_id:
+            parser.error("photokit-acceptance требует --project-id")
+        try:
+            report = run_photokit_acceptance(
+                default_application_paths(),
+                project_id=args.project_id,
+                album_name=args.album_name,
+            )
+            rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(rendered, encoding="utf-8")
+                print(f"PhotoKit acceptance: {args.output}")
+            else:
+                print(rendered, end="")
+            result = 0 if report["passed"] else 1
+        except (KeyError, OSError, RuntimeError, ValueError) as error:
+            print(f"PhotoKit acceptance error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
     if args.command == "native-worker":
         paths = default_application_paths()
         paths.ensure()
@@ -459,6 +493,7 @@ def main(argv: list[str] | None = None) -> None:
         "acceptance-template",
         "acceptance-score-export",
         "acceptance-evaluate",
+        "acceptance-compare",
     }:
         try:
             result = run_acceptance_command(args)
@@ -467,25 +502,7 @@ def main(argv: list[str] | None = None) -> None:
             result = 2
         raise SystemExit(result)
 
-    if args.command != "legacy-web":
-        parser.error(f"неподдерживаемая команда: {args.command}")
-
-    paths = default_application_paths()
-    paths.ensure()
-    configure_logging(paths.log_file)
-    port = choose_port(args.port)
-    secrets_ = SessionSecrets.generate()
-    app = create_app(
-        demo=args.demo,
-        paths=paths,
-        session_secrets=secrets_,
-        shutdown_callback=request_process_shutdown,
-    )
-    url = f"http://127.0.0.1:{port}/?token={secrets_.startup_token}"
-    print(f"Photo Curator запущен: {url}", flush=True)
-    if not args.no_browser:
-        threading.Timer(0.7, webbrowser.open, args=(url,)).start()
-    uvicorn.run(app, host="127.0.0.1", port=port, workers=1, log_level="info")
+    parser.error(f"неподдерживаемая команда: {args.command}")
 
 
 if __name__ == "__main__":

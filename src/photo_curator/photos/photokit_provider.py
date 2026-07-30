@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.provider import PhotoAlbum, PhotoAsset, PhotoLibrary
 from photo_curator.utils.safe_paths import ensure_within
-from photo_curator.utils.subprocesses import CommandResult, run_command
+from photo_curator.utils.subprocesses import CommandResult, run_command, run_streaming_command
+
+ProgressCallback = Callable[[int, int], None]
 
 
 class PhotoKitProvider:
@@ -20,10 +23,12 @@ class PhotoKitProvider:
         *,
         executable: str | Path,
         runner=run_command,
+        streaming_runner=None,
     ) -> None:
         self.paths = paths
         self.executable = Path(executable)
         self.runner = runner
+        self.streaming_runner = streaming_runner
         self._albums: dict[str, PhotoAlbum] | None = None
         self._assets_by_album: dict[str, list[PhotoAsset]] = {}
         self._membership_by_album: dict[str, set[str]] = {}
@@ -33,7 +38,7 @@ class PhotoKitProvider:
         executable = os.environ.get("PHOTO_CURATOR_PHOTOKIT_HELPER")
         if not executable or not Path(executable).is_file():
             return None
-        return cls(paths, executable=executable)
+        return cls(paths, executable=executable, streaming_runner=run_streaming_command)
 
     def refresh_library(self) -> None:
         self._albums = None
@@ -67,8 +72,30 @@ class PhotoKitProvider:
     def list_assets(self, album_id: str) -> list[PhotoAsset]:
         return self._load_assets(album_id)
 
+    def list_assets_with_progress(
+        self, album_id: str, progress: ProgressCallback
+    ) -> list[PhotoAsset]:
+        return self._load_assets(album_id, progress=progress)
+
     def list_shared_assets(self, album_id: str) -> list[PhotoAsset]:
         return self._load_assets(album_id)
+
+    def sample_assets(
+        self,
+        album_id: str,
+        *,
+        limit: int,
+        excluded_uuids: set[str],
+    ) -> list[PhotoAsset]:
+        """Render only a recent bounded sample for taste onboarding."""
+        self._load_albums()
+        if album_id not in self._albums:
+            raise KeyError(album_id)
+        identifiers = _json_result(self._run(["album-photo-identifiers", album_id], timeout=300))
+        selected = [identifier for identifier in identifiers if identifier not in excluded_uuids][
+            :limit
+        ]
+        return self.refresh_assets(selected)
 
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
         if not asset_uuids:
@@ -115,20 +142,73 @@ class PhotoKitProvider:
         ]
         self._albums = {album.id: album for album in albums}
 
-    def _load_assets(self, album_id: str) -> list[PhotoAsset]:
+    def _load_assets(
+        self, album_id: str, *, progress: ProgressCallback | None = None
+    ) -> list[PhotoAsset]:
         if album_id in self._assets_by_album:
-            return self._assets_by_album[album_id]
+            cached = self._assets_by_album[album_id]
+            if progress:
+                progress(len(cached), len(cached))
+            return cached
         self._load_albums()
         if album_id not in self._albums:
             raise KeyError(album_id)
         output = self.paths.cache_dir / "photokit-renders" / _safe_directory(album_id)
-        result = self._run(["assets", album_id, str(output)], timeout=7200)
-        payload = _json_result(result)
+        payload = (
+            self._run_streaming_assets(
+                ["assets-jsonl", album_id, str(output)],
+                progress=progress,
+                timeout=7200,
+            )
+            if self.streaming_runner
+            else _json_result(self._run(["assets", album_id, str(output)], timeout=7200))
+        )
         output = output.resolve()
         assets = self._assets_from_payload(payload, output)
         self._assets_by_album[album_id] = assets
         self._membership_by_album[album_id] = {asset.uuid for asset in assets}
         return assets
+
+    def _run_streaming_assets(
+        self,
+        arguments: list[str],
+        *,
+        progress: ProgressCallback | None,
+        timeout: int,
+    ) -> list[dict[str, object]]:
+        final_assets: list[dict[str, object]] | None = None
+
+        def handle_line(line: str) -> None:
+            nonlocal final_assets
+            try:
+                frame = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise RuntimeError("PhotoKit source helper returned invalid JSONL") from error
+            if not isinstance(frame, dict):
+                raise RuntimeError("PhotoKit source helper returned invalid JSONL frame")
+            if frame.get("type") == "progress":
+                if progress:
+                    progress(int(frame.get("processed") or 0), int(frame.get("total") or 0))
+                return
+            if frame.get("type") == "result" and isinstance(frame.get("assets"), list):
+                final_assets = frame["assets"]
+                return
+            raise RuntimeError("PhotoKit source helper returned unknown JSONL frame")
+
+        result = self.streaming_runner(
+            [str(self.executable), *arguments],
+            on_stdout_line=handle_line,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            message = next(
+                (line.strip() for line in reversed(result.stderr.splitlines()) if line.strip()),
+                "PhotoKit source helper failed",
+            )
+            raise RuntimeError(message[-1000:])
+        if final_assets is None:
+            raise RuntimeError("PhotoKit source helper returned no final result")
+        return final_assets
 
     def _assets_from_payload(self, payload, output: Path) -> list[PhotoAsset]:
         return [

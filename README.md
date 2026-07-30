@@ -8,9 +8,8 @@
 
 Новый продуктовый план и критерии готовности находятся в [`ROADMAP.md`](ROADMAP.md).
 
-> Python/web-реализация остаётся переходным диагностическим baseline. Product logic уже
-> доступна полноценному SwiftUI-клиенту через локальный stdin/stdout JSONL worker без
-> браузера, HTTP и localhost.
+Product logic доступна SwiftUI-клиенту через локальный stdin/stdout JSONL worker без
+браузера, HTTP и localhost. Старый FastAPI/Jinja интерфейс и его runtime-зависимости удалены.
 
 ## Быстрый запуск
 
@@ -21,22 +20,30 @@ make app
 
 ## Нативное приложение для macOS
 
-Photo Curator собирается как обычный self-contained `.app`: SwiftUI отвечает за весь
+Photo Curator собирается как обычный self-contained `.app` и стандартный drag-and-drop
+образ `.dmg`: SwiftUI отвечает за весь
 основной workflow, а встроенный локальный движок не зависит от репозитория, `uv` или
 `.venv` во время запуска. Приложение появляется в Dock, Spotlight и списке программ.
 Браузер, HTTP-сервер и localhost для нативного workflow не используются.
 
 ```bash
-make app       # build/macos/PhotoCurator.app + локальная подпись
-make install   # установить в /Applications и запустить
+make app       # PhotoCurator.app + build/macos/PhotoCurator.dmg
+make install   # установить из DMG без прав администратора и запустить
 make stop      # завершить приложение и backend
 make uninstall # переместить установленный .app в Корзину
 ```
 
+Каждая обычная сборка выпускает `.dmg` с приложением и ярлыком `/Applications`.
+`make install` монтирует этот образ и заменяет приложение без `sudo` и
+запроса пароля. Если системная `/Applications` недоступна для записи, можно установить
+только для текущего пользователя: `make install INSTALL_DIR="$HOME/Applications"`.
+Опциональный `.pkg` для корпоративной установки собирается отдельно командой `make pkg`
+и требует администраторских прав при установке.
+
 `⌘Q` и завершение приложения из Dock сначала останавливают дочерний движок; из системных
 настроек приложения его можно перезапустить. По умолчанию `make app` использует ad-hoc
 подпись и не читает и не изменяет login Keychain. Для стабильной подписи передайте явно
-существующий Apple Developer identity:
+существующий Apple Developer identity приложения:
 
 ```bash
 make app SIGN_IDENTITY="Developer ID Application: …"
@@ -58,8 +65,9 @@ make notarize \
 ```
 
 `make notarize` fail-closed проверяет Developer ID authority и TeamIdentifier, выполняет
-bundle audit, отправляет временный ZIP через `notarytool --wait`, stapling/validation и
-Gatekeeper assessment. Финальный stapled архив появляется в `build/dist/`.
+bundle audit, пересобирает `.dmg`, отправляет его через `notarytool --wait`,
+делает stapling/validation и Gatekeeper assessment. Финальный stapled образ появляется
+в `build/dist/`.
 
 Сборка подписывает GUI и оба PhotoKit helper с Hardened Runtime и entitlement
 `com.apple.security.personal-information.photos-library`. `make verify-app` проверяет
@@ -68,15 +76,13 @@ Gatekeeper assessment. Финальный stapled архив появляетс�
 попросит доступ к Фото; если системный prompt скрыт, приложение покажет кнопку перехода
 непосредственно в Privacy & Security → Photos.
 
-Переходный web baseline всё ещё можно запустить из репозитория для диагностики. Demo
-использует 12 синтетических изображений и проходит workflow без доступа к Photos Library:
+CLI doctor и нативный demo работают без web server. Demo использует 12 синтетических
+изображений и проходит workflow без доступа к Photos Library:
 
 ```bash
 uv run photo-curator doctor
-uv run photo-curator legacy-web --demo
+PHOTO_CURATOR_NATIVE_DEMO=1 make run
 ```
-
-Этот server mode не запускается установленным SwiftUI-приложением.
 
 Для воспроизводимой проверки native GUI без Photos Library сборку можно запустить из
 терминала с `PHOTO_CURATOR_NATIVE_DEMO=1`; это test-only режим с 12 generated images.
@@ -182,6 +188,15 @@ uv run photo-curator release-benchmark --iterations 3 \
 payload serialization. Energy честно помечается `not_measured` до отдельного
 Instruments/MetricKit release run.
 
+SwiftUI gallery проверяется отдельно реальным off-screen `LazyVGrid` на corpus
+2 000 и 5 000 элементов. Product UI загружает по 100 карточек, а thumbnail bytes
+декодируются вне main actor и хранятся в bounded cache:
+
+```bash
+make gallery-benchmark
+# build/evidence/gallery-benchmark.json
+```
+
 ### Swipe Score v1
 
 Real-project pipeline сохраняет versioned Swipe Score отдельно от review decision. В нём
@@ -208,15 +223,15 @@ Feature vectors копируются в profile storage, поэтому нако
 Vision pipeline. Pairwise linear model добавляет ограниченный `personal_delta`
 от −20 до +20, а generic score всегда остаётся видимым отдельно.
 
-Profile API поддерживает capture, training, pause/resume, export и полное удаление:
+Native worker поддерживает capture, training, pause/resume, export и полное удаление:
 
 ```text
-GET    /api/taste-profile
-POST   /api/taste-profile/preferences
-POST   /api/taste-profile/train
-PATCH  /api/taste-profile/status
-GET    /api/taste-profile/export
-DELETE /api/taste-profile
+taste_profile
+taste_preference
+taste_train
+taste_status
+taste_export
+taste_reset
 ```
 
 В нативном приложении pause/resume, экспорт JSON и подтверждённое удаление доступны
@@ -251,11 +266,21 @@ uv run photo-curator acceptance-score-export --project-id PROJECT_ID \
   --output baseline-scores.json
 ```
 
-После этого отчёт строится одной командой:
+Текущий Swipe Score экспортируется отдельно:
 
 ```bash
-uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
-  --labels human-labels.json --scores baseline-scores.json
+uv run photo-curator acceptance-score-export --project-id PROJECT_ID \
+  --score-field swipe_score --engine-name swipe-score --engine-version v1 \
+  --output candidate-scores.json
+```
+
+Release gate требует и абсолютные пороги, и uplift над baseline на том же held-out
+наборе:
+
+```bash
+uv run photo-curator acceptance-compare --project-id PROJECT_ID \
+  --labels human-labels.json \
+  --scores candidate-scores.json --baseline-scores baseline-scores.json
 ```
 
 Release-fixture должен содержать 50–100 фото и хотя бы одну размеченную серию.
@@ -277,6 +302,19 @@ Release-fixture должен содержать 50–100 фото и хотя б
 честно сообщает, что release fixture ещё неполон.
 Settings постоянно показывает прогресс по четырём независимым gates: 50–100 manual labels,
 10+ held-out A/B, 5+ Top‑K и хотя бы одна полностью размеченная серия.
+
+### PhotoKit publish acceptance
+
+После выдачи Photo Curator доступа к Фото команда создаёт ровно один уникально названный
+альбом, добавляет в него одно фото реального проекта и повторно проверяет album visibility,
+membership, iCloud render и streaming progress. Альбом остаётся в Photos как evidence:
+
+```bash
+PHOTO_CURATOR_PHOTOKIT_HELPER="/Applications/PhotoCurator.app/Contents/Resources/native/photo-curator-photokit" \
+PHOTO_CURATOR_PUBLISH_HELPER="/Applications/PhotoCurator.app/Contents/Resources/native/photo-curator-publish" \
+uv run photo-curator photokit-acceptance --project-id PROJECT_ID \
+  --confirm-create-test-album --output build/evidence/photokit-acceptance.json
+```
 
 Полное ТЗ находится в `CODEX_PROJECT_SPEC.md`, тематические документы — в `docs/`,
 архитектурные решения — в `decisions/`. Инструкции для разработчика и текущий статус:

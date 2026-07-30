@@ -126,4 +126,8 @@ fi
   "$APP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
+bash "$SCRIPT_DIR/verify_app.sh" "$APP"
+bash "$SCRIPT_DIR/build_dmg.sh" "$APP" "$BUILD_ROOT/PhotoCurator.dmg"
+
 echo "$APP"
+echo "$BUILD_ROOT/PhotoCurator.dmg"

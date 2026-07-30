@@ -18,7 +18,7 @@ class RecordingRunner:
     def __call__(self, args: list[str], *, timeout: int) -> CommandResult:
         self.calls.append((args, timeout))
         if args[-1] == "--capability":
-            return CommandResult(args, 0, "photokit-publish\n", "")
+            return CommandResult(args, 0, "photokit-publish-duplicates-v2\n", "")
         self.request_path = Path(args[-1])
         self.payload = json.loads(self.request_path.read_text(encoding="utf-8"))
         if self.publish_error:
@@ -42,18 +42,18 @@ def make_importer(
     return NativePhotosImporter(paths, runner=runner)
 
 
-def test_native_publish_assets_uses_ephemeral_request(
+def test_native_duplicate_assets_uses_ephemeral_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runner = RecordingRunner()
     importer = make_importer(tmp_path, monkeypatch, runner)
 
-    result = importer.publish_assets("Best", ["asset-1", "asset-2"])
+    result = importer.duplicate_assets("Best", ["asset-1", "asset-2"])
 
     assert result == {"album_identifier": "album-1", "imported": 2, "reused": 0}
     assert runner.payload == {
         "album_name": "Best",
-        "asset_identifiers": ["asset-1", "asset-2"],
+        "duplicate_asset_identifiers": ["asset-1", "asset-2"],
     }
     assert [timeout for _, timeout in runner.calls] == [30, 3600]
     assert runner.request_path is not None
@@ -85,10 +85,49 @@ def test_native_publish_rejects_invalid_helper_output(
 
     def invalid_runner(args: list[str], *, timeout: int) -> CommandResult:
         if args[-1] == "--capability":
-            return CommandResult(args, 0, "photokit-publish", "")
+            return CommandResult(args, 0, "photokit-publish-duplicates-v2", "")
         return CommandResult(args, 0, "not-json", "")
 
     importer.runner = invalid_runner
 
     with pytest.raises(ValueError, match="некорректный результат"):
-        importer.publish_assets("Best", ["asset-1"])
+        importer.duplicate_assets("Best", ["asset-1"])
+
+
+def test_native_publish_streams_preparation_and_commit_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = RecordingRunner()
+    importer = make_importer(tmp_path, monkeypatch, runner)
+
+    def streaming_runner(args, *, on_stdout_line, timeout):
+        del timeout
+        assert args[-2] == "--jsonl"
+        frames = [
+            {"type": "progress", "phase": "prepare", "processed": 1, "total": 2},
+            {"type": "progress", "phase": "prepare", "processed": 2, "total": 2},
+            {"type": "progress", "phase": "commit", "processed": 2, "total": 2},
+            {
+                "type": "result",
+                "result": {"album_identifier": "album-1", "imported": 2, "reused": 0},
+            },
+        ]
+        for frame in frames:
+            on_stdout_line(json.dumps(frame))
+        return CommandResult(args, 0, "\n".join(map(json.dumps, frames)), "")
+
+    importer.streaming_runner = streaming_runner
+    progress = []
+
+    result = importer.duplicate_assets(
+        "Best",
+        ["asset-1", "asset-2"],
+        progress=lambda phase, processed, total: progress.append((phase, processed, total)),
+    )
+
+    assert result["album_identifier"] == "album-1"
+    assert progress == [
+        ("prepare", 1, 2),
+        ("prepare", 2, 2),
+        ("commit", 2, 2),
+    ]

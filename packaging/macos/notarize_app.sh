@@ -3,9 +3,10 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP="${1:-$PROJECT_ROOT/build/macos/PhotoCurator.app}"
-API_KEY="${2:-}"
-API_KEY_ID="${3:-}"
-API_ISSUER_ID="${4:-}"
+DMG="${2:-$PROJECT_ROOT/build/macos/PhotoCurator.dmg}"
+API_KEY="${3:-}"
+API_KEY_ID="${4:-}"
+API_ISSUER_ID="${5:-}"
 DIST_DIR="$PROJECT_ROOT/build/dist"
 
 fail() {
@@ -28,20 +29,17 @@ team_id="$(/usr/bin/sed -n 's/^TeamIdentifier=//p' <<<"$signature" | /usr/bin/he
 bash "$PROJECT_ROOT/packaging/macos/verify_app.sh" "$APP"
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 mkdir -p "$DIST_DIR"
-submission="$DIST_DIR/PhotoCurator-${version}-submission.zip"
-release="$DIST_DIR/PhotoCurator-${version}.zip"
-/bin/rm -f "$submission" "$release"
-/usr/bin/ditto -c -k --keepParent "$APP" "$submission"
+bash "$PROJECT_ROOT/packaging/macos/build_dmg.sh" "$APP" "$DMG"
+release="$DIST_DIR/PhotoCurator-${version}.dmg"
+/bin/rm -f "$release"
 
-xcrun notarytool submit "$submission" \
+xcrun notarytool submit "$DMG" \
   --key "$API_KEY" \
   --key-id "$API_KEY_ID" \
   --issuer "$API_ISSUER_ID" \
   --wait
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
-/usr/sbin/spctl --assess --type execute --verbose=2 "$APP"
-
-/usr/bin/ditto -c -k --keepParent "$APP" "$release"
-/bin/rm -f "$submission"
+xcrun stapler staple "$DMG"
+xcrun stapler validate "$DMG"
+/usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+/bin/cp "$DMG" "$release"
 echo "$release"

@@ -26,7 +26,7 @@ class FakeNativeImporter:
         self.calls.append((album_name, files))
         return {"album_identifier": "photos-album-1", "imported": len(files), "reused": 0}
 
-    def publish_assets(self, album_name: str, asset_identifiers: list[str]) -> dict[str, object]:
+    def duplicate_assets(self, album_name: str, asset_identifiers: list[str]) -> dict[str, object]:
         self.calls.append((album_name, asset_identifiers))
         return {
             "album_identifier": "photos-album-1",
@@ -382,7 +382,7 @@ def test_failed_local_apply_can_retry_the_same_audited_plan(tmp_path: Path) -> N
     assert retried["destination_album_id"] == "photos-album-1"
 
 
-def test_photokit_project_publishes_existing_assets_without_osxphotos(tmp_path: Path) -> None:
+def test_photokit_project_duplicates_assets_without_osxphotos(tmp_path: Path) -> None:
     paths, provider, coordinator, project_id = build_pipeline(tmp_path)
     coordinator.run(project_id)
     with database_connection(paths.database) as connection:

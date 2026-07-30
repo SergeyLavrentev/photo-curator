@@ -56,9 +56,8 @@ results. Manual decisions and explicit pairwise labels survive re-analysis.
 
 ## Migration architecture
 
-The FastAPI/Jinja application is a deprecated diagnostic baseline. It starts only through the
-explicit `legacy-web` CLI command and is never an implicit fallback. New product logic must be
-kept outside web route handlers so that the native client can call the same contracts.
+The former FastAPI/Jinja diagnostic UI has been removed. Product logic is implemented behind
+the native worker contract; no HTTP compatibility surface remains.
 
 Migration order:
 
@@ -67,7 +66,7 @@ Migration order:
 3. native ProjectStore/coordinator boundary;
 4. native workflow and gallery;
 5. PhotoKit source/publish parity;
-6. removal of web stack after acceptance.
+6. web stack removed after native parity.
 
 Python removal is not a goal by itself. It is removed only when native engines reproduce all
 validated signals without losing product quality.

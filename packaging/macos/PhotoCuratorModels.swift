@@ -19,22 +19,32 @@ struct AlbumItem: Identifiable, Hashable {
     }
 }
 
-struct ProjectItem {
+struct ProjectItem: Identifiable, Equatable {
     let id: String
     let name: String
     let state: String
     let albumID: String
+    let albumName: String
+    let decisionModelVersion: Int
+    let createdAt: String
+    let updatedAt: String
 
     init?(_ value: [String: Any]) {
         guard let id = value["id"] as? String,
               let name = value["name"] as? String,
               let state = value["state"] as? String,
-              let albumID = value["album_id"] as? String
+              let albumID = value["album_id"] as? String,
+              let albumName = value["album_name"] as? String
         else { return nil }
         self.id = id
         self.name = name
         self.state = state
         self.albumID = albumID
+        self.albumName = albumName
+        let settings = value["settings"] as? [String: Any]
+        decisionModelVersion = settings?["decision_model_version"] as? Int ?? 0
+        createdAt = value["created_at"] as? String ?? ""
+        updatedAt = value["updated_at"] as? String ?? ""
     }
 }
 
@@ -70,7 +80,7 @@ struct JobItem: Identifiable {
     }
 }
 
-struct PhotoItem: Identifiable {
+struct PhotoItem: Identifiable, Equatable {
     let id: String
     let filename: String
     let imagePath: String?
@@ -102,23 +112,36 @@ struct PhotoItem: Identifiable {
         qualityDuplicateGroup = value["quality_duplicate_group"] as? String
         qualityExpectedLeader = value["quality_expected_leader"] as? Bool ?? false
         reasons = (value["reasons"] as? [[String: Any]] ?? []).compactMap {
-            ($0["code"] as? String).map(reasonTitle)
+            guard let code = $0["code"] as? String,
+                  !["selection_score", "swipe_score"].contains(code)
+            else { return nil }
+            return reasonTitle(code)
         }
     }
 }
 
-struct TastePair {
-    let left: PhotoItem
-    let right: PhotoItem
+struct TasteRound {
+    let id: String
+    let roundNumber: Int
+    let roundTotal: Int
+    let albumID: String
+    let albumName: String
+    let selectionLimit: Int
+    let photos: [PhotoItem]
 
     init?(_ value: [String: Any]) {
-        guard let rawLeft = value["left"] as? [String: Any],
-              let rawRight = value["right"] as? [String: Any],
-              let left = PhotoItem(rawLeft),
-              let right = PhotoItem(rawRight)
+        guard let id = value["id"] as? String,
+              let albumID = value["album_id"] as? String,
+              let albumName = value["album_name"] as? String
         else { return nil }
-        self.left = left
-        self.right = right
+        self.id = id
+        self.albumID = albumID
+        self.albumName = albumName
+        roundNumber = value["round_number"] as? Int ?? 1
+        roundTotal = value["round_total"] as? Int ?? 3
+        selectionLimit = value["selection_limit"] as? Int ?? 3
+        photos = (value["photos"] as? [[String: Any]] ?? []).compactMap(PhotoItem.init)
+        guard photos.count == 10 else { return nil }
     }
 }
 
@@ -148,8 +171,22 @@ private func reasonTitle(_ code: String) -> String {
         "best_in_series": "Лучший кадр серии",
         "technical_penalty": "Есть технический недостаток",
         "similar_scene": "Похожая сцена уже представлена",
+        "too_similar_to_selected": "В подборке уже достаточно похожих кадров",
         "adds_variety": "Добавляет разнообразие",
         "favorite_protected": "Отмечено как избранное",
         "edited_protected": "Ручная обработка сохранена",
+        "analysis_unavailable_kept": "Оценка неполная — кадр сохранён из предосторожности",
+        "above_album_cutoff": "Один из сильнейших кадров этого альбома",
+        "below_album_cutoff": "Уступает другим кадрам этого альбома",
+        "weaker_duplicate": "Есть более удачный похожий кадр",
+        "possible_blur": "Недостаточная резкость",
+        "underexposed": "Слишком тёмный кадр",
+        "overexposed": "Пересвеченный кадр",
+        "low_contrast": "Слабый контраст",
+        "apple_low_overall": "Слабая общая оценка относительно альбома",
+        "weak_aesthetics": "Слабое визуальное впечатление",
+        "weak_composition": "Композиция слабее других кадров",
+        "weak_subject": "Сюжет выражен недостаточно",
+        "weak_moment": "Момент слабее других кадров",
     ][code] ?? code.replacingOccurrences(of: "_", with: " ")
 }

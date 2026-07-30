@@ -1,6 +1,6 @@
 # ADR-0001: Локальный web UI вместо PySide6/Electron
 
-- Status: Superseded by ADR-0007 for the target product; retained as the implemented MVP
+- Status: Superseded by ADR-0007; implementation removed after native parity
 
 ## Context
 

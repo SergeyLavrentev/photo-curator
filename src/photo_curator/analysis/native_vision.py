@@ -17,6 +17,7 @@ LOGGER = logging.getLogger(__name__)
 SOURCE = Path(__file__).parent / "native" / "photo_curator_vision.swift"
 ENGINE_NAME = "apple-vision-native"
 ENGINE_VERSION = "1"
+DEFAULT_BATCH_SIZE = 250
 
 
 class NativeVisionError(RuntimeError):
@@ -58,6 +59,29 @@ class NativeVisionEngine:
             seen.add(asset_uuid)
             rows.append({"asset_uuid": asset_uuid, "path": str(path.resolve())})
         self._ensure_compiled()
+        reports = [
+            self._analyze_batch(
+                rows[index : index + DEFAULT_BATCH_SIZE],
+                warmup_iterations=warmup_iterations,
+                measured_iterations=measured_iterations,
+            )
+            for index in range(0, len(rows), DEFAULT_BATCH_SIZE)
+        ]
+        payload = _merge_reports(
+            reports,
+            warmup_iterations=warmup_iterations,
+            measured_iterations=measured_iterations,
+        )
+        self._validate(payload, seen)
+        return payload
+
+    def _analyze_batch(
+        self,
+        rows: list[dict[str, str]],
+        *,
+        warmup_iterations: int,
+        measured_iterations: int,
+    ) -> dict[str, object]:
         request_dir = self.paths.cache_dir / "_native_vision"
         request_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         request_id = uuid.uuid4().hex
@@ -90,7 +114,7 @@ class NativeVisionEngine:
         finally:
             request_path.unlink(missing_ok=True)
             result_path.unlink(missing_ok=True)
-        self._validate(payload, seen)
+        self._validate(payload, {row["asset_uuid"] for row in rows})
         return payload
 
     def _ensure_compiled(self) -> None:
@@ -185,6 +209,66 @@ def aesthetics_score_snapshot(project_id: str, payload: dict[str, object]) -> di
             "version": f"native-v{ENGINE_VERSION}-revision-{revision}",
         },
         "scores": scores,
+    }
+
+
+def _merge_reports(
+    reports: list[dict[str, object]],
+    *,
+    warmup_iterations: int,
+    measured_iterations: int,
+) -> dict[str, object]:
+    if not reports:
+        return {
+            "schema_version": 1,
+            "engine": {
+                "name": ENGINE_NAME,
+                "version": ENGINE_VERSION,
+            },
+            "capabilities": {},
+            "warmup_iterations": warmup_iterations,
+            "measured_iterations": measured_iterations,
+            "assets": [],
+            "summary": {
+                "asset_count": 0,
+                "successful_assets": 0,
+                "wall_time_ms": 0,
+                "peak_rss_bytes": 1,
+                "stage_durations": {},
+            },
+        }
+    first = reports[0]
+    assets: list[object] = []
+    successful_assets = 0
+    wall_time_ms = 0.0
+    peak_rss_bytes = 0
+    for report in reports:
+        if report.get("engine") != first.get("engine"):
+            raise NativeVisionError("Native Vision engine изменился между пакетами")
+        if report.get("capabilities") != first.get("capabilities"):
+            raise NativeVisionError("Native Vision capabilities изменились между пакетами")
+        rows = report.get("assets")
+        summary = report.get("summary")
+        if not isinstance(rows, list) or not isinstance(summary, dict):
+            raise NativeVisionError("Native Vision batch contract нарушен")
+        assets.extend(rows)
+        successful_assets += int(summary.get("successful_assets") or 0)
+        wall_time_ms += float(summary.get("wall_time_ms") or 0)
+        peak_rss_bytes = max(peak_rss_bytes, int(summary.get("peak_rss_bytes") or 0))
+    return {
+        "schema_version": 1,
+        "engine": first["engine"],
+        "capabilities": first.get("capabilities", {}),
+        "warmup_iterations": warmup_iterations,
+        "measured_iterations": measured_iterations,
+        "assets": assets,
+        "summary": {
+            "asset_count": len(assets),
+            "successful_assets": successful_assets,
+            "wall_time_ms": wall_time_ms,
+            "peak_rss_bytes": peak_rss_bytes,
+            "stage_durations": {},
+        },
     }
 
 

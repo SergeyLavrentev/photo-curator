@@ -9,6 +9,7 @@ from photo_curator.acceptance import (
     build_manifest_template,
     build_native_quality_evidence,
     build_score_snapshot,
+    compare_acceptance_scores,
     evaluate_acceptance,
     format_report,
     load_manifest,
@@ -81,6 +82,40 @@ def test_perfect_human_labelled_fixture_passes_release_thresholds() -> None:
         "top_k_overlap": 1.0,
     }
     assert "Итог: PASS" in format_report(report)
+
+
+def test_comparison_requires_candidate_uplift_over_frozen_baseline() -> None:
+    assets = _assets()
+    candidate = {
+        "schema_version": 1,
+        "project_id": "trip",
+        "engine": {"name": "swipe-score", "version": "v1"},
+        "scores": {row["asset_uuid"]: row["selection_score"] for row in assets},
+    }
+    baseline = {
+        "schema_version": 1,
+        "project_id": "trip",
+        "engine": {"name": "technical-first", "version": "legacy-v1"},
+        "scores": {row["asset_uuid"]: index for index, row in enumerate(assets)},
+    }
+
+    report = compare_acceptance_scores(
+        _manifest(),
+        assets,
+        [_group("predicted-1", ["asset-00", "asset-01"], "asset-00")],
+        project_id="trip",
+        candidate_snapshot=candidate,
+        baseline_snapshot=baseline,
+    )
+
+    assert report["passed"] is True
+    assert report["checks"] == {
+        "candidate_absolute_gates": True,
+        "pairwise_uplift": True,
+        "top_k_uplift": True,
+    }
+    assert report["uplift"]["pairwise_accuracy"] == 1.0
+    assert report["uplift"]["top_k_overlap"] == 1.0
 
 
 def test_evaluator_reports_false_pair_wrong_leader_and_false_exclusions() -> None:

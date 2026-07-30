@@ -47,6 +47,8 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
             )
         if command[1] == "album-identifiers":
             return CommandResult(command, 0, json.dumps(["asset/L0/001"]), "")
+        if command[1] == "album-photo-identifiers":
+            return CommandResult(command, 0, json.dumps(["asset/L0/001"]), "")
         output = Path(command[3])
         output.mkdir(parents=True, exist_ok=True)
         render = output / "asset.jpg"
@@ -92,10 +94,17 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
     assert asset.favorite and asset.is_live_photo
     refreshed = provider.refresh_assets([asset.uuid])
     assert [item.uuid for item in refreshed] == [asset.uuid]
+    sampled = provider.sample_assets(
+        "album/L0/040",
+        limit=10,
+        excluded_uuids=set(),
+    )
+    assert [item.uuid for item in sampled] == [asset.uuid]
     provider.refresh_library()
     assert provider.asset_still_in_album("album/L0/040", asset.uuid)
     assert any(command[1] == "assets-by-id" for command, _ in calls)
     assert any(command[1] == "album-identifiers" for command, _ in calls)
+    assert any(command[1] == "album-photo-identifiers" for command, _ in calls)
     assert any(command[-1] == "--capability" for command, _ in calls)
 
 
@@ -110,3 +119,69 @@ def test_photokit_provider_is_selected_only_for_existing_bundled_helper(
     helper.touch()
     monkeypatch.setenv("PHOTO_CURATOR_PHOTOKIT_HELPER", str(helper))
     assert PhotoKitProvider.from_environment(paths) is not None
+
+
+def test_photokit_provider_streams_per_asset_render_progress(tmp_path: Path) -> None:
+    executable = tmp_path / "photo-curator-photokit"
+    executable.touch(mode=0o700)
+
+    def runner(command, *, timeout):
+        del timeout
+        if command[1:] == ["albums"]:
+            return CommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "regular": [
+                            {
+                                "id": "album-1",
+                                "name": "Trip",
+                                "photo_count": 2,
+                                "video_count": 0,
+                            }
+                        ],
+                        "shared": [],
+                    }
+                ),
+                "",
+            )
+        raise AssertionError(command)
+
+    def streaming_runner(command, *, on_stdout_line, timeout):
+        del timeout
+        assert command[1] == "assets-jsonl"
+        output = Path(command[3])
+        output.mkdir(parents=True, exist_ok=True)
+        items = []
+        lines = []
+        for index in range(2):
+            render = output / f"{index}.jpg"
+            render.write_bytes(b"jpeg")
+            items.append(
+                {
+                    "uuid": f"asset-{index}",
+                    "is_photo": True,
+                    "source_path": str(render),
+                }
+            )
+            lines.append(json.dumps({"type": "progress", "processed": index + 1, "total": 2}))
+        lines.append(json.dumps({"type": "result", "assets": items}))
+        for line in lines:
+            on_stdout_line(line)
+        return CommandResult(command, 0, "\n".join(lines), "")
+
+    provider = PhotoKitProvider(
+        default_application_paths(tmp_path),
+        executable=executable,
+        runner=runner,
+        streaming_runner=streaming_runner,
+    )
+    progress = []
+
+    assets = provider.list_assets_with_progress(
+        "album-1", lambda processed, total: progress.append((processed, total))
+    )
+
+    assert [asset.uuid for asset in assets] == ["asset-0", "asset-1"]
+    assert progress == [(1, 2), (2, 2)]

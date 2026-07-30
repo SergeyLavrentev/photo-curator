@@ -33,6 +33,19 @@ struct AssetIdentifiersRequest: Decodable {
     let asset_identifiers: [String]
 }
 
+struct AssetProgressFrame: Encodable {
+    let type = "progress"
+    let phase = "render"
+    let processed: Int
+    let total: Int
+    let asset_identifier: String
+}
+
+struct AssetResultFrame: Encodable {
+    let type = "result"
+    let assets: [AssetPayload]
+}
+
 enum PhotoKitError: LocalizedError {
     case invalidArguments
     case authorizationDenied
@@ -182,6 +195,24 @@ func assets(in album: PHAssetCollection, outputDirectory: URL) throws -> [AssetP
     return values
 }
 
+func streamAssets(in album: PHAssetCollection, outputDirectory: URL) throws {
+    try FileManager.default.createDirectory(
+        at: outputDirectory, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let result = PHAsset.fetchAssets(in: album, options: nil)
+    var values: [AssetPayload] = []
+    result.enumerateObjects { asset, index, _ in
+        values.append(payload(asset, outputDirectory: outputDirectory))
+        try? printJSON(AssetProgressFrame(
+            processed: index + 1,
+            total: result.count,
+            asset_identifier: asset.localIdentifier
+        ))
+    }
+    try printJSON(AssetResultFrame(assets: values))
+}
+
 func assets(with identifiers: [String], outputDirectory: URL) throws -> [AssetPayload] {
     try FileManager.default.createDirectory(
         at: outputDirectory, withIntermediateDirectories: true,
@@ -195,6 +226,28 @@ func assets(with identifiers: [String], outputDirectory: URL) throws -> [AssetPa
     return identifiers.compactMap { byIdentifier[$0] }
 }
 
+func streamAssets(with identifiers: [String], outputDirectory: URL) throws {
+    try FileManager.default.createDirectory(
+        at: outputDirectory, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+    var byIdentifier: [String: PHAsset] = [:]
+    result.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
+    var values: [AssetPayload] = []
+    for (index, identifier) in identifiers.enumerated() {
+        if let asset = byIdentifier[identifier] {
+            values.append(payload(asset, outputDirectory: outputDirectory))
+        }
+        try printJSON(AssetProgressFrame(
+            processed: index + 1,
+            total: identifiers.count,
+            asset_identifier: identifier
+        ))
+    }
+    try printJSON(AssetResultFrame(assets: values))
+}
+
 func identifiers(in album: PHAssetCollection) -> [String] {
     let result = PHAsset.fetchAssets(in: album, options: nil)
     var values: [String] = []
@@ -202,9 +255,25 @@ func identifiers(in album: PHAssetCollection) -> [String] {
     return values
 }
 
+func recentPhotoIdentifiers(in album: PHAssetCollection) -> [String] {
+    let options = PHFetchOptions()
+    options.predicate = NSPredicate(
+        format: "mediaType == %d",
+        PHAssetMediaType.image.rawValue
+    )
+    options.sortDescriptors = [
+        NSSortDescriptor(key: "creationDate", ascending: false)
+    ]
+    let result = PHAsset.fetchAssets(in: album, options: options)
+    var values: [String] = []
+    result.enumerateObjects { asset, _, _ in values.append(asset.localIdentifier) }
+    return values
+}
+
 func printJSON<T: Encodable>(_ value: T) throws {
     let data = try JSONEncoder().encode(value)
-    print(String(data: data, encoding: .utf8)!)
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data([0x0A]))
 }
 
 do {
@@ -231,6 +300,12 @@ do {
             in: album,
             outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
         ))
+    case "assets-jsonl":
+        guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
+        try streamAssets(
+            in: try fetchAlbum(arguments[2]),
+            outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
+        )
     case "assets-by-id":
         guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
         let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
@@ -239,9 +314,20 @@ do {
             with: request.asset_identifiers,
             outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
         ))
+    case "assets-by-id-jsonl":
+        guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
+        let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
+        let request = try JSONDecoder().decode(AssetIdentifiersRequest.self, from: data)
+        try streamAssets(
+            with: request.asset_identifiers,
+            outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
+        )
     case "album-identifiers":
         guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
         try printJSON(identifiers(in: try fetchAlbum(arguments[2])))
+    case "album-photo-identifiers":
+        guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
+        try printJSON(recentPhotoIdentifiers(in: try fetchAlbum(arguments[2])))
     default:
         throw PhotoKitError.invalidArguments
     }

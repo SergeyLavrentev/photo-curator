@@ -219,7 +219,7 @@ understand the largest score changes and approve the exact Photos output.
 - Benchmark 100, 2,000 and 5,000-photo inventories on supported Apple Silicon hardware.
 - Verify restart, cancellation, resume, model invalidation and taste-profile reset.
 - Verify code signing, notarization plan, permissions and bundle contents.
-- Remove FastAPI/Jinja/JavaScript and the browser launcher only after native parity.
+- [x] Remove FastAPI/Jinja/JavaScript and the browser launcher after native parity.
 - Remove bundled Python only when native engines cover all validated product signals; its
   removal is not required for the first native release.
 

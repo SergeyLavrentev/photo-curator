@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from photo_curator.analysis.taste import (
     TasteProfileError,
@@ -12,10 +11,8 @@ from photo_curator.analysis.taste import (
     load_taste_model,
     train_taste_profile,
 )
-from photo_curator.app import create_app
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
-from photo_curator.web.security import CSRF_COOKIE, SESSION_COOKIE, SessionSecrets
 from tests.test_pipeline import build_pipeline
 
 
@@ -150,51 +147,3 @@ def test_taste_training_requires_explicit_valid_comparisons(tmp_path: Path) -> N
                 right_uuid="demo-012",
                 preferred_uuid="demo-012",
             )
-
-
-def test_taste_profile_api_covers_calibration_train_pause_export_and_reset(
-    tmp_path: Path,
-) -> None:
-    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
-    coordinator.run(project_id)
-    secrets = SessionSecrets("startup", "session", "csrf")
-    app = create_app(
-        demo=False,
-        paths=paths,
-        provider=provider,
-        session_secrets=secrets,
-    )
-    headers = {"X-CSRF-Token": "csrf"}
-    with TestClient(app) as client:
-        client.cookies.set(SESSION_COOKIE, "session")
-        client.cookies.set(CSRF_COOKIE, "csrf")
-        for left, right in (
-            ("demo-012", "demo-001"),
-            ("demo-011", "demo-002"),
-            ("demo-010", "demo-003"),
-        ):
-            response = client.post(
-                "/api/taste-profile/preferences",
-                headers=headers,
-                json={
-                    "project_id": project_id,
-                    "left_uuid": left,
-                    "right_uuid": right,
-                    "preferred_uuid": left,
-                    "split": "calibration",
-                },
-            )
-            assert response.status_code == 201
-        trained = client.post("/api/taste-profile/train", headers=headers)
-        paused = client.patch("/api/taste-profile/status", headers=headers, json={"paused": True})
-        exported = client.get("/api/taste-profile/export")
-        deleted = client.delete("/api/taste-profile", headers=headers)
-        after = client.get("/api/taste-profile")
-
-    assert trained.status_code == 200
-    assert trained.json()["status"] == "ready"
-    assert paused.json()["status"] == "paused"
-    assert len(exported.json()["examples"]) == 3
-    assert exported.json()["profile"]["weights_base64"]
-    assert deleted.json() == {"status": "deleted"}
-    assert after.json()["preference_count"] == 0

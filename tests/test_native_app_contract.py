@@ -21,10 +21,13 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "PhotoKitProvider.from_environment" in native_worker
     assert "OSXPhotosProvider" not in native_worker
     assert "legacy_cli_enabled=False" in native_worker
-    assert 'call("taste_pair"' in app
-    assert 'call("taste_preference"' in app
+    assert '"taste_round_prepare"' in app
+    assert 'call("taste_round_submit"' in app
     assert '"from_stage": "decisions"' in app
-    assert "Какой кадр вы бы оставили?" in app
+    assert "Кликните на три фотографии" in app
+    assert "TasteGridCard" in app
+    assert "tasteSelectedIDs.count != round.selectionLimit" in app
+    assert "Альбом для анализа станет доступен после трёх раундов" in app
     assert "QuickLookController.shared.show" in app
     assert '.keyboardShortcut("1", modifiers: [])' in app
     assert ".keyboardShortcut(.space, modifiers: [])" in app
@@ -32,6 +35,48 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'call("resume_analysis"' in app
     assert 'call("cancel_analysis"' in app
     assert "Продолжить с прерванного этапа" in app
+    assert "Остановить и сохранить прогресс" in app
+    assert "Удалить анализ и его локальный кэш" in app
+    assert 'private let retainedProjectDefaultsKey = "retainedProjectID"' in app
+    assert 'DisclosureGroup("Детали этапов", isExpanded: $analysisDetailsExpanded)' in app
+    assert "Размер итогового Best‑альбома" in app
+    assert "Исходный альбом анализируется целиком" in app
+    assert "Продолжить без персонализации" not in app
+    assert "case .taste" in app.split("enum WorkflowStep", 1)[1].split("case .album", 1)[0]
+    assert ".allowsHitTesting(false)" in app
+    assert "struct PhotoCard: View, Equatable" in app
+    assert ".equatable()" in app
+    assert "photos[initialIndex].disposition = disposition" in app
+    assert ".onTapGesture(count: 2, perform: openDetails)" in app
+    assert "PhotoDetailView" in app
+    assert "togglePhotoSelection" in app
+    assert "setSelectedPhotosDecision" in app
+    assert 'call("decisions_batch"' in app
+    assert "Переместить в плохие" in app
+    assert "Переместить в хорошие" in app
+    assert "Решить позже" not in app
+    assert "finalReview" not in app
+    assert "private let selectionCardWidth: CGFloat = 320" in app
+    assert ".adaptive(minimum: selectionCardWidth, maximum: selectionCardWidth)" in app
+    assert ".frame(width: selectionCardWidth)" in app
+    assert "let buttonWidth = max(0, (geometry.size.width - 1) / 2)" in app
+    assert ".frame(width: buttonWidth, height: 34)" in app
+    assert 'call("binary_decisions"' in app
+    assert '"disposition": selectionBucket.rawValue' in app
+    assert "SelectionBucket.allCases" in app
+    assert '("keep", "Хорошие")' in app
+    assert '("reject", "Плохие")' in app
+    assert "currentDecisionModelVersion = 2" in app
+    assert "Обновляем критерии отбора" in app
+    assert 'Label("Почему?"' not in app
+    assert 'Image(systemName: "info.circle.fill")' in app
+    assert "Создать Best‑альбом" in app
+    assert 'call("delete_project"' in app
+    assert "Отменить новый анализ" in app
+    assert "ForEach(model.projects)" in app
+    assert 'call("cleanup_abandoned_projects"' not in app
+    assert 'call("taste_round_cancel"' in app
+    assert "Сменить альбом" in app
     assert "UserDefaults.standard" in app
     assert 'call("taste_export")' in app
     assert 'call("quality_export"' in app
@@ -67,7 +112,7 @@ def test_native_app_explains_first_run_before_requesting_photos_permission() -> 
     assert "import Photos" in app
     assert "didCompleteOnboardingV1" in app
     assert "OnboardingView" in app
-    assert "Продолжить и выбрать альбом" in app
+    assert "Продолжить и настроить вкус" in app
     assert "На следующем шаге macOS попросит доступ к Фото" in app
     assert "guard hasCompletedOnboarding" in app
     assert "requestPhotoLibraryAccess" in app
@@ -86,7 +131,7 @@ def test_native_progress_uses_fixed_stages_and_exposes_current_work() -> None:
     assert "completed / Double(stageOrder.count)" in app
     assert "Этап \\(stage) из \\(stageOrder.count)" in app
     assert "operationMessage" in app
-    assert "Импортируем \\(publishPlan.itemCount) фото в Photos" in app
+    assert "Создаём \\(publishPlan.itemCount) независимых копий в Photos" in app
     assert 'warnings = value["warnings"]' in models
     assert 'errors = value["errors"]' in models
 
@@ -103,16 +148,28 @@ def test_frozen_worker_excludes_legacy_web_and_osxphotos_runtime() -> None:
     spec = (ROOT / "packaging/macos/backend.spec").read_text()
 
     assert "native_backend_main.py" in spec
-    assert '"fastapi"' in spec
-    assert '"jinja2"' in spec
+    assert "fastapi" not in spec
+    assert "jinja2" not in spec
     assert '"osxphotos"' in spec
     assert "collect_all" not in spec
     assert "collect_submodules" not in spec
 
 
+def test_legacy_web_source_and_runtime_dependencies_are_removed() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    cli = (ROOT / "src/photo_curator/cli.py").read_text()
+
+    assert not (ROOT / "src/photo_curator/app.py").exists()
+    assert not (ROOT / "src/photo_curator/web").exists()
+    assert "legacy-web" not in cli
+    for dependency in ("fastapi", "jinja2", "python-multipart", "uvicorn"):
+        assert f'"{dependency}"' not in pyproject
+
+
 def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     build = (ROOT / "packaging/macos/build_app.sh").read_text()
     helper = (ROOT / "src/photo_curator/photos/native/photo_curator_photokit.swift").read_text()
+    publisher = (ROOT / "src/photo_curator/photos/native/photo_curator_publish.swift").read_text()
 
     assert "photo_curator_photokit.swift" in build
     assert "-framework Photos" in build
@@ -121,6 +178,11 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "PHImageManager.default().requestImage" in helper
     assert "Photos.sqlite" not in helper
     assert "photo_curator_publish.swift" in build
+    assert "duplicate_asset_identifiers" in publisher
+    assert "PHAssetResourceManager.default().writeData" in publisher
+    assert "PHAssetCreationRequest.forAsset()" in publisher
+    assert "creation.addResource(with: .photo" in publisher
+    assert "photokit-publish-duplicates-v2" in publisher
     assert "-framework QuickLookUI" in build
     assert '"$RESOURCES/native/photo-curator-photokit"' in build
     assert '--entitlements "$SCRIPT_DIR/Photos.entitlements"' in build
@@ -172,6 +234,36 @@ def test_bundle_verifier_guards_tcc_identity_and_native_only_contents() -> None:
     assert 'bash packaging/macos/verify_app.sh "$(APP)"' in makefile
 
 
+def test_every_native_build_produces_and_installs_a_verified_dmg_without_privileges() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    build = (ROOT / "packaging/macos/build_app.sh").read_text()
+    dmg_builder = (ROOT / "packaging/macos/build_dmg.sh").read_text()
+    dmg_verifier = (ROOT / "packaging/macos/verify_dmg.sh").read_text()
+    dmg_installer = (ROOT / "packaging/macos/install_dmg.sh").read_text()
+    package_builder = (ROOT / "packaging/macos/build_installer.sh").read_text()
+    package_verifier = (ROOT / "packaging/macos/verify_installer.sh").read_text()
+
+    assert 'bash "$SCRIPT_DIR/build_dmg.sh"' in build
+    assert "/usr/bin/hdiutil create" in dmg_builder
+    assert 'ln -s /Applications "$STAGING/Applications"' in dmg_builder
+    assert "/usr/bin/hdiutil attach" in dmg_verifier
+    assert 'bash "$PROJECT_ROOT/packaging/macos/verify_app.sh"' in dmg_verifier
+    assert "packaging/macos/install_dmg.sh" in makefile
+    assert "/usr/bin/hdiutil attach" in dmg_installer
+    assert "with administrator privileges" not in makefile
+    assert "/usr/sbin/installer -pkg" not in makefile
+    assert "sudo" not in dmg_installer
+    assert "make pkg" in makefile
+    assert "/usr/bin/pkgbuild" in package_builder
+    assert '--component "$APP"' in package_builder
+    assert '--install-location "/Applications"' in package_builder
+    assert 'bash "$PROJECT_ROOT/packaging/macos/verify_installer.sh"' in package_builder
+    assert "/usr/sbin/pkgutil --expand" in package_verifier
+    assert "local.photo-curator.installer" in package_verifier
+    assert "./PhotoCurator.app/Contents/MacOS/PhotoCurator" in package_verifier
+    assert '/usr/bin/ditto "$(APP)" "$(INSTALLED_APP)"' not in makefile
+
+
 def test_notarization_requires_developer_id_and_api_key_file() -> None:
     helper = (ROOT / "packaging/macos/notarize_app.sh").read_text()
     makefile = (ROOT / "Makefile").read_text()
@@ -185,6 +277,9 @@ def test_notarization_requires_developer_id_and_api_key_file() -> None:
     assert '--issuer "$API_ISSUER_ID"' in helper
     assert "--keychain-profile" not in helper
     assert "Developer ID Application:" in helper
+    assert 'notarytool submit "$DMG"' in helper
+    assert 'stapler staple "$DMG"' in helper
+    assert "--type open" in helper
     assert "stapler staple" in helper
     assert "stapler validate" in helper
     assert "spctl --assess" in helper
@@ -192,8 +287,11 @@ def test_notarization_requires_developer_id_and_api_key_file() -> None:
     assert "PASSWORD" not in helper
 
 
-def test_native_review_localizes_swipe_reasons() -> None:
+def test_native_selection_localizes_positive_and_negative_reasons() -> None:
     models = (ROOT / "packaging/macos/PhotoCuratorModels.swift").read_text()
 
     assert '"strong_aesthetics": "Сильное первое впечатление"' in models
     assert '"similar_scene": "Похожая сцена уже представлена"' in models
+    assert '"possible_blur": "Недостаточная резкость"' in models
+    assert '"below_album_cutoff": "Уступает другим кадрам этого альбома"' in models
+    assert '"weaker_duplicate": "Есть более удачный похожий кадр"' in models

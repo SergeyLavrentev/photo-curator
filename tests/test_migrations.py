@@ -35,6 +35,8 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "swipe_scores",
         "taste_profiles",
         "preference_examples",
+        "taste_rounds",
+        "taste_assets",
         "model_registry",
         "quality_asset_labels",
     } <= tables

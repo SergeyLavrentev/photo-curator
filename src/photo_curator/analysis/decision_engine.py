@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil
 
 from photo_curator.analysis.swipe_score import SwipeScoreResult
 
@@ -15,14 +16,53 @@ class DecisionResult:
     reasons: list[dict[str, object]]
 
 
+DECISION_MODEL_VERSION = 2
+SELECTED_THRESHOLDS = {
+    "compact": 82,
+    "balanced": 74,
+    "broad": 58,
+}
+SELECTION_RATIOS = {
+    "compact": 0.25,
+    "balanced": 0.45,
+    "broad": 0.65,
+}
+
+
+def album_selection_threshold(scores: list[int], selection_density: str) -> int:
+    """Return a strict, album-relative cutoff for the requested result size."""
+    if not scores:
+        return SELECTED_THRESHOLDS.get(selection_density, 74)
+    ranked = sorted((max(0, min(100, int(score))) for score in scores), reverse=True)
+    target = max(1, ceil(len(ranked) * SELECTION_RATIOS.get(selection_density, 0.45)))
+    relative_cutoff = ranked[min(target - 1, len(ranked) - 1)]
+    return max(SELECTED_THRESHOLDS.get(selection_density, 74), relative_cutoff)
+
+
+def binary_disposition(
+    score: int,
+    selection_density: str,
+    flags: set[str] | list[str] | tuple[str, ...] = (),
+    *,
+    selected_threshold: int | None = None,
+) -> str:
+    """Resolve every automatic result into the two user-facing buckets."""
+    flag_set = set(flags)
+    if flag_set & {"missing_preview", "analysis_error", "ambiguous_duplicate"}:
+        return "keep"
+    threshold = selected_threshold or SELECTED_THRESHOLDS.get(selection_density, 74)
+    return "keep" if score >= threshold else "reject"
+
+
 def decide_asset(
     asset: dict[str, object],
     duplicate: dict[str, object] | None,
     selection_density: str = "balanced",
     swipe_score: SwipeScoreResult | None = None,
+    *,
+    selected_threshold: int | None = None,
 ) -> DecisionResult:
     flags: set[str] = set()
-    reasons: list[dict[str, object]] = []
     if bool(asset.get("favorite")):
         flags.add("favorite_protected")
     if bool(asset.get("has_adjustments")):
@@ -42,17 +82,8 @@ def decide_asset(
             flags.add("duplicate_leader")
         else:
             flags.add("duplicate_loser")
-        reasons.append(
-            {
-                "code": "duplicate_group",
-                "kind": duplicate.get("kind"),
-                "confidence": duplicate.get("confidence"),
-                "quality_margin": duplicate.get("quality_margin"),
-            }
-        )
     metric_flags = _metric_flags(asset)
     flags.update(metric_flags)
-    reasons.extend({"code": flag} for flag in sorted(metric_flags))
     if swipe_score is None:
         score, components = _selection_score(asset, duplicate, metric_flags)
         decision_confidence = 0.65
@@ -60,9 +91,105 @@ def decide_asset(
         score = swipe_score.score
         components = {key: round(value) for key, value in swipe_score.components.items()}
         decision_confidence = swipe_score.confidence
-        reasons.extend(swipe_score.reasons)
-        reasons.insert(
-            0,
+    threshold = selected_threshold or SELECTED_THRESHOLDS.get(selection_density, 74)
+    if flags & {"missing_preview", "analysis_error", "ambiguous_duplicate"}:
+        return _result(
+            "keep",
+            0.5,
+            score,
+            components,
+            flags,
+            duplicate,
+            swipe_score,
+            threshold,
+            leading_reason="analysis_unavailable_kept",
+        )
+    if bool(asset.get("favorite")) or bool(asset.get("has_adjustments")):
+        leading = "favorite_protected" if asset.get("favorite") else "edited_protected"
+        return _result(
+            "keep",
+            0.9,
+            score,
+            components,
+            flags,
+            duplicate,
+            swipe_score,
+            threshold,
+            leading_reason=leading,
+        )
+    if duplicate and not duplicate.get("is_leader"):
+        confidence = float(duplicate.get("confidence") or 0.0)
+        quality_margin = float(duplicate.get("quality_margin") or 0.0)
+        if duplicate.get("kind") == "exact" or (confidence >= 0.92 and quality_margin >= 0.08):
+            return _result(
+                "reject",
+                confidence,
+                score,
+                components,
+                flags,
+                duplicate,
+                swipe_score,
+                threshold,
+                leading_reason="weaker_duplicate",
+            )
+        # A weak near-duplicate signal is not enough on its own. The regular
+        # selection threshold below decides whether the frame stays.
+    if duplicate and duplicate.get("is_leader"):
+        return _result(
+            "keep",
+            0.9,
+            score,
+            components,
+            flags,
+            duplicate,
+            swipe_score,
+            threshold,
+            leading_reason="best_in_series",
+        )
+    disposition = "keep" if score >= threshold else "reject"
+    confidence = _threshold_confidence(score, threshold, decision_confidence)
+    return _result(
+        disposition,
+        confidence,
+        score,
+        components,
+        flags,
+        duplicate,
+        swipe_score,
+        threshold,
+    )
+
+
+def _threshold_confidence(score: int, threshold: int, signal_confidence: float) -> float:
+    distance_confidence = 0.52 + min(0.38, abs(score - threshold) / 35.0)
+    return round(min(0.95, distance_confidence * 0.75 + signal_confidence * 0.25), 3)
+
+
+def _result(
+    disposition: str,
+    confidence: float,
+    score: int,
+    components: dict[str, int],
+    flags: set[str],
+    duplicate: dict[str, object] | None,
+    swipe_score: SwipeScoreResult | None,
+    threshold: int,
+    *,
+    leading_reason: str | None = None,
+) -> DecisionResult:
+    reasons = _decision_reasons(
+        disposition,
+        score,
+        components,
+        flags,
+        duplicate,
+        swipe_score,
+        threshold,
+        leading_reason=leading_reason,
+    )
+    reasons.append({"code": "selection_score", "score": score, "components": components})
+    if swipe_score:
+        reasons.append(
             {
                 "code": "swipe_score",
                 "schema_version": swipe_score.schema_version,
@@ -72,33 +199,84 @@ def decide_asset(
                 "confidence": swipe_score.confidence,
                 "components": swipe_score.components,
                 "model_versions": swipe_score.model_versions,
-            },
+            }
         )
-    reasons.insert(0, {"code": "selection_score", "score": score, "components": components})
-    if flags & {"missing_preview", "analysis_error", "ambiguous_duplicate"}:
-        return DecisionResult("review", 0.75, score, components, sorted(flags), reasons)
-    if bool(asset.get("favorite")) or bool(asset.get("has_adjustments")):
-        return DecisionResult("keep", 0.9, score, components, sorted(flags), reasons)
+    return DecisionResult(
+        disposition,
+        round(confidence, 3),
+        score,
+        components,
+        sorted(flags),
+        reasons,
+    )
+
+
+def _decision_reasons(
+    disposition: str,
+    score: int,
+    components: dict[str, int],
+    flags: set[str],
+    duplicate: dict[str, object] | None,
+    swipe_score: SwipeScoreResult | None,
+    threshold: int,
+    *,
+    leading_reason: str | None,
+) -> list[dict[str, object]]:
+    reasons: list[dict[str, object]] = []
+
+    def add(code: str, **values: object) -> None:
+        if code not in {str(item["code"]) for item in reasons}:
+            reasons.append({"code": code, **values})
+
+    if leading_reason:
+        add(leading_reason)
+    if disposition == "keep":
+        if duplicate and duplicate.get("is_leader"):
+            add("best_in_series")
+        positive_codes = {
+            "strong_aesthetics",
+            "strong_composition",
+            "interesting_subject",
+            "strong_moment",
+            "personal_taste_match",
+            "adds_variety",
+        }
+        for reason in swipe_score.reasons if swipe_score else []:
+            code = str(reason.get("code") or "")
+            if code in positive_codes:
+                add(code, value=reason.get("value"))
+        if not reasons:
+            add("above_album_cutoff", score=score, threshold=threshold)
+        return reasons[:3]
+
+    negative_flag_order = (
+        "possible_blur",
+        "underexposed",
+        "overexposed",
+        "low_contrast",
+        "apple_low_overall",
+    )
+    for code in negative_flag_order:
+        if code in flags:
+            add(code)
     if duplicate and not duplicate.get("is_leader"):
-        confidence = float(duplicate.get("confidence") or 0.0)
-        quality_margin = float(duplicate.get("quality_margin") or 0.0)
-        if duplicate.get("kind") == "exact" or (confidence >= 0.92 and quality_margin >= 0.08):
-            return DecisionResult("reject", confidence, score, components, sorted(flags), reasons)
-        return DecisionResult("review", confidence, score, components, sorted(flags), reasons)
-    if duplicate and duplicate.get("is_leader"):
-        return DecisionResult("keep", 0.9, score, components, sorted(flags), reasons)
-    selected_threshold, excluded_threshold = {
-        "compact": (82, 45),
-        "balanced": (70, 38),
-        "broad": (58, 30),
-    }.get(selection_density, (70, 38))
-    if score >= selected_threshold:
-        return DecisionResult(
-            "keep", max(0.7, decision_confidence), score, components, sorted(flags), reasons
-        )
-    if score < excluded_threshold and metric_flags:
-        return DecisionResult("reject", 0.72, score, components, sorted(flags), reasons)
-    return DecisionResult("review", decision_confidence, score, components, sorted(flags), reasons)
+        add("weaker_duplicate")
+    if swipe_score:
+        values = swipe_score.components
+        if float(values.get("generic_aesthetics") or 50) < 50:
+            add("weak_aesthetics")
+        if float(values.get("composition_and_attention") or 50) < 50:
+            add("weak_composition")
+        if float(values.get("content_appeal") or 50) < 50:
+            add("weak_subject")
+        if float(values.get("moment_and_subject") or 50) < 50:
+            add("weak_moment")
+        if swipe_score.personal_delta <= -2:
+            add("personal_taste_mismatch")
+        if float(values.get("technical_penalty") or 0) > 0:
+            add("technical_penalty", value=values["technical_penalty"])
+    add("below_album_cutoff", score=score, threshold=threshold)
+    return reasons[:3]
 
 
 def _selection_score(

@@ -21,9 +21,9 @@ class PhotosProvider(Protocol):
 membership перед публикацией и передаёт Python worker только JSON и пути внутри cache.
 Публикация принятого набора также выполняется через отдельный PhotoKit helper.
 
-## Legacy `OSXPhotosProvider`
+## Diagnostic `OSXPhotosProvider`
 
-Используется только explicit `legacy-web`/diagnostic workflow. Работает через публичные
+Используется только CLI `doctor` как read-only diagnostic adapter. Работает через публичные
 Python API `osxphotos`; optional properties получать через capability checks и `getattr`.
 
 Не полагаться на:

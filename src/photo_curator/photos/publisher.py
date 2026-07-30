@@ -240,7 +240,12 @@ class PhotosPublisher:
                 return candidate
             counter += 1
 
-    def apply(self, publish_id: str) -> dict[str, object]:
+    def apply(
+        self,
+        publish_id: str,
+        *,
+        progress: Callable[[str, int, int], None] | None = None,
+    ) -> dict[str, object]:
         with database_connection(self.database_path) as connection:
             publish = repository.get_publish(connection, publish_id)
         if (
@@ -265,7 +270,10 @@ class PhotosPublisher:
             by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
             files = [Path(str(by_uuid[uuid]["source_path"])) for uuid in prepared]
             try:
-                native_result = self.local_importer.publish(str(publish["album_name"]), files)
+                progress_args = {"progress": progress} if progress else {}
+                native_result = self.local_importer.publish(
+                    str(publish["album_name"]), files, **progress_args
+                )
                 destination_album_id = str(native_result["album_identifier"])
                 result = CommandResult(
                     ["photokit-publish"],
@@ -277,8 +285,9 @@ class PhotosPublisher:
                 result = CommandResult(["photokit-publish"], 1, "", str(error)[:500])
         elif self._is_photokit_project(project):
             try:
-                native_result = self.local_importer.publish_assets(
-                    str(publish["album_name"]), prepared
+                progress_args = {"progress": progress} if progress else {}
+                native_result = self.local_importer.duplicate_assets(
+                    str(publish["album_name"]), prepared, **progress_args
                 )
                 destination_album_id = str(native_result["album_identifier"])
                 result = CommandResult(

@@ -16,9 +16,6 @@ analysis = Analysis(
     excludes=[
         "pytest",
         "ruff",
-        "fastapi",
-        "uvicorn",
-        "jinja2",
         "osxphotos",
         "photoscript",
         "utitools",

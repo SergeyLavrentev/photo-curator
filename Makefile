@@ -2,14 +2,17 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 APP := $(CURDIR)/build/macos/PhotoCurator.app
+DMG := $(CURDIR)/build/macos/PhotoCurator.dmg
+PKG := $(CURDIR)/build/macos/PhotoCurator.pkg
 INSTALL_DIR ?= /Applications
 INSTALLED_APP := $(INSTALL_DIR)/PhotoCurator.app
 SIGN_IDENTITY ?= -
+INSTALLER_SIGN_IDENTITY ?=
 NOTARY_KEY ?=
 NOTARY_KEY_ID ?=
 NOTARY_ISSUER_ID ?=
 
-.PHONY: help sync test lint vision-helper coreml-helper app build install run stop verify-app notarize uninstall clean
+.PHONY: help sync test lint vision-helper coreml-helper gallery-benchmark app build pkg install run stop verify-app verify-dmg verify-pkg notarize uninstall clean
 
 help:
 	@echo "Photo Curator"
@@ -17,9 +20,11 @@ help:
 	@echo "  make test        запустить тесты"
 	@echo "  make vision-helper собрать нативный Apple Vision benchmark"
 	@echo "  make coreml-helper собрать optional Core ML benchmark"
-	@echo "  make app         собрать и ad-hoc подписать .app"
-	@echo "  make install     установить в $(INSTALL_DIR) и запустить"
-	@echo "  make notarize    отправить Developer ID build в Apple notary service"
+	@echo "  make gallery-benchmark измерить SwiftUI-галерею на 2k/5k карточек"
+	@echo "  make app         собрать .app и стандартный PhotoCurator.dmg"
+	@echo "  make install     установить из DMG без прав администратора и запустить"
+	@echo "  make pkg         собрать optional admin/corporate .pkg"
+	@echo "  make notarize    нотариально заверить release DMG"
 	@echo "  make stop        завершить установленное приложение"
 	@echo "  make uninstall   переместить установленное приложение в Корзину"
 	@echo "  make clean       удалить build-артефакты"
@@ -33,7 +38,6 @@ test:
 lint:
 	uv run ruff format --check .
 	uv run ruff check .
-	node --check src/photo_curator/web/static/app.js
 
 vision-helper:
 	mkdir -p "$(CURDIR)/build/native"
@@ -51,30 +55,39 @@ coreml-helper:
 	  src/photo_curator/analysis/native/photo_curator_coreml.swift \
 	  -o "$(CURDIR)/build/native/photo-curator-coreml"
 
+gallery-benchmark:
+	mkdir -p "$(CURDIR)/build/evidence"
+	xcrun swiftc -swift-version 5 -parse-as-library -O \
+	  -target "$$(uname -m)-apple-macosx13.0" \
+	  -framework SwiftUI -framework AppKit \
+	  packaging/macos/PhotoCuratorModels.swift \
+	  packaging/macos/GalleryBenchmark.swift \
+	  -o "$(CURDIR)/build/evidence/gallery-benchmark"
+	"$(CURDIR)/build/evidence/gallery-benchmark" \
+	  > "$(CURDIR)/build/evidence/gallery-benchmark.json"
+	@echo "$(CURDIR)/build/evidence/gallery-benchmark.json"
+
 app build:
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" packaging/macos/build_app.sh
+
+pkg: app
+	INSTALLER_SIGN_IDENTITY="$(INSTALLER_SIGN_IDENTITY)" \
+	packaging/macos/build_installer.sh "$(APP)" "$(PKG)"
 
 verify-app:
 	bash packaging/macos/verify_app.sh "$(APP)"
 
+verify-dmg:
+	bash packaging/macos/verify_dmg.sh "$(DMG)"
+
+verify-pkg:
+	bash packaging/macos/verify_installer.sh "$(PKG)"
+
 notarize:
-	bash packaging/macos/notarize_app.sh "$(APP)" "$(NOTARY_KEY)" "$(NOTARY_KEY_ID)" "$(NOTARY_ISSUER_ID)"
+	bash packaging/macos/notarize_app.sh "$(APP)" "$(DMG)" "$(NOTARY_KEY)" "$(NOTARY_KEY_ID)" "$(NOTARY_ISSUER_ID)"
 
 install: app
-	mkdir -p "$(INSTALL_DIR)"
-	@/usr/bin/osascript -e 'tell application id "local.photo-curator.app" to quit' >/dev/null 2>&1 || true
-	@for attempt in 1 2 3 4 5; do pgrep -x PhotoCurator >/dev/null || break; sleep 1; done
-	@if [[ -e "$(INSTALLED_APP)" ]]; then \
-	  backup="$(INSTALLED_APP).previous"; \
-	  /bin/rm -rf "$$backup"; \
-	  mv "$(INSTALLED_APP)" "$$backup"; \
-	  /usr/bin/ditto "$(APP)" "$(INSTALLED_APP)"; \
-	  /bin/rm -rf "$$backup"; \
-	else \
-	  /usr/bin/ditto "$(APP)" "$(INSTALLED_APP)"; \
-	fi
-	/usr/bin/codesign --verify --deep --strict --verbose=2 "$(INSTALLED_APP)"
-	/usr/bin/open "$(INSTALLED_APP)"
+	packaging/macos/install_dmg.sh "$(DMG)" "$(INSTALL_DIR)"
 
 run: app
 	/usr/bin/open "$(APP)"

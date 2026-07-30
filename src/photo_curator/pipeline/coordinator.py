@@ -8,7 +8,12 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event, Lock, Semaphore
 
-from photo_curator.analysis.decision_engine import DecisionResult, decide_asset
+from photo_curator.analysis.decision_engine import (
+    DECISION_MODEL_VERSION,
+    DecisionResult,
+    album_selection_threshold,
+    decide_asset,
+)
 from photo_curator.analysis.diversity import diversity_evidence
 from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_equivalence_hash
 from photo_curator.analysis.image_loader import load_normalized
@@ -114,9 +119,25 @@ class PipelineCoordinator:
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)
             job_id = repository.create_job(connection, project_id, "inventory", 0)
-        assets = [
-            asset for asset in self.provider.list_assets(str(project["album_id"])) if asset.is_photo
-        ]
+
+        def report_progress(processed: int, total: int) -> None:
+            self._check_cancelled(project_id)
+            with database_connection(self.database_path) as connection:
+                connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (total, job_id))
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=processed,
+                    message=f"PhotoKit: подготовлено {processed} из {total}",
+                )
+
+        streaming = getattr(self.provider, "list_assets_with_progress", None)
+        source_assets = (
+            streaming(str(project["album_id"]), report_progress)
+            if streaming
+            else self.provider.list_assets(str(project["album_id"]))
+        )
+        assets = [asset for asset in source_assets if asset.is_photo]
         self._check_cancelled(project_id)
         with database_connection(self.database_path) as connection:
             connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (len(assets), job_id))
@@ -540,12 +561,16 @@ class PipelineCoordinator:
                 )
                 for asset in assets
             ]
+            selected_threshold = album_selection_threshold(
+                [score.score for score in swipe_scores], density
+            )
             decisions = [
                 decide_asset(
                     asset,
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
                     swipe_score,
+                    selected_threshold=selected_threshold,
                 )
                 for asset, swipe_score in zip(assets, swipe_scores, strict=True)
             ]
@@ -554,12 +579,16 @@ class PipelineCoordinator:
                 _apply_diversity_to_score(score, diversity[str(asset["asset_uuid"])])
                 for asset, score in zip(assets, swipe_scores, strict=True)
             ]
+            selected_threshold = album_selection_threshold(
+                [score.score for score in swipe_scores], density
+            )
             decisions = [
                 decide_asset(
                     asset,
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
                     swipe_score,
+                    selected_threshold=selected_threshold,
                 )
                 for asset, swipe_score in zip(assets, swipe_scores, strict=True)
             ]
@@ -570,12 +599,9 @@ class PipelineCoordinator:
                 if diversity_item.demoted:
                     decision = replace(
                         decision,
-                        disposition="review",
+                        disposition="reject",
                         flags=sorted({*decision.flags, "diversity_limit"}),
-                        reasons=[
-                            *decision.reasons,
-                            _diversity_reason(diversity_item, demoted=True),
-                        ],
+                        reasons=[_diversity_reason(diversity_item, demoted=True)],
                     )
                 repository.upsert_swipe_score(
                     connection,
@@ -622,6 +648,14 @@ class PipelineCoordinator:
                 )[:best_count]
             }
             repository.mark_best_candidates(connection, project_id, best)
+            repository.update_project_settings(
+                connection,
+                project_id,
+                {
+                    "decision_model_version": DECISION_MODEL_VERSION,
+                    "selection_threshold": selected_threshold,
+                },
+            )
             repository.update_job(connection, job_id, status="done", processed=len(assets))
 
 
@@ -670,7 +704,7 @@ def _apply_diversity_to_score(score, evidence):
 
 def _diversity_reason(evidence, *, demoted: bool) -> dict[str, object]:
     reason: dict[str, object] = {
-        "code": "similar_scene" if demoted else "adds_variety",
+        "code": "too_similar_to_selected" if demoted else "adds_variety",
         "value": evidence.value,
     }
     if evidence.nearest_uuid:

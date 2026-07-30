@@ -8,7 +8,7 @@
 
 ```bash
 uv sync
-uv run photo-curator legacy-web --demo --no-browser
+PHOTO_CURATOR_NATIVE_DEMO=1 make run
 ```
 
 Runtime-данные хранятся в стандартных каталогах macOS:
@@ -18,10 +18,9 @@ Runtime-данные хранятся в стандартных каталога
 - `~/Library/Logs/PhotoCurator/photo-curator.log` — локальный log.
 
 Нативное приложение читает поддерживаемые альбомы через публичный PhotoKit helper и
-публикует подтверждённый Best-альбом через отдельный PhotoKit helper. Переходный
-`legacy-web` использует публичный Python API `osxphotos` только как read-only adapter и
-документированный `batch-edit` после dry-run. Прямые записи в Photos DB и UI scripting
-запрещены во всех режимах.
+публикует подтверждённый Best-альбом через отдельный PhotoKit helper. CLI `doctor`
+использует публичный Python API `osxphotos` только как read-only diagnostic adapter.
+Прямые записи в Photos DB и UI scripting запрещены во всех режимах.
 
 ## Разрешения macOS
 
@@ -51,22 +50,25 @@ uv run pytest --cov=photo_curator
 ## Сборка macOS-приложения
 
 `make app` собирает minimal frozen JSONL worker через PyInstaller, компилирует SwiftUI app,
-создаёт `build/macos/PhotoCurator.app`, подписывает весь bundle и проверяет подпись.
+создаёт `build/macos/PhotoCurator.app`, подписывает и проверяет bundle, затем всегда
+выпускает проверенный drag-and-drop образ `build/macos/PhotoCurator.dmg`.
 Полученный `.app` self-contained; сборочная машина должна иметь Xcode Command Line Tools,
-Python 3.12, `uv`, `qlmanage`, `iconutil` и `codesign`.
+Python 3.12, `uv`, `qlmanage`, `iconutil`, `codesign` и `hdiutil`.
 
 ```bash
 make app
 make verify-app
-make install                         # /Applications/PhotoCurator.app
-make install INSTALL_DIR="$HOME/Applications" # только для текущего пользователя
+make verify-dmg
+make install # установка из DMG без повышения прав
+make install INSTALL_DIR="$HOME/Applications"
 make app SIGN_IDENTITY="Developer ID Application: Example (TEAMID)"
+make pkg # optional package для admin/corporate deployment
 ```
 
 Native app владеет worker-процессом и обменивается с ним versioned JSONL через
 stdin/stdout; browser, HTTP и localhost не используются. При `⌘Q` app посылает protocol
-shutdown, затем завершает worker. Native bundle entrypoint не включает FastAPI, Jinja,
-web assets и `osxphotos`; legacy web CLI остаётся только в development environment.
+shutdown, затем завершает worker. FastAPI, Jinja и web assets удалены из source tree;
+native bundle entrypoint также не включает `osxphotos`.
 
 Перед релизом дополнительно проверить demo workflow, Quick Look, keyboard/undo,
 restart/cancel/resume, отсутствие TCP listener и source paths в JSONL payload, а также

@@ -13,6 +13,8 @@
 - `swipe_scores` с generic score, personal delta, confidence, components и reasons;
 - `preference_examples` с явными A/B choices и provenance;
 - `taste_profiles` с feature schema, parameters, training/evaluation evidence и status;
+- `taste_rounds` с тремя сохраняемыми Top-3-of-10 раундами onboarding;
+- `taste_assets` с локальными review-render и Vision feature vectors выбранного bounded sample;
 - `model_registry` с immutable name/version, streaming SHA-256, license/source,
   explicit commercial-use flag, Core ML compute policy, lifecycle status и versioned
   compatibility/runtime/held-out uplift evidence. Изменившаяся модель становится invalid;

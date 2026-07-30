@@ -9,25 +9,33 @@ from collections.abc import Callable
 from pathlib import Path
 
 from photo_curator.paths import ApplicationPaths
-from photo_curator.utils.subprocesses import CommandResult, find_executable, run_command
+from photo_curator.utils.subprocesses import (
+    CommandResult,
+    find_executable,
+    run_command,
+    run_streaming_command,
+)
 
 LOGGER = logging.getLogger(__name__)
 SOURCE = Path(__file__).parent / "native" / "photo_curator_publish.swift"
 INFO_PLIST = Path(__file__).parent / "native" / "PhotoCuratorPublish-Info.plist"
+PublishProgress = Callable[[str, int, int], None]
 
 
 class NativePhotosImporter:
-    """Publish local image files through the public PhotoKit API without Photos UI."""
+    """Create independent Photos assets through the public PhotoKit API."""
 
     def __init__(
         self,
         paths: ApplicationPaths,
         *,
         runner: Callable[..., CommandResult] = run_command,
+        streaming_runner=None,
         enabled: bool = True,
     ) -> None:
         self.paths = paths
         self.runner = runner
+        self.streaming_runner = run_streaming_command if runner is run_command else streaming_runner
         self.enabled = enabled
         bundled = os.environ.get("PHOTO_CURATOR_PUBLISH_HELPER")
         self.bundled_executable = Path(bundled) if bundled else None
@@ -48,23 +56,47 @@ class NativePhotosImporter:
             try:
                 self._ensure_compiled()
                 result = self.runner([str(self.executable), "--capability"], timeout=30)
-                self._capability = result.returncode == 0 and "photokit-publish" in result.stdout
+                self._capability = (
+                    result.returncode == 0 and "photokit-publish-duplicates-v2" in result.stdout
+                )
             except Exception:
                 LOGGER.warning("Native PhotoKit publisher unavailable", exc_info=True)
                 self._capability = False
         return self._capability
 
-    def publish(self, album_name: str, files: list[Path]) -> dict[str, object]:
+    def publish(
+        self,
+        album_name: str,
+        files: list[Path],
+        *,
+        progress: PublishProgress | None = None,
+    ) -> dict[str, object]:
         return self._publish_request(
-            {"album_name": album_name, "files": [str(path) for path in files]}
+            {"album_name": album_name, "files": [str(path) for path in files]},
+            progress=progress,
         )
 
-    def publish_assets(self, album_name: str, asset_identifiers: list[str]) -> dict[str, object]:
+    def duplicate_assets(
+        self,
+        album_name: str,
+        asset_identifiers: list[str],
+        *,
+        progress: PublishProgress | None = None,
+    ) -> dict[str, object]:
         return self._publish_request(
-            {"album_name": album_name, "asset_identifiers": asset_identifiers}
+            {
+                "album_name": album_name,
+                "duplicate_asset_identifiers": asset_identifiers,
+            },
+            progress=progress,
         )
 
-    def _publish_request(self, payload: dict[str, object]) -> dict[str, object]:
+    def _publish_request(
+        self,
+        payload: dict[str, object],
+        *,
+        progress: PublishProgress | None = None,
+    ) -> dict[str, object]:
         if not self.capability_available:
             raise ValueError("Нативная публикация в Photos недоступна")
         request_dir = self.paths.cache_dir / "_native_publish"
@@ -75,16 +107,55 @@ class NativePhotosImporter:
             encoding="utf-8",
         )
         try:
-            result = self.runner([str(self.executable), str(request_path)], timeout=3600)
+            if self.streaming_runner:
+                final_result: dict[str, object] | None = None
+
+                def handle_line(line: str) -> None:
+                    nonlocal final_result
+                    try:
+                        frame = json.loads(line)
+                    except json.JSONDecodeError as error:
+                        raise ValueError("PhotoKit helper вернул некорректный JSONL") from error
+                    if not isinstance(frame, dict):
+                        raise ValueError("PhotoKit helper вернул некорректный JSONL frame")
+                    if frame.get("type") == "progress":
+                        if progress:
+                            progress(
+                                str(frame.get("phase") or "prepare"),
+                                int(frame.get("processed") or 0),
+                                int(frame.get("total") or 0),
+                            )
+                        return
+                    if frame.get("type") == "result" and isinstance(frame.get("result"), dict):
+                        final_result = frame["result"]
+                        return
+                    raise ValueError("PhotoKit helper вернул неизвестный JSONL frame")
+
+                result = self.streaming_runner(
+                    [str(self.executable), "--jsonl", str(request_path)],
+                    on_stdout_line=handle_line,
+                    timeout=3600,
+                )
+            else:
+                final_result = None
+                result = self.runner([str(self.executable), str(request_path)], timeout=3600)
         finally:
             request_path.unlink(missing_ok=True)
         if result.returncode != 0:
             lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
             raise ValueError((lines[-1] if lines else "PhotoKit publish failed")[-500:])
+        if final_result is not None:
+            return final_result
         try:
-            return json.loads(result.stdout.splitlines()[-1])
+            parsed = json.loads(result.stdout.splitlines()[-1])
         except (IndexError, json.JSONDecodeError) as error:
             raise ValueError("PhotoKit helper вернул некорректный результат") from error
+        if not isinstance(parsed, dict):
+            raise ValueError("PhotoKit helper вернул некорректный результат")
+        total = len(payload.get("duplicate_asset_identifiers") or payload.get("files") or [])
+        if progress:
+            progress("commit", total, total)
+        return parsed
 
     def _ensure_compiled(self) -> None:
         if self.bundled_executable:

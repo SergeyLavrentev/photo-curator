@@ -68,6 +68,46 @@ def capture_preference(
     )
 
 
+def capture_preference_vectors(
+    connection,
+    *,
+    left_uuid: str,
+    right_uuid: str,
+    preferred_uuid: str,
+    left_feature_schema: str,
+    left_feature_base64: str,
+    right_feature_schema: str,
+    right_feature_base64: str,
+    split: str = "calibration",
+    profile_id: str = "default",
+) -> str:
+    """Persist an explicit preference collected outside an analysis project."""
+    if preferred_uuid not in {left_uuid, right_uuid}:
+        raise TasteProfileError("preferred_uuid должен быть одним из сравниваемых фото")
+    if left_feature_schema != right_feature_schema:
+        raise TasteProfileError("Feature schema пары не совпадает")
+    # Decode now so corrupt or incompatible vectors never enter the profile.
+    for encoded in (left_feature_base64, right_feature_base64):
+        try:
+            vector = np.frombuffer(base64.b64decode(encoded, validate=True), dtype="<f4")
+        except (ValueError, TypeError) as error:
+            raise TasteProfileError("Preference feature data повреждены") from error
+        if vector.size <= 0 or not np.all(np.isfinite(vector)):
+            raise TasteProfileError("Preference feature data некорректны")
+    return repository.add_preference_example(
+        connection,
+        profile_id=profile_id,
+        project_id=None,
+        left_uuid=left_uuid,
+        right_uuid=right_uuid,
+        preferred_uuid=preferred_uuid,
+        split=split,
+        feature_schema=left_feature_schema,
+        left_feature_base64=left_feature_base64,
+        right_feature_base64=right_feature_base64,
+    )
+
+
 def train_taste_profile(connection, profile_id: str = "default") -> dict[str, object]:
     repository.ensure_taste_profile(connection, profile_id)
     examples = repository.list_preference_examples(connection, profile_id)

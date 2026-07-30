@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -334,6 +334,40 @@ ON quality_asset_labels(project_id, duplicate_group)
 WHERE duplicate_group IS NOT NULL;
 """
 
+MIGRATION_11 = """
+CREATE TABLE taste_rounds (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    album_id TEXT NOT NULL,
+    album_name TEXT NOT NULL,
+    round_index INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    candidate_json TEXT NOT NULL,
+    selected_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (profile_id) REFERENCES taste_profiles(id) ON DELETE CASCADE,
+    UNIQUE(profile_id, round_index)
+);
+CREATE INDEX taste_rounds_profile_status
+ON taste_rounds(profile_id, status, round_index);
+
+CREATE TABLE taste_assets (
+    profile_id TEXT NOT NULL,
+    asset_uuid TEXT NOT NULL,
+    album_id TEXT NOT NULL,
+    filename TEXT,
+    taken_at TEXT,
+    review_path TEXT NOT NULL,
+    feature_schema TEXT NOT NULL,
+    feature_base64 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (profile_id, asset_uuid),
+    FOREIGN KEY (profile_id) REFERENCES taste_profiles(id) ON DELETE CASCADE
+);
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -380,4 +414,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 10:
         connection.executescript(MIGRATION_10)
         connection.execute("PRAGMA user_version = 10")
+        version = 10
+    if version < 11:
+        connection.executescript(MIGRATION_11)
+        connection.execute("PRAGMA user_version = 11")
     connection.commit()

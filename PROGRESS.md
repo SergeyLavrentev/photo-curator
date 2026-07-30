@@ -1,5 +1,11 @@
 # Progress
 
+- 2026-07-30: закрыт следующий hardening layer: PhotoKit source/publish helpers получили
+  streaming JSONL progress до SwiftUI, gallery перешла на страницы по 100 карточек и
+  асинхронный bounded thumbnail cache, добавлен реальный SwiftUI benchmark 2k/5k и
+  fail-closed quality comparison против frozen baseline. Добавлена воспроизводимая команда
+  живого PhotoKit acceptance. FastAPI/Jinja/HTML/JavaScript runtime и legacy web CLI
+  окончательно удалены. Локальная TCC-проверка ожидает выдачи Photo Curator доступа к Фото.
 - 2026-07-30: product-hardening audit убрал неявный legacy web fallback (`legacy-web`
   теперь только explicit command), исправил выдачу latest job per stage и фиксированный
   six-stage progress, добавил first-run onboarding до запроса Photos, показ текущей

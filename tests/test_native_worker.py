@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,64 @@ def test_native_worker_exposes_projects_ranked_assets_and_decisions_without_http
     assert changed["manual_disposition"] == "keep"
     assert "source_path" not in changed
 
+    second_page = worker.dispatch("assets", {"project_id": project_id, "offset": 5, "limit": 3})
+    assert second_page["offset"] == 5
+    assert len(second_page["items"]) == 3
+    assert second_page["items"][0]["asset_uuid"] == assets["items"][5]["asset_uuid"]
+    kept = worker.dispatch(
+        "assets",
+        {"project_id": project_id, "disposition": "keep", "limit": 5000},
+    )
+    assert kept["total"] > 0
+    assert all(item["final_disposition"] == "keep" for item in kept["items"])
+    batch_ids = [item["asset_uuid"] for item in assets["items"][:2]]
+    batch = worker.dispatch(
+        "decisions_batch",
+        {
+            "project_id": project_id,
+            "asset_uuids": batch_ids,
+            "disposition": "reject",
+        },
+    )
+    assert batch["updated"] == 2
+    rejected_ids = {
+        item["asset_uuid"]
+        for item in worker.dispatch(
+            "assets",
+            {"project_id": project_id, "disposition": "reject", "limit": 5000},
+        )["items"]
+    }
+    assert set(batch_ids) <= rejected_ids
+
+
+def test_native_worker_migrates_legacy_review_decisions_to_binary_buckets(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    with database_connection(paths.database) as connection:
+        asset_uuid = str(repository.list_assets(connection, project_id)[0]["asset_uuid"])
+        connection.execute(
+            """
+            UPDATE decisions
+            SET auto_disposition='review', manual_disposition='review',
+                final_disposition='review', manual_override=1
+            WHERE project_id=? AND asset_uuid=?
+            """,
+            (project_id, asset_uuid),
+        )
+
+    migrated = worker.dispatch("binary_decisions", {"project_id": project_id})
+
+    assert migrated["resolved"] == 1
+    assert migrated["summary"]["review"] == 0
+    assert migrated["summary"]["keep"] + migrated["summary"]["reject"] == 12
+    with database_connection(paths.database) as connection:
+        asset = repository.get_asset(connection, project_id, asset_uuid)
+    assert asset["final_disposition"] in {"keep", "reject"}
+    assert asset["manual_disposition"] is None
+
 
 def test_jsonl_worker_protocol_is_versioned_correlated_and_stops_cleanly(tmp_path: Path) -> None:
     paths, provider, coordinator, _ = build_pipeline(tmp_path)
@@ -59,7 +118,7 @@ def test_jsonl_worker_protocol_is_versioned_correlated_and_stops_cleanly(tmp_pat
 
     assert result == 0
     assert [response["id"] for response in responses] == ["one", "two", "three"]
-    assert responses[0]["result"]["worker_schema_version"] == 1
+    assert responses[0]["result"]["worker_schema_version"] == 2
     assert responses[1]["error"]["type"] == "NativeWorkerError"
     assert responses[2]["result"] == {"status": "bye"}
 
@@ -102,6 +161,61 @@ def test_native_worker_can_create_project_directly_from_shared_album(tmp_path: P
 
     assert created["album_id"] == "demo-shared-album"
     assert created["album_name"] == "Семейный Shared Album"
+
+
+def test_native_worker_keeps_history_until_explicit_project_delete(tmp_path: Path) -> None:
+    paths, provider, coordinator, preserved_project_id = build_pipeline(tmp_path)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    abandoned = worker.dispatch(
+        "create_project",
+        {"album_id": provider.ALBUM_ID, "selection_density": "balanced"},
+    )
+    preserved_cache = paths.cache_dir / preserved_project_id
+    abandoned_cache = paths.cache_dir / abandoned["id"]
+    preserved_cache.mkdir(parents=True, exist_ok=True)
+    abandoned_cache.mkdir(parents=True, exist_ok=True)
+    (abandoned_cache / "preview.jpg").touch()
+    shared_cache = paths.cache_dir / "photokit-renders"
+    shared_cache.mkdir(parents=True, exist_ok=True)
+    (shared_cache / "render.jpg").touch()
+
+    result = worker.dispatch("cleanup_abandoned_projects", {})
+
+    assert result["removed_project_ids"] == []
+    assert preserved_cache.is_dir()
+    assert abandoned_cache.is_dir()
+    assert shared_cache.is_dir()
+    assert len(worker.dispatch("projects", {})) == 2
+
+    deleted = worker.dispatch("delete_project", {"project_id": abandoned["id"]})
+
+    assert deleted == {"status": "deleted", "project_id": abandoned["id"]}
+    assert preserved_cache.is_dir()
+    assert not abandoned_cache.exists()
+    assert shared_cache.is_dir()
+    assert [project["id"] for project in worker.dispatch("projects", {})] == [preserved_project_id]
+
+
+def test_native_worker_restart_removes_only_incomplete_cache_files(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    project_cache = paths.cache_dir / project_id
+    project_cache.mkdir(parents=True, exist_ok=True)
+    completed = project_cache / "completed.jpg"
+    incomplete_preview = project_cache / ".preview-orphan.jpg"
+    incomplete_sips = project_cache / ".001.jpg.sips.jpg"
+    native_request = paths.cache_dir / "_native_vision/request.input.json"
+    completed.touch()
+    incomplete_preview.touch()
+    incomplete_sips.touch()
+    native_request.parent.mkdir(parents=True, exist_ok=True)
+    native_request.touch()
+
+    NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    assert completed.is_file()
+    assert not incomplete_preview.exists()
+    assert not incomplete_sips.exists()
+    assert not native_request.parent.exists()
 
 
 def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> None:
@@ -184,6 +298,76 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     assert worker.dispatch("taste_status", {"paused": True})["status"] == "paused"
     assert worker.dispatch("taste_reset", {}) == {"status": "deleted"}
     assert worker.dispatch("taste_profile", {})["preference_count"] == 0
+
+
+def test_native_taste_onboarding_trains_from_three_top_three_rounds(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, _ = build_pipeline(tmp_path)
+    originals = list(provider._assets)
+    provider._assets = [
+        replace(
+            originals[index % len(originals)],
+            uuid=f"taste-{index:02d}",
+            taken_at=f"2026-07-{index + 1:02d}T12:00:00+03:00",
+        )
+        for index in range(30)
+    ]
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    seen: set[str] = set()
+    pending = worker.dispatch(
+        "taste_round_prepare",
+        {"album_id": provider.ALBUM_ID},
+    )
+    assert pending["round"]["round_number"] == 1
+    cancelled = worker.dispatch("taste_round_cancel", {})
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["profile"]["onboarding_rounds_completed"] == 0
+
+    for expected_round in range(1, 4):
+        prepared = worker.dispatch(
+            "taste_round_prepare",
+            {"album_id": provider.ALBUM_ID},
+        )
+        round_value = prepared["round"]
+        assert round_value["round_number"] == expected_round
+        assert len(round_value["photos"]) == 10
+        resumed = worker.dispatch(
+            "taste_round_prepare",
+            {"album_id": provider.ALBUM_ID},
+        )
+        assert resumed["round"]["id"] == round_value["id"]
+        photo_ids = [photo["asset_uuid"] for photo in round_value["photos"]]
+        assert not seen.intersection(photo_ids)
+        seen.update(photo_ids)
+
+        submitted = worker.dispatch(
+            "taste_round_submit",
+            {
+                "round_id": round_value["id"],
+                "selected_uuids": photo_ids[:3],
+            },
+        )
+        profile = submitted["profile"]
+        assert profile["onboarding_rounds_completed"] == expected_round
+
+    assert profile["onboarding_complete"] is True
+    assert profile["status"] == "ready"
+    assert profile["calibration_count"] == 54
+    assert profile["held_out_count"] == 9
+    assert profile["training_examples"] == 54
+    assert profile["evidence"]["onboarding_version"] == 2
+
+    restored = worker.dispatch("taste_profile", {})
+    assert restored["onboarding_complete"] is True
+    assert restored["preference_count"] == 63
+    worker.dispatch("taste_reset", {})
+    reset = worker.dispatch("taste_profile", {})
+    assert reset["onboarding_rounds_completed"] == 0
+    assert reset["onboarding_complete"] is False
+    with database_connection(paths.database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM taste_rounds").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM taste_assets").fetchone()[0] == 0
 
 
 def test_native_worker_rejects_unknown_resume_stage(tmp_path: Path) -> None:

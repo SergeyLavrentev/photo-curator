@@ -84,7 +84,7 @@ def test_selection_density_changes_the_size_of_the_auto_selection() -> None:
         luma_mean=0.5,
     )
 
-    assert decide_asset(borderline, None, "compact").disposition == "review"
+    assert decide_asset(borderline, None, "compact").disposition == "reject"
     assert decide_asset(borderline, None, "broad").disposition == "keep"
 
 
@@ -138,7 +138,7 @@ def test_near_duplicate_requires_both_confidence_and_quality_margin() -> None:
         },
     )
 
-    assert without_margin.disposition == "review"
+    assert without_margin.disposition == "reject"
     assert with_margin.disposition == "reject"
 
 

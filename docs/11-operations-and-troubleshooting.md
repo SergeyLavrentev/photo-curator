@@ -43,9 +43,9 @@ UI показывает размер и counts. Возможны очистка 
 
 Проверить `/usr/bin/sips`, сохранить stderr, попробовать derivative fallback.
 
-### `osxphotos` publish unavailable (legacy web)
+### `osxphotos` unavailable in CLI doctor
 
-Оставить проект в read-only review mode. Не применять direct DB или UI scripting workaround.
+Не применять direct DB или UI scripting workaround; нативная публикация использует PhotoKit.
 
 ### Source drift
 

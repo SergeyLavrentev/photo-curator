@@ -17,6 +17,7 @@ from photo_curator.analysis.native_vision import (
 )
 from photo_curator.cli import run_vision_benchmark_command
 from photo_curator.paths import default_application_paths
+from photo_curator.utils.subprocesses import CommandResult
 from tests.test_pipeline import build_pipeline
 
 
@@ -72,6 +73,55 @@ def test_native_vision_helper_compiles_and_returns_versioned_signals(tmp_path: P
     assert snapshot["project_id"] == "project"
     assert snapshot["engine"]["name"] == "apple-vision-aesthetics"
     assert 0 <= snapshot["scores"]["sample"] <= 100
+
+
+def test_native_vision_splits_large_requests_and_merges_complete_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = default_application_paths(tmp_path / "app")
+    paths.ensure()
+    assets = []
+    for index in range(5):
+        image_path = tmp_path / f"{index}.jpg"
+        image_path.touch()
+        assets.append((f"asset-{index}", image_path))
+    batch_sizes: list[int] = []
+
+    def runner(command: list[str], *, timeout: int) -> CommandResult:
+        del timeout
+        request = json.loads(Path(command[1]).read_text(encoding="utf-8"))
+        rows = request["assets"]
+        batch_sizes.append(len(rows))
+        payload = {
+            "schema_version": 1,
+            "engine": {"name": "apple-vision-native", "version": "1"},
+            "capabilities": {"aesthetics": True},
+            "assets": [{"asset_uuid": row["asset_uuid"], "errors": {}} for row in rows],
+            "summary": {
+                "asset_count": len(rows),
+                "successful_assets": len(rows),
+                "wall_time_ms": 10,
+                "peak_rss_bytes": 1024,
+                "stage_durations": {},
+            },
+        }
+        Path(command[2]).write_text(json.dumps(payload), encoding="utf-8")
+        return CommandResult(command, 0, "", "")
+
+    monkeypatch.setattr("photo_curator.analysis.native_vision.DEFAULT_BATCH_SIZE", 2)
+    engine = NativeVisionEngine(paths, runner=runner, swiftc="/usr/bin/false")
+    engine._is_bundled = True
+    engine.executable.parent.mkdir(parents=True, exist_ok=True)
+    engine.executable.touch()
+
+    result = engine.analyze(assets)
+
+    assert batch_sizes == [2, 2, 1]
+    assert result["summary"]["asset_count"] == 5
+    assert result["summary"]["successful_assets"] == 5
+    assert [row["asset_uuid"] for row in result["assets"]] == [
+        asset_uuid for asset_uuid, _ in assets
+    ]
 
 
 def test_cli_benchmarks_ready_project_and_exports_acceptance_scores(

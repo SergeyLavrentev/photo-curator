@@ -10,36 +10,16 @@ Release tooling также не сохраняет credentials в Keychain: nota
 указанный App Store Connect API `.p8` file, key ID и issuer ID. Сам `.p8` не входит в
 репозиторий и должен иметь доступ только для владельца.
 
-## Legacy web: loopback only
+## Local IPC
 
-Этот раздел относится только к explicit `legacy-web`; нативное приложение не поднимает
-HTTP server и не слушает localhost.
-
-Server bind:
-
-```text
-127.0.0.1
-```
-
-Не использовать `0.0.0.0`.
-
-## Session bootstrap
-
-- cryptographically random startup token;
-- initial token URL;
-- SameSite=Strict cookie;
-- redirect на URL без token.
-
-## Mutating requests
-
-- CSRF token;
-- CORS disabled;
-- Host allowlist `127.0.0.1`, `localhost`;
-- methods/Content-Type validation.
+Нативное приложение не поднимает HTTP server и не слушает localhost. SwiftUI общается
+только с дочерним worker через versioned stdin/stdout JSONL, correlation ID и фиксированный
+набор методов. Worker не принимает произвольные executable paths или shell commands.
 
 ## Media isolation
 
-Client никогда не передаёт filesystem path. Server строит cache path из validated project ID и asset UUID.
+Worker возвращает только review/thumbnail paths внутри service-owned cache. Запросы клиента
+адресуют проекты и фото через validated project ID и asset UUID.
 
 ## Subprocesses
 

@@ -5,6 +5,41 @@ import QuickLookUI
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum WorkflowStep: Int, CaseIterable, Identifiable {
+    case taste
+    case album
+    case analysis
+    case selection
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .taste: return "Персонализация"
+        case .album: return "Альбом"
+        case .analysis: return "Анализ"
+        case .selection: return "Отбор"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .taste: return "heart.text.square"
+        case .album: return "photo.on.rectangle.angled"
+        case .analysis: return "sparkles"
+        case .selection: return "square.grid.3x3"
+        }
+    }
+}
+
+enum SelectionBucket: String, CaseIterable, Identifiable {
+    case keep
+    case reject
+
+    var id: String { rawValue }
+    var title: String { self == .keep ? "Хорошие" : "Плохие" }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var workerStatus = "Запуск локального движка…"
@@ -16,20 +51,39 @@ final class AppModel: ObservableObject {
     @Published var density: String {
         didSet { UserDefaults.standard.set(density, forKey: "selectionDensity") }
     }
+    @Published var projects: [ProjectItem] = []
     @Published var project: ProjectItem?
+    @Published var analysisDraftActive = false
     @Published var jobs: [JobItem] = []
     @Published var photos: [PhotoItem] = []
+    @Published var photosTotal = 0
+    @Published var selectionBucket: SelectionBucket = .keep
+    @Published var keptTotal = 0
+    @Published var rejectedTotal = 0
+    @Published var isLoadingPhotos = false
     @Published var errorMessage: String?
     @Published var isBusy = false
     @Published var operationMessage: String?
     @Published var publishPlan: PublishPlan?
     @Published var publishMessage: String?
+    @Published var publishProcessed = 0
+    @Published var publishTotal = 0
     @Published var tasteStatus = "Не настроен"
     @Published var tasteExamples = 0
     @Published var tasteCalibrationExamples = 0
     @Published var tasteHeldOutExamples = 0
-    @Published var tastePair: TastePair?
-    @Published var tasteRemaining = 0
+    @Published var tasteRound: TasteRound?
+    @Published var tasteSelectedIDs: Set<String> = []
+    @Published var tasteSourceAlbumID: String {
+        didSet {
+            UserDefaults.standard.set(tasteSourceAlbumID, forKey: "tasteSourceAlbumID")
+        }
+    }
+    @Published var tasteRoundsCompleted = 0
+    @Published var tasteRoundsTotal = 3
+    @Published var tasteOnboardingComplete = false
+    @Published var tasteProgressProcessed = 0
+    @Published var tasteProgressTotal = 0
     @Published var tasteMessage: String?
     @Published var qualityMessage: String?
     @Published var qualitySeriesSelection: Set<String> = []
@@ -40,8 +94,11 @@ final class AppModel: ObservableObject {
     @Published var qualityReleaseReady = false
     @Published var isTasteBusy = false
     @Published var selectedPhotoID: String?
+    @Published var selectedPhotoIDs: Set<String> = []
+    @Published var detailPhoto: PhotoItem?
     @Published var photoAccessNeedsAction = false
     @Published var hasCompletedOnboarding: Bool
+    @Published var currentStep: WorkflowStep = .taste
 
     let worker = NativeWorkerClient()
     let developerToolsEnabled =
@@ -50,13 +107,19 @@ final class AppModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var permissionHelpTask: Task<Void, Never>?
     private var decisionHistory: [DecisionUndo] = []
+    private var binaryProjects: Set<String> = []
     private var hasStarted = false
+    private let galleryPageSize = 48
+    private let retainedProjectDefaultsKey = "retainedProjectID"
+    private let currentDecisionModelVersion = 2
 
     init() {
         selectedAlbumID = UserDefaults.standard.string(forKey: "selectedAlbumID") ?? ""
         let savedDensity = UserDefaults.standard.string(forKey: "selectionDensity") ?? "balanced"
         density = ["compact", "balanced", "broad"].contains(savedDensity)
             ? savedDensity : "balanced"
+        tasteSourceAlbumID =
+            UserDefaults.standard.string(forKey: "tasteSourceAlbumID") ?? ""
         hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "didCompleteOnboardingV1")
     }
 
@@ -99,6 +162,24 @@ final class AppModel: ObservableObject {
         if project?.state == "interrupted" { return "Анализ остановлен — его можно продолжить" }
         if project?.state == "ready" { return "Анализ завершён — подборка готова к проверке" }
         return "Подготовка анализа"
+    }
+
+    func canOpen(_ step: WorkflowStep) -> Bool {
+        switch step {
+        case .taste:
+            return project?.state != "running"
+        case .album:
+            return tasteOnboardingComplete && project?.state != "running"
+        case .analysis:
+            return project != nil && !analysisDraftActive
+        case .selection:
+            return project?.state == "ready" && !analysisDraftActive
+        }
+    }
+
+    func open(_ step: WorkflowStep) {
+        guard canOpen(step) else { return }
+        currentStep = step
     }
 
     func start() {
@@ -172,8 +253,11 @@ final class AppModel: ObservableObject {
                 tasteExamples = 0
                 tasteCalibrationExamples = 0
                 tasteHeldOutExamples = 0
-                tastePair = nil
-                tasteMessage = "Профиль вкуса удалён. Используется общий Swipe Score."
+                tasteRound = nil
+                tasteSelectedIDs = []
+                tasteRoundsCompleted = 0
+                tasteOnboardingComplete = false
+                tasteMessage = "Профиль удалён. Настройте вкус заново перед новым анализом."
                 await refreshDecisionsForTaste()
             } catch { errorMessage = error.localizedDescription }
         }
@@ -291,6 +375,15 @@ final class AppModel: ObservableObject {
     }
 
     func createAndAnalyze() {
+        if !analysisDraftActive, let project, project.state == "created" {
+            startExistingProject(project)
+            return
+        }
+        guard tasteOnboardingComplete else {
+            errorMessage = "Сначала завершите три раунда персонализации"
+            currentStep = .taste
+            return
+        }
         guard !selectedAlbumID.isEmpty else {
             errorMessage = "Сначала выберите альбом"
             return
@@ -299,9 +392,12 @@ final class AppModel: ObservableObject {
         operationMessage = "Создаём локальный проект…"
         errorMessage = nil
         photos = []
+        selectionBucket = .keep
+        keptTotal = 0
+        rejectedTotal = 0
+        binaryProjects.removeAll()
         selectedPhotoID = nil
         decisionHistory = []
-        tastePair = nil
         tasteMessage = nil
         qualitySeriesSelection.removeAll()
         qualityMessage = nil
@@ -311,6 +407,8 @@ final class AppModel: ObservableObject {
         qualitySeriesCount = 0
         qualityReleaseReady = false
         publishPlan = nil
+        currentStep = .analysis
+        UserDefaults.standard.removeObject(forKey: retainedProjectDefaultsKey)
         Task {
             do {
                 let created = try await call("create_project", [
@@ -321,7 +419,28 @@ final class AppModel: ObservableObject {
                     throw NativeWorkerClientError.invalidResponse
                 }
                 self.project = project
+                analysisDraftActive = false
+                updateProjectInList(project)
+                UserDefaults.standard.set(project.id, forKey: retainedProjectDefaultsKey)
                 operationMessage = "Запускаем анализ…"
+                _ = try await call("start_analysis", ["project_id": project.id])
+                isBusy = false
+                operationMessage = nil
+                startPolling(projectID: project.id)
+            } catch {
+                isBusy = false
+                operationMessage = nil
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func startExistingProject(_ project: ProjectItem) {
+        isBusy = true
+        operationMessage = "Запускаем анализ…"
+        currentStep = .analysis
+        Task {
+            do {
                 _ = try await call("start_analysis", ["project_id": project.id])
                 isBusy = false
                 operationMessage = nil
@@ -369,23 +488,57 @@ final class AppModel: ObservableObject {
 
     func setDecision(photoID: String, disposition: String?, recordUndo: Bool = true) {
         guard let project else { return }
-        let previousManual = photos.first(where: { $0.id == photoID })?.manualDisposition
+        guard let initialIndex = photos.firstIndex(where: { $0.id == photoID }) else { return }
+        let previousPhoto = photos[initialIndex]
+        let previousManual = previousPhoto.manualDisposition
+        selectedPhotoID = photoID
+        selectedPhotoIDs.remove(photoID)
+        if let disposition {
+            adjustDecisionCounts(from: previousPhoto.disposition, to: disposition)
+            photos[initialIndex].disposition = disposition
+            photos[initialIndex].manualDisposition = disposition
+            if disposition != selectionBucket.rawValue {
+                photos.remove(at: initialIndex)
+                photosTotal = max(0, photosTotal - 1)
+                selectedPhotoID = photos.indices.contains(initialIndex)
+                    ? photos[initialIndex].id : photos.last?.id
+            }
+        }
         Task {
             do {
                 var params: [String: Any] = ["project_id": project.id, "asset_uuid": photoID]
                 params["disposition"] = disposition ?? NSNull()
                 let result = try await call("decision", params)
                 if let value = result as? [String: Any],
-                   let updated = PhotoItem(value),
-                   let index = photos.firstIndex(where: { $0.id == photoID })
+                   let updated = PhotoItem(value)
                 {
-                    photos[index] = updated
+                    if let index = photos.firstIndex(where: { $0.id == photoID }) {
+                        photos[index] = updated
+                    }
                     if recordUndo && previousManual != disposition {
-                        decisionHistory.append(DecisionUndo(photoID: photoID, previous: previousManual))
+                        decisionHistory.append(
+                            DecisionUndo(
+                                photoID: photoID,
+                                previousManual: previousManual,
+                                previousFinal: previousPhoto.disposition,
+                                changedTo: disposition
+                            )
+                        )
                     }
                 }
                 await loadQualityStatus(projectID: project.id)
-            } catch { errorMessage = error.localizedDescription }
+            } catch {
+                if let disposition {
+                    adjustDecisionCounts(from: disposition, to: previousPhoto.disposition)
+                }
+                if let index = photos.firstIndex(where: { $0.id == photoID }) {
+                    photos[index] = previousPhoto
+                } else {
+                    photos.insert(previousPhoto, at: min(initialIndex, photos.count))
+                    photosTotal += 1
+                }
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -470,9 +623,29 @@ final class AppModel: ObservableObject {
     }
 
     func undoLastDecision() {
-        guard let change = decisionHistory.popLast() else { return }
-        selectedPhotoID = change.photoID
-        setDecision(photoID: change.photoID, disposition: change.previous, recordUndo: false)
+        guard let change = decisionHistory.popLast(), let project else { return }
+        Task {
+            do {
+                let result = try await call("decision", [
+                    "project_id": project.id,
+                    "asset_uuid": change.photoID,
+                    "disposition": change.previousManual ?? NSNull(),
+                ])
+                guard let value = result as? [String: Any], let restored = PhotoItem(value) else {
+                    throw NativeWorkerClientError.invalidResponse
+                }
+                adjustDecisionCounts(
+                    from: change.changedTo,
+                    to: restored.disposition ?? change.previousFinal
+                )
+                await loadPhotos(projectID: project.id)
+                selectedPhotoID = photos.contains(where: { $0.id == restored.id })
+                    ? restored.id : photos.first?.id
+            } catch {
+                decisionHistory.append(change)
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     func previewSelected() {
@@ -482,40 +655,137 @@ final class AppModel: ObservableObject {
         QuickLookController.shared.show(path: path)
     }
 
-    func chooseTaste(preferredID: String) {
-        guard let project, let pair = tastePair else { return }
+    func openPhotoDetails(photoID: String) {
+        selectedPhotoID = photoID
+        detailPhoto = photos.first(where: { $0.id == photoID })
+    }
+
+    func togglePhotoSelection(photoID: String) {
+        selectedPhotoID = photoID
+        if selectedPhotoIDs.contains(photoID) {
+            selectedPhotoIDs.remove(photoID)
+        } else {
+            selectedPhotoIDs.insert(photoID)
+        }
+    }
+
+    func selectAllVisiblePhotos() {
+        selectedPhotoIDs = Set(photos.map(\.id))
+    }
+
+    func clearPhotoSelection() {
+        selectedPhotoIDs.removeAll()
+    }
+
+    func setSelectedPhotosDecision(_ disposition: String) {
+        guard let project, !selectedPhotoIDs.isEmpty else { return }
+        let ids = Array(selectedPhotoIDs)
+        isBusy = true
+        Task {
+            defer { isBusy = false }
+            do {
+                let result = try await call("decisions_batch", [
+                    "project_id": project.id,
+                    "asset_uuids": ids,
+                    "disposition": disposition,
+                ])
+                if let value = result as? [String: Any] {
+                    applyProjectSummary(value["summary"] as? [String: Any])
+                }
+                selectedPhotoIDs.removeAll()
+                await loadPhotos(projectID: project.id)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func prepareTasteRound() {
+        guard !tasteSourceAlbumID.isEmpty, !tasteOnboardingComplete else { return }
         isTasteBusy = true
+        tasteProgressProcessed = 0
+        tasteProgressTotal = 10
         tasteMessage = nil
         Task {
             defer { isTasteBusy = false }
             do {
-                let result = try await call("taste_preference", [
-                    "project_id": project.id,
-                    "left_uuid": pair.left.id,
-                    "right_uuid": pair.right.id,
-                    "preferred_uuid": preferredID,
-                ])
+                let result = try await call(
+                    "taste_round_prepare",
+                    ["album_id": tasteSourceAlbumID]
+                ) { [weak self] event in
+                    guard event["kind"] as? String == "taste_progress" else { return }
+                    let processed = event["processed"] as? Int ?? 0
+                    let total = event["total"] as? Int ?? 10
+                    Task { @MainActor [weak self] in
+                        self?.tasteProgressProcessed = processed
+                        self?.tasteProgressTotal = total
+                    }
+                }
+                guard let value = result as? [String: Any] else {
+                    throw NativeWorkerClientError.invalidResponse
+                }
+                if let profile = value["profile"] as? [String: Any] {
+                    applyTasteProfile(profile)
+                }
+                tasteRound = (value["round"] as? [String: Any]).flatMap(TasteRound.init)
+                tasteSelectedIDs = []
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func toggleTasteSelection(_ photoID: String) {
+        guard let round = tasteRound else { return }
+        if tasteSelectedIDs.contains(photoID) {
+            tasteSelectedIDs.remove(photoID)
+        } else if tasteSelectedIDs.count < round.selectionLimit {
+            tasteSelectedIDs.insert(photoID)
+        }
+    }
+
+    func cancelTasteRound() {
+        guard tasteRound != nil, !isTasteBusy else { return }
+        isTasteBusy = true
+        Task {
+            defer { isTasteBusy = false }
+            do {
+                let result = try await call("taste_round_cancel")
                 if let value = result as? [String: Any],
                    let profile = value["profile"] as? [String: Any]
                 {
                     applyTasteProfile(profile)
                 }
-                await loadQualityStatus(projectID: project.id)
-                if tasteCalibrationExamples >= 3 {
-                    let trained = try await call("taste_train")
-                    if let profile = trained as? [String: Any] { applyTasteProfile(profile) }
-                    tastePair = nil
-                    tasteMessage = "Вкус обновлён. Пересчитываем Swipe Score…"
-                    _ = try await call("start_analysis", [
-                        "project_id": project.id,
-                        "from_stage": "decisions",
-                    ])
-                    try await Task.sleep(nanoseconds: 250_000_000)
-                    startPolling(projectID: project.id)
-                } else {
-                    await loadTastePair(projectID: project.id)
-                    tasteMessage = "Выбор сохранён. Ещё \(max(0, 3 - tasteCalibrationExamples))."
-                }
+                tasteRound = nil
+                tasteSelectedIDs = []
+                tasteMessage = "Раунд отменён. Выберите другой альбом."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func submitTasteRound() {
+        guard let round = tasteRound, tasteSelectedIDs.count == round.selectionLimit else {
+            return
+        }
+        isTasteBusy = true
+        tasteMessage = nil
+        let selected = Array(tasteSelectedIDs).sorted()
+        Task {
+            defer { isTasteBusy = false }
+            do {
+                let result = try await call("taste_round_submit", [
+                    "round_id": round.id,
+                    "selected_uuids": selected,
+                ])
+                guard let value = result as? [String: Any],
+                      let profile = value["profile"] as? [String: Any]
+                else { throw NativeWorkerClientError.invalidResponse }
+                applyTasteProfile(profile)
+                tasteRound = nil
+                tasteSelectedIDs = []
+                tasteMessage = tasteOnboardingComplete
+                    ? "Профиль готов: модель обучена на ваших выборах."
+                    : "Раунд сохранён. Можно выбрать другой альбом для следующего."
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -523,7 +793,9 @@ final class AppModel: ObservableObject {
     func preparePublish() {
         guard let project else { return }
         isBusy = true
-        operationMessage = "Проверяем выбранные фото и готовим план импорта…"
+        publishProcessed = 0
+        publishTotal = 0
+        operationMessage = "Проверяем выбранные фото и готовим независимые копии…"
         Task {
             defer {
                 isBusy = false
@@ -545,7 +817,9 @@ final class AppModel: ObservableObject {
     func applyPublish() {
         guard let publishPlan else { return }
         isBusy = true
-        operationMessage = "Импортируем \(publishPlan.itemCount) фото в Photos…"
+        publishProcessed = 0
+        publishTotal = publishPlan.itemCount
+        operationMessage = "Создаём \(publishPlan.itemCount) независимых копий в Photos…"
         Task {
             defer {
                 isBusy = false
@@ -555,13 +829,86 @@ final class AppModel: ObservableObject {
                 let result = try await call("publish_apply", [
                     "publish_id": publishPlan.id,
                     "confirmed": true,
-                ])
+                ]) { [weak self] event in
+                    guard event["kind"] as? String == "publish_progress" else { return }
+                    let processed = event["processed"] as? Int ?? 0
+                    let total = event["total"] as? Int ?? publishPlan.itemCount
+                    let phase = event["phase"] as? String ?? "prepare"
+                    Task { @MainActor [weak self] in
+                        self?.publishProcessed = processed
+                        self?.publishTotal = total
+                        self?.operationMessage = phase == "commit"
+                            ? "PhotoKit сохраняет альбом…"
+                            : "Подготовлено \(processed) из \(total) фото…"
+                    }
+                }
                 let value = result as? [String: Any]
                 publishMessage = value?["status"] as? String == "applied"
-                    ? "Готово: одобренная подборка сохранена в Photos."
+                    ? "Готово: независимые копии сохранены в новом Best‑альбоме."
                     : "Публикация завершена."
                 self.publishPlan = nil
             } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func beginNewAnalysis() {
+        guard project?.state != "running" else { return }
+        analysisDraftActive = true
+        publishPlan = nil
+        publishMessage = nil
+        currentStep = tasteOnboardingComplete ? .album : .taste
+    }
+
+    func cancelNewAnalysis() {
+        analysisDraftActive = false
+        guard let project else {
+            currentStep = tasteOnboardingComplete ? .album : .taste
+            return
+        }
+        Task {
+            await restoreProject(project)
+        }
+    }
+
+    func selectProject(_ selected: ProjectItem) {
+        guard project?.id != selected.id || analysisDraftActive else { return }
+        analysisDraftActive = false
+        pollTask?.cancel()
+        project = selected
+        UserDefaults.standard.set(selected.id, forKey: retainedProjectDefaultsKey)
+        if (albums + sharedAlbums).contains(where: { $0.id == selected.albumID }) {
+            selectedAlbumID = selected.albumID
+        }
+        Task { await restoreProject(selected) }
+    }
+
+    func deleteProject(_ target: ProjectItem) {
+        guard target.state != "running" else {
+            errorMessage = "Сначала остановите выполняющийся анализ"
+            return
+        }
+        isBusy = true
+        Task {
+            defer { isBusy = false }
+            do {
+                _ = try await call("delete_project", ["project_id": target.id])
+                projects.removeAll { $0.id == target.id }
+                if project?.id == target.id {
+                    pollTask?.cancel()
+                    resetProject()
+                    if let next = projects.first {
+                        project = next
+                        UserDefaults.standard.set(next.id, forKey: retainedProjectDefaultsKey)
+                        await restoreProject(next)
+                    } else {
+                        UserDefaults.standard.removeObject(forKey: retainedProjectDefaultsKey)
+                        analysisDraftActive = true
+                        currentStep = tasteOnboardingComplete ? .album : .taste
+                    }
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -574,6 +921,9 @@ final class AppModel: ObservableObject {
             workerStatus = "Локальный движок готов"
             let rawAlbums = try await callWithRetry("albums", attempts: 3)
             let rawTaste = try await call("taste_profile")
+            let retainedProjectID = UserDefaults.standard.string(
+                forKey: retainedProjectDefaultsKey
+            )
             let rawProjects = try await call("projects")
             if let groups = rawAlbums as? [String: Any] {
                 albums = (groups["regular"] as? [[String: Any]] ?? []).compactMap(AlbumItem.init)
@@ -582,17 +932,29 @@ final class AppModel: ObservableObject {
                 if !availableIDs.contains(selectedAlbumID) {
                     selectedAlbumID = albums.first?.id ?? sharedAlbums.first?.id ?? ""
                 }
+                if !availableIDs.contains(tasteSourceAlbumID) {
+                    tasteSourceAlbumID = (albums + sharedAlbums)
+                        .filter { $0.photoCount >= 10 }
+                        .max(by: { $0.photoCount < $1.photoCount })?.id ?? ""
+                }
             }
             if let taste = rawTaste as? [String: Any] { applyTasteProfile(taste) }
-            let projects = (rawProjects as? [[String: Any]] ?? []).compactMap(ProjectItem.init)
-            if let restored = projects.first(where: {
-                $0.state == "ready" || $0.state == "running" || $0.state == "interrupted"
-            }) {
+            projects = (rawProjects as? [[String: Any]] ?? []).compactMap(ProjectItem.init)
+            let restorable = projects.filter {
+                ["created", "ready", "running", "interrupted", "error"].contains($0.state)
+            }
+            if let restored =
+                restorable.first(where: { $0.id == retainedProjectID }) ?? restorable.first
+            {
                 project = restored
                 if (albums + sharedAlbums).contains(where: { $0.id == restored.albumID }) {
                     selectedAlbumID = restored.albumID
                 }
                 await restoreProject(restored)
+            } else {
+                UserDefaults.standard.removeObject(forKey: retainedProjectDefaultsKey)
+                analysisDraftActive = true
+                currentStep = tasteOnboardingComplete ? .album : .taste
             }
         } catch {
             workerStatus = "Ошибка: \(error.localizedDescription)"
@@ -643,7 +1005,9 @@ final class AppModel: ObservableObject {
                           let updated = ProjectItem(rawProject)
                     else { throw NativeWorkerClientError.invalidResponse }
                     project = updated
+                    updateProjectInList(updated)
                     jobs = (value["jobs"] as? [[String: Any]] ?? []).compactMap(JobItem.init)
+                    applyProjectSummary(value["summary"] as? [String: Any])
                     if updated.state == "ready" {
                         operationMessage = nil
                         await loadPhotos(projectID: projectID)
@@ -670,17 +1034,59 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func loadPhotos(projectID: String) async {
+    private func loadPhotos(projectID: String, append: Bool = false) async {
+        guard !isLoadingPhotos else { return }
+        isLoadingPhotos = true
+        defer { isLoadingPhotos = false }
         do {
-            let result = try await call("assets", ["project_id": projectID])
+            if !binaryProjects.contains(projectID) {
+                let normalized = try await call("binary_decisions", ["project_id": projectID])
+                if let value = normalized as? [String: Any] {
+                    applyProjectSummary(value["summary"] as? [String: Any])
+                }
+                binaryProjects.insert(projectID)
+            }
+            let offset = append ? photos.count : 0
+            let result = try await call("assets", [
+                "project_id": projectID,
+                "disposition": selectionBucket.rawValue,
+                "offset": offset,
+                "limit": galleryPageSize,
+            ])
             let value = result as? [String: Any]
-            photos = (value?["items"] as? [[String: Any]] ?? []).compactMap(PhotoItem.init)
+            let page = (value?["items"] as? [[String: Any]] ?? []).compactMap(PhotoItem.init)
+            photosTotal = value?["total"] as? Int ?? page.count
+            if append {
+                let known = Set(photos.map(\.id))
+                photos.append(contentsOf: page.filter { !known.contains($0.id) })
+            } else {
+                photos = page
+            }
             if !photos.contains(where: { $0.id == selectedPhotoID }) {
                 selectedPhotoID = photos.first?.id
             }
-            await loadTastePair(projectID: projectID)
-            await loadQualityStatus(projectID: projectID)
+            if !append {
+                UserDefaults.standard.set(projectID, forKey: retainedProjectDefaultsKey)
+                selectedPhotoIDs.removeAll()
+                currentStep = .selection
+                await loadQualityStatus(projectID: projectID)
+            }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    func loadMorePhotos() {
+        guard let project, photos.count < photosTotal, !isLoadingPhotos else { return }
+        Task { await loadPhotos(projectID: project.id, append: true) }
+    }
+
+    func showSelection(_ bucket: SelectionBucket) {
+        guard selectionBucket != bucket, let project else { return }
+        selectionBucket = bucket
+        photos = []
+        photosTotal = bucket == .keep ? keptTotal : rejectedTotal
+        selectedPhotoID = nil
+        selectedPhotoIDs.removeAll()
+        Task { await loadPhotos(projectID: project.id) }
     }
 
     private func restoreProject(_ restored: ProjectItem) async {
@@ -691,33 +1097,83 @@ final class AppModel: ObservableObject {
                   let updated = ProjectItem(rawProject)
             else { throw NativeWorkerClientError.invalidResponse }
             project = updated
+            updateProjectInList(updated)
             jobs = (value["jobs"] as? [[String: Any]] ?? []).compactMap(JobItem.init)
+            applyProjectSummary(value["summary"] as? [String: Any])
             if updated.state == "running" {
+                currentStep = .analysis
                 startPolling(projectID: updated.id)
             } else if updated.state == "ready" {
-                await loadPhotos(projectID: updated.id)
+                if updated.decisionModelVersion < currentDecisionModelVersion {
+                    operationMessage = "Обновляем критерии отбора…"
+                    _ = try await call("start_analysis", [
+                        "project_id": updated.id,
+                        "from_stage": "decisions",
+                    ])
+                    currentStep = .analysis
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                    startPolling(projectID: updated.id)
+                } else {
+                    await loadPhotos(projectID: updated.id)
+                }
+            } else {
+                currentStep = .analysis
             }
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func loadTastePair(projectID: String) async {
-        do {
-            let result = try await call("taste_pair", ["project_id": projectID])
-            guard let value = result as? [String: Any] else {
-                throw NativeWorkerClientError.invalidResponse
-            }
-            tasteRemaining = value["remaining"] as? Int ?? 0
-            tastePair = (value["pair"] as? [String: Any]).flatMap(TastePair.init)
-            if tasteMessage?.contains("Пересчитываем") == true {
-                tasteMessage = "Swipe Score обновлён с учётом вашего вкуса."
-            }
-        } catch { errorMessage = error.localizedDescription }
+    private func resetProject() {
+        pollTask?.cancel()
+        project = nil
+        jobs = []
+        photos = []
+        photosTotal = 0
+        selectionBucket = .keep
+        keptTotal = 0
+        rejectedTotal = 0
+        binaryProjects.removeAll()
+        selectedPhotoID = nil
+        selectedPhotoIDs.removeAll()
+        decisionHistory = []
+        publishPlan = nil
+        publishMessage = nil
+        qualitySeriesSelection.removeAll()
+    }
+
+    private func updateProjectInList(_ updated: ProjectItem) {
+        projects.removeAll { $0.id == updated.id }
+        projects.insert(updated, at: 0)
+    }
+
+    private func applyProjectSummary(_ summary: [String: Any]?) {
+        guard let summary else { return }
+        keptTotal = summary["keep"] as? Int ?? keptTotal
+        rejectedTotal = summary["reject"] as? Int ?? rejectedTotal
+    }
+
+    private func adjustDecisionCounts(from previous: String?, to updated: String?) {
+        guard previous != updated else { return }
+        switch previous {
+        case "keep": keptTotal = max(0, keptTotal - 1)
+        case "reject": rejectedTotal = max(0, rejectedTotal - 1)
+        default: break
+        }
+        switch updated {
+        case "keep": keptTotal += 1
+        case "reject": rejectedTotal += 1
+        default: break
+        }
     }
 
     private func applyTasteProfile(_ value: [String: Any]) {
         tasteExamples = value["preference_count"] as? Int ?? tasteExamples
         tasteCalibrationExamples = value["calibration_count"] as? Int ?? tasteCalibrationExamples
         tasteHeldOutExamples = value["held_out_count"] as? Int ?? tasteHeldOutExamples
+        tasteRoundsCompleted =
+            value["onboarding_rounds_completed"] as? Int ?? tasteRoundsCompleted
+        tasteRoundsTotal = value["onboarding_rounds_total"] as? Int ?? tasteRoundsTotal
+        tasteOnboardingComplete =
+            value["onboarding_complete"] as? Bool ?? tasteOnboardingComplete
         tasteStatus = value["status"] as? String ?? "Не настроен"
     }
 
@@ -746,10 +1202,14 @@ final class AppModel: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func call(_ method: String, _ params: [String: Any] = [:]) async throws -> Any {
+    private func call(
+        _ method: String,
+        _ params: [String: Any] = [:],
+        progress: (([String: Any]) -> Void)? = nil
+    ) async throws -> Any {
         let worker = worker
         return try await Task.detached(priority: .userInitiated) {
-            try worker.request(method: method, params: params)
+            try worker.request(method: method, params: params, progress: progress)
         }.value
     }
 
@@ -778,7 +1238,9 @@ final class AppModel: ObservableObject {
 
 private struct DecisionUndo {
     let photoID: String
-    let previous: String?
+    let previousManual: String?
+    let previousFinal: String?
+    let changedTo: String?
 }
 
 final class QuickLookController: NSObject, QLPreviewPanelDataSource {
@@ -846,14 +1308,11 @@ struct PhotoCuratorApplication: App {
                     .keyboardShortcut(.space, modifiers: [])
                     .disabled(model.selectedPhotoID == nil)
                 Divider()
-                Button("Оставить") { model.decideSelected("keep") }
+                Button("Отнести к хорошим") { model.decideSelected("keep") }
                     .keyboardShortcut("1", modifiers: [])
                     .disabled(model.selectedPhotoID == nil)
-                Button("На проверку") { model.decideSelected("review") }
+                Button("Отнести к плохим") { model.decideSelected("reject") }
                     .keyboardShortcut("2", modifiers: [])
-                    .disabled(model.selectedPhotoID == nil)
-                Button("Не брать") { model.decideSelected("reject") }
-                    .keyboardShortcut("3", modifiers: [])
                     .disabled(model.selectedPhotoID == nil)
                 Divider()
                 Button("Отменить решение") { model.undoLastDecision() }
@@ -871,6 +1330,9 @@ struct PhotoCuratorApplication: App {
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var analysisDetailsExpanded = true
+    @State private var confirmsAnalysisStop = false
+    @State private var projectPendingDeletion: ProjectItem?
 
     var body: some View {
         Group {
@@ -901,19 +1363,94 @@ struct RootView: View {
             }
             Button("Отмена", role: .cancel) { model.publishPlan = nil }
         } message: {
-            Text("Исходный альбом не изменится. Будет создан только новый Best‑альбом.")
+            Text(
+                "В Photos будут созданы независимые копии. Их удаление из Best‑альбома не затронет фотографии исходного альбома."
+            )
+        }
+        .confirmationDialog(
+            "Остановить анализ?",
+            isPresented: $confirmsAnalysisStop,
+            titleVisibility: .visible
+        ) {
+            Button("Остановить и сохранить прогресс") {
+                model.cancelAnalysis()
+            }
+            Button("Продолжить анализ", role: .cancel) {}
+        } message: {
+            Text("Завершённые этапы и подготовленные изображения останутся в локальном кэше. Анализ можно будет продолжить без повторной работы.")
+        }
+        .confirmationDialog(
+            "Удалить анализ?",
+            isPresented: Binding(
+                get: { projectPendingDeletion != nil },
+                set: { if !$0 { projectPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Удалить анализ и его локальный кэш", role: .destructive) {
+                if let target = projectPendingDeletion {
+                    model.deleteProject(target)
+                }
+                projectPendingDeletion = nil
+            }
+            Button("Отмена", role: .cancel) { projectPendingDeletion = nil }
+        } message: {
+            Text(
+                "Исходный альбом Photos не изменится. Будут удалены только результаты этого анализа и его локальный кэш."
+            )
+        }
+        .sheet(item: $model.detailPhoto) { photo in
+            PhotoDetailView(photo: photo)
         }
     }
 
     private var workflow: some View {
         NavigationSplitView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
                 Label("Photo Curator", systemImage: "camera.aperture")
                     .font(.title2.bold())
-                StepLabel(number: 1, title: "Выбрать альбом", active: model.project == nil)
-                StepLabel(number: 2, title: "Настроить вкус", active: model.project == nil)
-                StepLabel(number: 3, title: "Анализ", active: model.project?.state == "running")
-                StepLabel(number: 4, title: "Проверить и сохранить", active: !model.photos.isEmpty)
+                Divider()
+                Text("ИНСТРУМЕНТЫ")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                Button {
+                    model.beginNewAnalysis()
+                } label: {
+                    Label("Новый анализ", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                .disabled(
+                    model.isBusy || model.analysisDraftActive || model.project?.state == "running"
+                )
+                if model.analysisDraftActive {
+                    HStack {
+                        Label("Новый анализ", systemImage: "doc.badge.plus")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button("Отменить") { model.cancelNewAnalysis() }
+                            .buttonStyle(.borderless)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                }
+                Text("АНАЛИЗЫ")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(model.projects) { project in
+                            ProjectSidebarRow(
+                                project: project,
+                                active: model.project?.id == project.id
+                                    && !model.analysisDraftActive,
+                                deleteDisabled: project.state == "running" || model.isBusy,
+                                select: { model.selectProject(project) },
+                                delete: { projectPendingDeletion = project }
+                            )
+                        }
+                    }
+                }
                 Spacer()
                 Label(
                     model.workerStatus,
@@ -926,33 +1463,109 @@ struct RootView: View {
             .padding(24)
             .navigationSplitViewColumnWidth(min: 220, ideal: 250)
         } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    header
-                    sourceSection
-                    tasteSection
-                    analysisSection
-                    if !model.photos.isEmpty { reviewSection }
-                }
-                .padding(34)
-                .frame(maxWidth: 1280, alignment: .leading)
+            VStack(spacing: 0) {
+                workflowTabs
+                Divider()
+                currentStepContent
             }
             .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Ваши лучшие фотографии")
-                .font(.system(size: 36, weight: .bold, design: .rounded))
-            Text("Swipe Score находит кадры, которые хочется оставить, а вы принимаете финальное решение.")
+    private var workflowTabs: some View {
+        HStack(spacing: 4) {
+            ForEach(WorkflowStep.allCases) { step in
+                Button {
+                    model.open(step)
+                } label: {
+                    VStack(spacing: 6) {
+                        Label(step.title, systemImage: step.symbol)
+                            .font(.subheadline.weight(
+                                model.currentStep == step ? .semibold : .regular
+                            ))
+                        Capsule()
+                            .fill(model.currentStep == step ? Color.accentColor : .clear)
+                            .frame(height: 3)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(
+                    model.currentStep == step
+                        ? Color.primary
+                        : model.canOpen(step) ? Color.secondary : Color.secondary.opacity(0.4)
+                )
+                .disabled(!model.canOpen(step))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    @ViewBuilder
+    private var currentStepContent: some View {
+        switch model.currentStep {
+        case .taste:
+            setupScreen(
+                title: "Настройте вкус куратора",
+                subtitle: "Три раза выберите три лучших кадра из десяти — модель запомнит, что нравится именно вам."
+            ) { tasteSection }
+        case .album:
+            setupScreen(
+                title: "Выберите фотографии для анализа",
+                subtitle: "Теперь персональный профиль будет применён к выбранному альбому."
+            ) { sourceSection }
+        case .analysis:
+            setupScreen(
+                title: "Анализ фотографий",
+                subtitle: "Photo Curator локально сравнивает качество, серии и композицию."
+            ) { analysisSection }
+        case .selection:
+            reviewSection
+        }
+    }
+
+    private func setupScreen<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                screenHeader(title: title, subtitle: subtitle)
+                content()
+            }
+            .padding(32)
+            .frame(maxWidth: 1120, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+    }
+
+    private func screenHeader(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+            Text(subtitle)
                 .font(.title3)
                 .foregroundStyle(.secondary)
         }
     }
 
+    private var densityExplanation: String {
+        switch model.density {
+        case "compact":
+            return "Самый строгий вариант: в будущий Best‑альбом сервис предложит меньше фотографий — только самые уверенные результаты. Исходный альбом анализируется целиком."
+        case "broad":
+            return "Более широкий вариант: в будущий Best‑альбом сервис предложит больше хороших и пограничных кадров. Исходный альбом анализируется целиком."
+        default:
+            return "Рекомендуемый баланс: сервис предложит в будущий Best‑альбом лучшие кадры и оставит спорные для вашей проверки. Исходный альбом анализируется целиком."
+        }
+    }
+
     private var sourceSection: some View {
-        StepCard(number: 1, title: "Выберите альбом", symbol: "photo.on.rectangle.angled") {
+        StepCard(number: 2, title: "Выберите альбом", symbol: "photo.on.rectangle.angled") {
             if model.albums.isEmpty {
                 if model.photoAccessNeedsAction {
                     Label(
@@ -985,45 +1598,166 @@ struct RootView: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-                Picker("Объём подборки", selection: $model.density) {
+                Text("Размер итогового Best‑альбома")
+                    .font(.subheadline.weight(.semibold))
+                Picker("Размер итогового Best‑альбома", selection: $model.density) {
                     Text("Компактная").tag("compact")
                     Text("Сбалансированная").tag("balanced")
                     Text("Широкая").tag("broad")
                 }
                 .pickerStyle(.segmented)
+                Text(densityExplanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if !model.sharedAlbums.isEmpty {
                 Label("Для общего альбома PhotoKit подготовит локальные review‑копии; источник не изменится.", systemImage: "person.2")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            HStack {
+                if model.analysisDraftActive {
+                    Button("Отменить новый анализ") { model.cancelNewAnalysis() }
+                } else {
+                    Button("Назад к персонализации") { model.open(.taste) }
+                }
+                Spacer()
+                Button("Начать анализ") {
+                    model.createAndAnalyze()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    model.selectedAlbumID.isEmpty
+                        || !model.tasteOnboardingComplete
+                        || model.isBusy
+                )
+            }
         }
     }
 
     private var tasteSection: some View {
-        StepCard(number: 2, title: "Персональный вкус — опционально", symbol: "heart.text.square") {
-            Text(model.tasteExamples > 0
-                 ? "Профиль: \(model.tasteStatusTitle). Обучающих: \(model.tasteCalibrationExamples), проверочных: \(model.tasteHeldOutExamples)."
-                 : "Можно начать без настройки. После анализа выберите лучший из пары кадров.")
-                .foregroundStyle(.secondary)
-            if let pair = model.tastePair {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Какой кадр вы бы оставили?").font(.headline)
-                    HStack(spacing: 14) {
-                        TasteChoiceCard(photo: pair.left, disabled: model.isTasteBusy) {
-                            model.chooseTaste(preferredID: pair.left.id)
-                        }
-                        TasteChoiceCard(photo: pair.right, disabled: model.isTasteBusy) {
-                            model.chooseTaste(preferredID: pair.right.id)
-                        }
-                    }
-                    Text("Три выбора дают первую настройку. Фотографии и исходный альбом не изменяются.")
-                        .font(.caption).foregroundStyle(.secondary)
+        StepCard(number: 1, title: "Три коротких раунда", symbol: "heart.text.square") {
+            HStack(spacing: 12) {
+                ForEach(1...model.tasteRoundsTotal, id: \.self) { index in
+                    Label(
+                        "Раунд \(index)",
+                        systemImage: index <= model.tasteRoundsCompleted
+                            ? "checkmark.circle.fill" : "circle"
+                    )
+                    .foregroundStyle(
+                        index <= model.tasteRoundsCompleted ? Color.green : Color.secondary
+                    )
                 }
             }
-            if model.isTasteBusy { ProgressView("Запоминаем выбор…") }
+            if model.tasteOnboardingComplete {
+                Label(
+                    "Профиль готов: \(model.tasteCalibrationExamples) обучающих и \(model.tasteHeldOutExamples) контрольных сравнений.",
+                    systemImage: "checkmark.circle.fill"
+                )
+                .foregroundStyle(.green)
+                Text("Photo Curator будет учитывать этот профиль во всех следующих анализах.")
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("Выбрать альбом для анализа") { model.open(.album) }
+                        .buttonStyle(.borderedProminent)
+                }
+            } else if let round = model.tasteRound {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Раунд \(round.roundNumber) из \(round.roundTotal)")
+                                .font(.headline)
+                            Text("Источник: \(round.albumName)")
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Сменить альбом") { model.cancelTasteRound() }
+                            .disabled(model.isTasteBusy)
+                        Text("Выбрано \(model.tasteSelectedIDs.count) из \(round.selectionLimit)")
+                            .font(.headline.monospacedDigit())
+                            .foregroundStyle(
+                                model.tasteSelectedIDs.count == round.selectionLimit
+                                    ? Color.green : Color.secondary
+                            )
+                    }
+                    Text("Кликните на три фотографии, которые нравятся вам больше остальных.")
+                        .foregroundStyle(.secondary)
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.adaptive(minimum: 140, maximum: 190), spacing: 12)
+                        ],
+                        spacing: 12
+                    ) {
+                        ForEach(round.photos) { photo in
+                            TasteGridCard(
+                                photo: photo,
+                                selected: model.tasteSelectedIDs.contains(photo.id),
+                                disabled: model.isTasteBusy
+                            ) {
+                                model.toggleTasteSelection(photo.id)
+                            }
+                        }
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Сохранить выбор") { model.submitTasteRound() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(
+                                model.tasteSelectedIDs.count != round.selectionLimit
+                                    || model.isTasteBusy
+                            )
+                    }
+                }
+            } else {
+                Text(
+                    model.tasteRoundsCompleted == 0
+                        ? "Для первого раунда выберите альбом с фотографиями, которые вам знакомы."
+                        : "Можно продолжить с тем же альбомом или выбрать другой источник."
+                )
+                    .foregroundStyle(.secondary)
+                Picker("Источник фотографий", selection: $model.tasteSourceAlbumID) {
+                    ForEach((model.albums + model.sharedAlbums).filter { $0.photoCount >= 10 }) {
+                        album in
+                        Text("\(album.name) · \(album.photoCount) фото").tag(album.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                HStack {
+                    Text("В раундах используются разные фотографии; исходники не изменяются.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Показать 10 фотографий") { model.prepareTasteRound() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.tasteSourceAlbumID.isEmpty || model.isTasteBusy)
+                }
+            }
+            if model.isTasteBusy {
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(
+                        value: Double(model.tasteProgressProcessed),
+                        total: Double(max(1, model.tasteProgressTotal))
+                    ) {
+                        Text("Подготавливаем фотографии локально…")
+                    }
+                    Text(
+                        "\(model.tasteProgressProcessed) из \(max(10, model.tasteProgressTotal))"
+                    )
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+            }
             if let message = model.tasteMessage {
                 Label(message, systemImage: "heart.fill").foregroundStyle(.pink)
+            }
+            if !model.tasteOnboardingComplete {
+                Label(
+                    "Альбом для анализа станет доступен после трёх раундов.",
+                    systemImage: "lock.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
     }
@@ -1045,7 +1779,7 @@ struct RootView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                DisclosureGroup("Детали этапов") {
+                DisclosureGroup("Детали этапов", isExpanded: $analysisDetailsExpanded) {
                     ForEach(model.jobs) { job in
                         HStack {
                             Image(systemName: jobStatusSymbol(job.status))
@@ -1059,21 +1793,29 @@ struct RootView: View {
                 }
             }
             if model.project?.state == "interrupted" {
+                Label(
+                    "Анализ остановлен. Готовые этапы и изображения сохранены в локальном кэше; продолжение не начнёт их заново.",
+                    systemImage: "externaldrive.badge.checkmark"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 Button {
                     model.resumeAnalysis()
                 } label: {
                     Label("Продолжить с прерванного этапа", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity).padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(model.isBusy)
-            } else {
+                Button("Начать другой анализ") {
+                    model.beginNewAnalysis()
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.isBusy)
+            } else if model.project?.state != "ready" {
                 Button {
                     model.createAndAnalyze()
                 } label: {
-                    Label(model.project == nil ? "Начать анализ" : "Создать новый анализ", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                    Label("Начать анализ", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -1081,10 +1823,9 @@ struct RootView: View {
             }
             if model.project?.state == "running" {
                 Button(role: .destructive) {
-                    model.cancelAnalysis()
+                    confirmsAnalysisStop = true
                 } label: {
                     Label("Остановить анализ", systemImage: "stop.fill")
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
             }
@@ -1092,70 +1833,252 @@ struct RootView: View {
     }
 
     private var reviewSection: some View {
-        StepCard(number: 4, title: "Проверьте и сохраните", symbol: "checkmark.rectangle.stack") {
-            Text("Фото отсортированы по Swipe Score. Исправьте только спорные решения; причины спрятаны в ⓘ.")
-                .foregroundStyle(.secondary)
-            if model.developerToolsEnabled, !model.qualitySeriesSelection.isEmpty {
-                HStack {
-                    Text("В ручной серии: \(model.qualitySeriesSelection.count)")
-                        .font(.subheadline.weight(.semibold))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 20) {
+                    screenHeader(
+                        title: "Отбор фотографий",
+                        subtitle: "Проверьте две готовые подборки и при необходимости перенесите кадры между ними."
+                    )
                     Spacer()
-                    Button("Сбросить") { model.qualitySeriesSelection.removeAll() }
-                    Button("Сохранить; текущий кадр — лидер") {
-                        model.saveCustomQualitySeries()
+                    Button {
+                        model.preparePublish()
+                    } label: {
+                        Label(
+                            model.isBusy ? "Подождите…" : "Создать Best‑альбом",
+                            systemImage: "photo.badge.plus"
+                        )
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(
-                        model.qualitySeriesSelection.count < 2
-                            || !model.qualitySeriesSelection.contains(model.selectedPhotoID ?? "")
-                    )
+                    .tint(.green)
+                    .controlSize(.large)
+                    .disabled(model.isBusy || model.keptTotal == 0)
                 }
-                .padding(10)
-                .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-            }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 16) {
-                ForEach(model.photos) { photo in
-                    PhotoCard(
-                        photo: photo,
-                        selected: model.selectedPhotoID == photo.id,
-                        developerToolsEnabled: model.developerToolsEnabled,
-                        select: { model.selectedPhotoID = photo.id },
-                        preview: {
-                            model.selectedPhotoID = photo.id
-                            model.previewSelected()
-                        },
-                        seriesSelected: model.qualitySeriesSelection.contains(photo.id),
-                        toggleTopK: { model.toggleQualityTopK(photoID: photo.id) },
-                        toggleSeriesSelection: {
-                            model.toggleQualitySeriesSelection(photoID: photo.id)
-                        },
-                        labelSeriesLeader: { model.labelSeriesLeader(photoID: photo.id) }
-                    ) { disposition in
-                        model.setDecision(photoID: photo.id, disposition: disposition)
+                HStack(spacing: 6) {
+                    ForEach(SelectionBucket.allCases) { bucket in
+                        Button {
+                            model.showSelection(bucket)
+                        } label: {
+                            SelectionBucketTabLabel(
+                                bucket: bucket,
+                                count: bucket == .keep ? model.keptTotal : model.rejectedTotal,
+                                selected: model.selectionBucket == bucket
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.isLoadingPhotos)
                     }
                 }
+                .padding(4)
+                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+
+                if model.isBusy, let operation = model.operationMessage {
+                    if model.publishTotal > 0 {
+                        ProgressView(
+                            value: Double(model.publishProcessed),
+                            total: Double(model.publishTotal)
+                        ) {
+                            Text(operation)
+                        } currentValueLabel: {
+                            Text("\(model.publishProcessed) из \(model.publishTotal)")
+                        }
+                    } else {
+                        ProgressView(operation)
+                    }
+                }
+                if let message = model.publishMessage {
+                    Label(message, systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                }
+                HStack(spacing: 10) {
+                    Text(
+                        model.selectedPhotoIDs.isEmpty
+                            ? "Отметьте фотографии галочками для группового действия"
+                            : "Выбрано: \(model.selectedPhotoIDs.count)"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button("Выбрать видимые") { model.selectAllVisiblePhotos() }
+                        .disabled(model.photos.isEmpty || model.isBusy)
+                    if !model.selectedPhotoIDs.isEmpty {
+                        Button("Снять выбор") { model.clearPhotoSelection() }
+                        Button(
+                            model.selectionBucket == .keep
+                                ? "Переместить в плохие" : "Переместить в хорошие"
+                        ) {
+                            model.setSelectedPhotosDecision(
+                                model.selectionBucket == .keep ? "reject" : "keep"
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.isBusy)
+                    }
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+                if model.developerToolsEnabled, !model.qualitySeriesSelection.isEmpty {
+                    HStack {
+                        Text("В ручной серии: \(model.qualitySeriesSelection.count)")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button("Сбросить") { model.qualitySeriesSelection.removeAll() }
+                        Button("Сохранить; текущий кадр — лидер") {
+                            model.saveCustomQualitySeries()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            model.qualitySeriesSelection.count < 2
+                                || !model.qualitySeriesSelection.contains(model.selectedPhotoID ?? "")
+                        )
+                    }
+                    .padding(10)
+                    .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(
+                            .adaptive(minimum: selectionCardWidth, maximum: selectionCardWidth),
+                            spacing: 16
+                        )
+                    ],
+                    alignment: .leading,
+                    spacing: 16
+                ) {
+                    ForEach(model.photos) { photo in
+                        PhotoCard(
+                            photo: photo,
+                            selected: model.selectedPhotoID == photo.id,
+                            multiSelected: model.selectedPhotoIDs.contains(photo.id),
+                            developerToolsEnabled: model.developerToolsEnabled,
+                            select: { model.selectedPhotoID = photo.id },
+                            toggleMultiSelection: {
+                                model.togglePhotoSelection(photoID: photo.id)
+                            },
+                            preview: {
+                                model.selectedPhotoID = photo.id
+                                model.previewSelected()
+                            },
+                            openDetails: { model.openPhotoDetails(photoID: photo.id) },
+                            seriesSelected: model.qualitySeriesSelection.contains(photo.id),
+                            toggleTopK: { model.toggleQualityTopK(photoID: photo.id) },
+                            toggleSeriesSelection: {
+                                model.toggleQualitySeriesSelection(photoID: photo.id)
+                            },
+                            labelSeriesLeader: { model.labelSeriesLeader(photoID: photo.id) }
+                        ) { disposition in
+                            model.setDecision(photoID: photo.id, disposition: disposition)
+                        }
+                        .equatable()
+                    }
+                }
+                if model.photos.isEmpty, !model.isLoadingPhotos {
+                    VStack(spacing: 10) {
+                        Image(
+                            systemName: model.selectionBucket == .keep
+                                ? "photo.stack" : "trash.slash"
+                        )
+                        .font(.system(size: 34))
+                        .foregroundStyle(.secondary)
+                        Text(
+                            model.selectionBucket == .keep
+                                ? "Нет хороших фотографий" : "Нет плохих фотографий"
+                        )
+                        .font(.headline)
+                        Text("Переключитесь на соседнюю вкладку или измените решение на карточке.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 240)
+                }
+                if model.photos.count < model.photosTotal {
+                    Button {
+                        model.loadMorePhotos()
+                    } label: {
+                        Label(
+                            model.isLoadingPhotos
+                                ? "Загружаем…"
+                                : "Показать ещё \(min(100, model.photosTotal - model.photos.count))",
+                            systemImage: "square.grid.3x3.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .disabled(model.isLoadingPhotos)
+                    Text("Показано \(model.photos.count) из \(model.photosTotal)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            Button {
-                model.preparePublish()
-            } label: {
-                Label(
-                    model.isBusy ? "Подождите…" : "Подготовить Best‑альбом",
-                    systemImage: "photo.badge.plus"
-                )
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .controlSize(.large)
-            .disabled(model.isBusy)
-            if model.isBusy, let operation = model.operationMessage {
-                ProgressView(operation)
-            }
-            if let message = model.publishMessage {
-                Label(message, systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-            }
+            .padding(32)
+            .frame(maxWidth: 1480, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
+    }
+}
+
+private struct ProjectSidebarRow: View {
+    let project: ProjectItem
+    let active: Bool
+    let deleteDisabled: Bool
+    let select: () -> Void
+    let delete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: select) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(project.name)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(projectStateTitle(project.state))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button(action: delete) {
+                Image(systemName: "trash")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(deleteDisabled)
+            .help("Удалить анализ")
+        }
+        .padding(10)
+        .background(
+            active
+                ? Color.accentColor.opacity(0.16)
+                : Color(nsColor: .controlBackgroundColor).opacity(0.65),
+            in: RoundedRectangle(cornerRadius: 9)
+        )
+    }
+}
+
+private struct SelectionBucketTabLabel: View {
+    let bucket: SelectionBucket
+    let count: Int
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(bucket.title)
+            Text("\(count)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(.quaternary, in: Capsule())
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(selected ? Color.white : Color.primary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(
+            selected ? Color.accentColor : Color.clear,
+            in: RoundedRectangle(cornerRadius: 9)
+        )
+        .contentShape(Rectangle())
     }
 }
 
@@ -1176,24 +2099,24 @@ struct OnboardingView: View {
             }
             VStack(alignment: .leading, spacing: 20) {
                 OnboardingPoint(
+                    symbol: "heart.text.square",
+                    title: "1. Покажите свой вкус",
+                    detail: "В трёх коротких раундах выберите по три любимых кадра."
+                )
+                OnboardingPoint(
                     symbol: "photo.on.rectangle.angled",
-                    title: "1. Выберите альбом",
-                    detail: "Обычный или общий альбом Photos. Видео будут пропущены."
+                    title: "2. Выберите альбом",
+                    detail: "Персональный профиль применяется к обычному или общему альбому."
                 )
                 OnboardingPoint(
                     symbol: "sparkles",
-                    title: "2. Дождитесь анализа",
-                    detail: "Вы увидите текущий этап, обработанное количество и общий прогресс."
-                )
-                OnboardingPoint(
-                    symbol: "checkmark.rectangle.stack",
-                    title: "3. Проверьте и сохраните",
-                    detail: "Исходники не меняются. Новый альбом создаётся только после подтверждения."
+                    title: "3. Получите подборку",
+                    detail: "Проверьте хорошие и плохие кадры и создайте Best‑альбом."
                 )
             }
             .frame(maxWidth: 620, alignment: .leading)
             Button(action: continueAction) {
-                Label("Продолжить и выбрать альбом", systemImage: "arrow.right")
+                Label("Продолжить и настроить вкус", systemImage: "arrow.right")
                     .frame(minWidth: 300)
                     .padding(.vertical, 8)
             }
@@ -1267,12 +2190,67 @@ struct StepLabel: View {
     }
 }
 
-struct PhotoCard: View {
+@MainActor
+private final class ThumbnailLoader: ObservableObject {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 500
+        cache.totalCostLimit = 256 * 1024 * 1024
+        return cache
+    }()
+
+    @Published var image: NSImage?
+
+    func load(path: String) async {
+        let key = path as NSString
+        if let cached = Self.cache.object(forKey: key) {
+            image = cached
+            return
+        }
+        let data = await Task.detached(priority: .utility) {
+            try? Data(contentsOf: URL(fileURLWithPath: path), options: [.mappedIfSafe])
+        }.value
+        guard !Task.isCancelled, let data, let decoded = NSImage(data: data) else { return }
+        let pixels = Int(decoded.size.width * decoded.size.height)
+        Self.cache.setObject(decoded, forKey: key, cost: max(1, pixels * 4))
+        image = decoded
+    }
+}
+
+private struct CachedThumbnail: View {
+    let path: String
+    @StateObject private var loader = ThumbnailLoader()
+
+    var body: some View {
+        Group {
+            if let image = loader.image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.medium)
+                    .scaledToFill()
+            } else {
+                Rectangle()
+                    .fill(.quaternary)
+                    .overlay(ProgressView().controlSize(.small))
+            }
+        }
+        .task(id: path) {
+            await loader.load(path: path)
+        }
+    }
+}
+
+private let selectionCardWidth: CGFloat = 320
+
+struct PhotoCard: View, Equatable {
     let photo: PhotoItem
     let selected: Bool
+    let multiSelected: Bool
     let developerToolsEnabled: Bool
     let select: () -> Void
+    let toggleMultiSelection: () -> Void
     let preview: () -> Void
+    let openDetails: () -> Void
     let seriesSelected: Bool
     let toggleTopK: () -> Void
     let toggleSeriesSelection: () -> Void
@@ -1280,35 +2258,105 @@ struct PhotoCard: View {
     let decide: (String?) -> Void
     @State private var showDetails = false
 
-    private var scoreText: String {
-        photo.swipeScore.map(String.init) ?? "—"
+    static func == (lhs: PhotoCard, rhs: PhotoCard) -> Bool {
+        lhs.photo == rhs.photo
+            && lhs.selected == rhs.selected
+            && lhs.multiSelected == rhs.multiSelected
+            && lhs.developerToolsEnabled == rhs.developerToolsEnabled
+            && lhs.seriesSelected == rhs.seriesSelected
+    }
+
+    private var recommendationTitle: String {
+        dispositionTitle(photo.disposition)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if let path = photo.imagePath, let image = NSImage(contentsOfFile: path) {
-                        Image(nsImage: image).resizable().scaledToFill()
-                    } else {
-                        Rectangle().fill(.quaternary).overlay(Image(systemName: "photo"))
-                    }
+            Group {
+                if let path = photo.imagePath {
+                    CachedThumbnail(path: path)
+                } else {
+                    Rectangle().fill(.quaternary).overlay(Image(systemName: "photo"))
                 }
-                .frame(height: 180)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .onTapGesture(count: 2, perform: preview)
-                .onTapGesture(perform: select)
-                Text(scoreText)
-                    .font(.headline.monospacedDigit())
-                    .padding(8)
-                    .background(.ultraThickMaterial, in: Capsule())
-                    .padding(8)
             }
-            HStack {
-                Text(photo.filename).lineLimit(1).font(.subheadline.weight(.medium))
-                Spacer()
-                if developerToolsEnabled {
+            .frame(maxWidth: .infinity)
+            .frame(height: 180)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .onTapGesture(count: 2, perform: openDetails)
+            .onTapGesture(count: 1, perform: select)
+            .contextMenu {
+                Button("Быстрый просмотр", action: preview)
+            }
+            .help("Нажмите, чтобы выбрать; пробел — быстрый просмотр")
+            .overlay(alignment: .topLeading) {
+                Button {
+                    select()
+                    showDetails.toggle()
+                } label: {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 19, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Circle())
+                }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    .background(.ultraThickMaterial, in: Circle())
+                    .padding(10)
+                    .help("Показать оценку и причины решения")
+                    .accessibilityLabel("Информация о решении")
+                    .popover(isPresented: $showDetails) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(
+                                photo.manualDisposition == nil
+                                    ? "Почему фотография в «\(recommendationTitle)»"
+                                    : "Ваше решение"
+                            )
+                                .font(.title3.weight(.semibold))
+                            LabeledContent("Категория", value: recommendationTitle)
+                                .font(.body.weight(.medium))
+                            if photo.manualDisposition != nil {
+                                Text("Вы изменили категорию вручную. Автоматические аргументы больше не описывают это решение.")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(photo.reasons, id: \.self) { reason in
+                                    Text("• \(reason)").font(.body)
+                                }
+                                Text("Надёжность автоматического решения: \((photo.confidence ?? 0) * 100, specifier: "%.0f")%")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(18)
+                        .frame(width: 380)
+                    }
+            }
+            .overlay(alignment: .topTrailing) {
+                Button(action: toggleMultiSelection) {
+                    Image(
+                        systemName: multiSelected
+                            ? "checkmark.circle.fill" : "circle"
+                    )
+                    .font(.system(size: 22, weight: .semibold))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(
+                        multiSelected ? Color.white : Color.primary,
+                        multiSelected ? Color.accentColor : Color.white.opacity(0.9)
+                    )
+                    .frame(width: 38, height: 38)
+                    .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .background(.ultraThickMaterial, in: Circle())
+                .padding(10)
+                .help(multiSelected ? "Снять отметку" : "Отметить для группового действия")
+                .accessibilityLabel(multiSelected ? "Снять отметку" : "Отметить фотографию")
+            }
+            .frame(maxWidth: .infinity)
+            .clipped()
+            if developerToolsEnabled {
+                HStack {
                     Button(action: toggleTopK) {
                         HStack(spacing: 3) {
                             Image(systemName: photo.qualityTopKRank == nil ? "star" : "star.fill")
@@ -1332,18 +2380,9 @@ struct PhotoCard: View {
                     .accessibilityLabel(
                         seriesSelected ? "Убрать фото из ручной серии" : "Добавить фото в ручную серию"
                     )
+                    Spacer()
                 }
-                Button { showDetails.toggle() } label: { Image(systemName: "info.circle") }
-                    .buttonStyle(.plain)
-                    .popover(isPresented: $showDetails) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Почему этот результат").font(.headline)
-                            Text("Generic: \(photo.genericScore ?? 0, specifier: "%.1f")")
-                            Text("Ваш вкус: \(photo.personalDelta ?? 0, specifier: "%+.1f")")
-                            Text("Уверенность: \((photo.confidence ?? 0) * 100, specifier: "%.0f")%")
-                            ForEach(photo.reasons, id: \.self) { Text("• \($0)") }
-                        }.padding().frame(width: 260)
-                    }
+                .frame(maxWidth: .infinity)
             }
             if developerToolsEnabled, photo.duplicateGroup != nil {
                 Button(action: labelSeriesLeader) {
@@ -1355,39 +2394,148 @@ struct PhotoCard: View {
                 .buttonStyle(.borderless)
                 .font(.caption.weight(.semibold))
             }
-            Picker("Решение", selection: Binding(
-                get: { photo.disposition ?? "review" },
-                set: { decide($0) }
-            )) {
-                Text("Оставить").tag("keep")
-                Text("Проверить").tag("review")
-                Text("Не брать").tag("reject")
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            DecisionPicker(
+                selection: photo.disposition ?? "keep",
+                decide: decide
+            )
         }
         .padding(12)
+        .frame(width: selectionCardWidth)
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
-                .stroke(selected ? Color.accentColor : Color(nsColor: .separatorColor).opacity(0.4),
-                        lineWidth: selected ? 3 : 1)
+                .strokeBorder(
+                    selected || multiSelected
+                        ? Color.accentColor
+                        : Color(nsColor: .separatorColor).opacity(0.4),
+                    lineWidth: selected || multiSelected ? 3 : 1
+                )
+                .allowsHitTesting(false)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .contentShape(RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(photo.filename), Swipe Score \(photo.swipeScore ?? 0)")
+        .accessibilityLabel("\(photo.filename), рекомендация: \(recommendationTitle)")
         .accessibilityValue(dispositionTitle(photo.disposition))
-        .accessibilityHint("Клавиши 1, 2 и 3 меняют решение; пробел открывает быстрый просмотр")
+        .accessibilityHint("Клавиши 1 и 2 меняют решение; пробел открывает быстрый просмотр")
     }
 }
 
-struct TasteChoiceCard: View {
+private struct PhotoDetailView: View {
     let photo: PhotoItem
-    let disabled: Bool
-    let choose: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var recommendationTitle: String {
+        dispositionTitle(photo.disposition)
+    }
 
     var body: some View {
-        Button(action: choose) {
-            VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 0) {
+            ZStack {
+                Color.black
+                if let path = photo.imagePath, let image = NSImage(contentsOfFile: path) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(20)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 64))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(minWidth: 620, maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text("Информация о фотографии")
+                            .font(.title2.bold())
+                        Spacer()
+                        Button("Закрыть") { dismiss() }
+                    }
+                    LabeledContent("Категория", value: recommendationTitle)
+                        .font(.headline)
+                    if photo.manualDisposition != nil {
+                        Label(
+                            "Категория изменена вами вручную",
+                            systemImage: "hand.tap.fill"
+                        )
+                        .foregroundStyle(.secondary)
+                    } else {
+                        Text("Почему принято это решение")
+                            .font(.headline)
+                        ForEach(photo.reasons, id: \.self) { reason in
+                            Label(reason, systemImage: "circle.fill")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        Text(
+                            "Надёжность автоматического решения: \((photo.confidence ?? 0) * 100, specifier: "%.0f")%"
+                        )
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(24)
+            }
+            .frame(width: 360)
+        }
+        .frame(minWidth: 980, minHeight: 680)
+    }
+}
+
+private struct DecisionPicker: View {
+    let selection: String
+    let decide: (String?) -> Void
+
+    private let options = [
+        ("keep", "Хорошие"),
+        ("reject", "Плохие"),
+    ]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let buttonWidth = max(0, (geometry.size.width - 1) / 2)
+            HStack(spacing: 1) {
+                ForEach(options, id: \.0) { option in
+                    let value = option.0
+                    let title = option.1
+                    Button {
+                        decide(value)
+                    } label: {
+                        Text(title)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .frame(width: buttonWidth, height: 34)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selection == value ? Color.white : Color.primary)
+                    .background(selection == value ? Color.accentColor : Color.clear)
+                    .accessibilityLabel(title)
+                }
+            }
+        }
+        .frame(height: 34)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.5))
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+struct TasteGridCard: View {
+    let photo: PhotoItem
+    let selected: Bool
+    let disabled: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            ZStack(alignment: .topTrailing) {
                 Group {
                     if let path = photo.imagePath, let image = NSImage(contentsOfFile: path) {
                         Image(nsImage: image).resizable().scaledToFill()
@@ -1395,30 +2543,47 @@ struct TasteChoiceCard: View {
                         Rectangle().fill(.quaternary).overlay(Image(systemName: "photo"))
                     }
                 }
-                .frame(maxWidth: .infinity).frame(height: 190)
-                .clipped().clipShape(RoundedRectangle(cornerRadius: 12))
-                HStack {
-                    Text(photo.filename).lineLimit(1)
-                    Spacer()
-                    Text(photo.swipeScore.map(String.init) ?? "—")
-                        .font(.headline.monospacedDigit())
+                .frame(maxWidth: .infinity)
+                .frame(height: 135)
+                .clipped()
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.accentColor)
+                        .padding(8)
+                        .shadow(radius: 2)
                 }
-                Text("Выбрать этот кадр").font(.caption.weight(.semibold))
             }
-            .padding(10)
-            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
-        .background(.background, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.tint, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(selected ? Color.accentColor : Color.clear, lineWidth: 4)
+                .allowsHitTesting(false)
+        )
         .disabled(disabled)
-        .accessibilityLabel("Выбрать \(photo.filename) для настройки вкуса")
+        .accessibilityLabel(photo.filename)
+        .accessibilityValue(selected ? "Выбрано" : "Не выбрано")
+        .accessibilityHint("Добавить или убрать из трёх лучших фотографий")
     }
 }
 
 private func dispositionTitle(_ disposition: String?) -> String {
-    ["keep": "Оставить", "review": "На проверку", "reject": "Не брать"][disposition ?? ""]
+    ["keep": "Хорошие", "reject": "Плохие"][disposition ?? ""]
         ?? "Без решения"
+}
+
+private func projectStateTitle(_ state: String) -> String {
+    [
+        "created": "Готов к запуску",
+        "running": "Выполняется",
+        "ready": "Готов",
+        "interrupted": "Остановлен",
+        "error": "Ошибка",
+    ][state] ?? state
 }
 
 private func jobStatusSymbol(_ status: String) -> String {
