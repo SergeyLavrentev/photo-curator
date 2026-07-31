@@ -27,6 +27,7 @@ struct AssetPayload: Encodable {
     let is_photo: Bool
     let source_path: String?
     let provider_error: String?
+    let review_render: Bool
 }
 
 struct AssetIdentifiersRequest: Decodable {
@@ -122,8 +123,16 @@ func safeStem(_ identifier: String) -> String {
         .replacingOccurrences(of: "=", with: "")
 }
 
+let reviewRenderVersion = "review-v2-2048-q88"
+let maximumConcurrentRenders = 3
+
+func renderCacheKey(_ asset: PHAsset) -> String {
+    let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
+    return "\(reviewRenderVersion)|\(asset.localIdentifier)|\(modified)|\(asset.pixelWidth)x\(asset.pixelHeight)"
+}
+
 func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, String?) {
-    let destination = outputDirectory.appendingPathComponent(safeStem(asset.localIdentifier) + ".jpg")
+    let destination = outputDirectory.appendingPathComponent(safeStem(renderCacheKey(asset)) + ".jpg")
     if FileManager.default.fileExists(atPath: destination.path) {
         return (destination.path, nil)
     }
@@ -136,7 +145,7 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
     var requestError: String?
     PHImageManager.default().requestImage(
         for: asset,
-        targetSize: NSSize(width: 2560, height: 2560),
+        targetSize: NSSize(width: 2048, height: 2048),
         contentMode: .aspectFit,
         options: options
     ) { image, info in
@@ -147,7 +156,7 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
     guard let image = rendered,
           let tiff = image.tiffRepresentation,
           let bitmap = NSBitmapImageRep(data: tiff),
-          let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92])
+          let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.88])
     else { return (nil, requestError ?? "PhotoKit did not return an image render") }
     do {
         try jpeg.write(to: destination, options: .atomic)
@@ -160,7 +169,8 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
 func payload(_ asset: PHAsset, outputDirectory: URL?) -> AssetPayload {
     let resource = PHAssetResource.assetResources(for: asset).first
     let isPhoto = asset.mediaType == .image
-    let render = isPhoto && outputDirectory != nil
+    let shouldRender = isPhoto && outputDirectory != nil
+    let render = shouldRender
         ? exportReviewRender(asset, outputDirectory: outputDirectory!) : (nil, nil)
     return AssetPayload(
         uuid: asset.localIdentifier,
@@ -175,55 +185,103 @@ func payload(_ asset: PHAsset, outputDirectory: URL?) -> AssetPayload {
         is_burst: asset.burstIdentifier != nil,
         burst_key: asset.burstIdentifier,
         burst_default_pick: asset.representsBurst,
-        is_missing: isPhoto && render.0 == nil,
+        is_missing: shouldRender && render.0 == nil,
         is_photo: isPhoto,
         source_path: render.0,
-        provider_error: render.1
+        provider_error: render.1,
+        review_render: shouldRender && render.0 != nil
     )
 }
 
-func assets(in album: PHAssetCollection, outputDirectory: URL) throws -> [AssetPayload] {
-    try FileManager.default.createDirectory(
-        at: outputDirectory, withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700]
-    )
+func albumAssets(_ album: PHAssetCollection) -> [PHAsset] {
     let result = PHAsset.fetchAssets(in: album, options: nil)
-    var values: [AssetPayload] = []
-    result.enumerateObjects { asset, _, _ in
-        values.append(payload(asset, outputDirectory: outputDirectory))
-    }
+    var values: [PHAsset] = []
+    values.reserveCapacity(result.count)
+    result.enumerateObjects { asset, _, _ in values.append(asset) }
     return values
 }
 
-func streamAssets(in album: PHAssetCollection, outputDirectory: URL) throws {
+func renderPayloads(
+    _ assets: [PHAsset],
+    outputDirectory: URL,
+    progress: ((Int, Int, String) -> Void)? = nil
+) throws -> [AssetPayload] {
     try FileManager.default.createDirectory(
         at: outputDirectory, withIntermediateDirectories: true,
         attributes: [.posixPermissions: 0o700]
     )
-    let result = PHAsset.fetchAssets(in: album, options: nil)
+    if assets.isEmpty { return [] }
+    let group = DispatchGroup()
+    let queue = DispatchQueue(
+        label: "local.photo-curator.render",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+    let limit = DispatchSemaphore(value: maximumConcurrentRenders)
+    let lock = NSLock()
+    var completed = 0
+    var values = Array<AssetPayload?>(repeating: nil, count: assets.count)
+    for (index, asset) in assets.enumerated() {
+        group.enter()
+        queue.async {
+            limit.wait()
+            let value = payload(asset, outputDirectory: outputDirectory)
+            limit.signal()
+            lock.lock()
+            values[index] = value
+            completed += 1
+            progress?(completed, assets.count, asset.localIdentifier)
+            lock.unlock()
+            group.leave()
+        }
+    }
+    group.wait()
+    return values.compactMap { $0 }
+}
+
+func assets(in album: PHAssetCollection, outputDirectory: URL) throws -> [AssetPayload] {
+    try renderPayloads(albumAssets(album), outputDirectory: outputDirectory)
+}
+
+func streamAssets(in album: PHAssetCollection, outputDirectory: URL) throws {
+    let values = try renderPayloads(
+        albumAssets(album),
+        outputDirectory: outputDirectory
+    ) { processed, total, identifier in
+        try? printJSON(AssetProgressFrame(
+            processed: processed,
+            total: total,
+            asset_identifier: identifier
+        ))
+    }
+    try printJSON(AssetResultFrame(assets: values))
+}
+
+func streamAssetMetadata(in album: PHAssetCollection) throws {
+    let sourceAssets = albumAssets(album)
     var values: [AssetPayload] = []
-    result.enumerateObjects { asset, index, _ in
-        values.append(payload(asset, outputDirectory: outputDirectory))
+    values.reserveCapacity(sourceAssets.count)
+    for (index, asset) in sourceAssets.enumerated() {
+        values.append(payload(asset, outputDirectory: nil))
         try? printJSON(AssetProgressFrame(
             processed: index + 1,
-            total: result.count,
+            total: sourceAssets.count,
             asset_identifier: asset.localIdentifier
         ))
     }
     try printJSON(AssetResultFrame(assets: values))
 }
 
+func assetMetadata(in album: PHAssetCollection) -> [AssetPayload] {
+    albumAssets(album).map { payload($0, outputDirectory: nil) }
+}
+
 func assets(with identifiers: [String], outputDirectory: URL) throws -> [AssetPayload] {
-    try FileManager.default.createDirectory(
-        at: outputDirectory, withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700]
-    )
     let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
-    var byIdentifier: [String: AssetPayload] = [:]
-    result.enumerateObjects { asset, _, _ in
-        byIdentifier[asset.localIdentifier] = payload(asset, outputDirectory: outputDirectory)
-    }
-    return identifiers.compactMap { byIdentifier[$0] }
+    var byIdentifier: [String: PHAsset] = [:]
+    result.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
+    let ordered = identifiers.compactMap { byIdentifier[$0] }
+    return try renderPayloads(ordered, outputDirectory: outputDirectory)
 }
 
 func streamAssets(with identifiers: [String], outputDirectory: URL) throws {
@@ -234,14 +292,14 @@ func streamAssets(with identifiers: [String], outputDirectory: URL) throws {
     let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
     var byIdentifier: [String: PHAsset] = [:]
     result.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
-    var values: [AssetPayload] = []
-    for (index, identifier) in identifiers.enumerated() {
-        if let asset = byIdentifier[identifier] {
-            values.append(payload(asset, outputDirectory: outputDirectory))
-        }
-        try printJSON(AssetProgressFrame(
-            processed: index + 1,
-            total: identifiers.count,
+    let ordered = identifiers.compactMap { byIdentifier[$0] }
+    let values = try renderPayloads(
+        ordered,
+        outputDirectory: outputDirectory
+    ) { processed, total, identifier in
+        try? printJSON(AssetProgressFrame(
+            processed: processed,
+            total: total,
             asset_identifier: identifier
         ))
     }
@@ -306,6 +364,12 @@ do {
             in: try fetchAlbum(arguments[2]),
             outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
         )
+    case "asset-metadata-jsonl":
+        guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
+        try streamAssetMetadata(in: try fetchAlbum(arguments[2]))
+    case "asset-metadata":
+        guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
+        try printJSON(assetMetadata(in: try fetchAlbum(arguments[2])))
     case "assets-by-id":
         guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
         let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))

@@ -77,6 +77,29 @@ class PhotoKitProvider:
     ) -> list[PhotoAsset]:
         return self._load_assets(album_id, progress=progress)
 
+    def list_asset_metadata_with_progress(
+        self, album_id: str, progress: ProgressCallback
+    ) -> list[PhotoAsset]:
+        self._load_albums()
+        if album_id not in self._albums:
+            raise KeyError(album_id)
+        # Inventory is the project snapshot boundary. Always ask PhotoKit for
+        # current metadata and force the following preview stage to revalidate
+        # its render cache keys against current PHAsset modification dates.
+        self._assets_by_album.pop(album_id, None)
+        payload = (
+            self._run_streaming_assets(
+                ["asset-metadata-jsonl", album_id],
+                progress=progress,
+                timeout=300,
+            )
+            if self.streaming_runner
+            else _json_result(self._run(["asset-metadata", album_id], timeout=300))
+        )
+        assets = self._assets_from_payload(payload, None)
+        self._membership_by_album[album_id] = {asset.uuid for asset in assets}
+        return assets
+
     def list_shared_assets(self, album_id: str) -> list[PhotoAsset]:
         return self._load_assets(album_id)
 
@@ -104,7 +127,7 @@ class PhotoKitProvider:
         request_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         request = request_dir / f"{uuid.uuid4()}.json"
         request.write_text(json.dumps({"asset_identifiers": asset_uuids}), encoding="utf-8")
-        output = self.paths.cache_dir / "photokit-renders" / "assets"
+        output = self.paths.cache_dir / "photokit-renders" / "assets-v2"
         try:
             result = self._run(["assets-by-id", str(request), str(output)], timeout=7200)
         finally:
@@ -153,7 +176,11 @@ class PhotoKitProvider:
         self._load_albums()
         if album_id not in self._albums:
             raise KeyError(album_id)
-        output = self.paths.cache_dir / "photokit-renders" / _safe_directory(album_id)
+        # One versioned, asset-scoped cache is shared by album analysis, taste
+        # onboarding and repeated projects. The native helper includes the
+        # PHAsset modification date in each filename, so edited assets do not
+        # accidentally reuse an older render.
+        output = self.paths.cache_dir / "photokit-renders" / "assets-v2"
         payload = (
             self._run_streaming_assets(
                 ["assets-jsonl", album_id, str(output)],
@@ -210,7 +237,7 @@ class PhotoKitProvider:
             raise RuntimeError("PhotoKit source helper returned no final result")
         return final_assets
 
-    def _assets_from_payload(self, payload, output: Path) -> list[PhotoAsset]:
+    def _assets_from_payload(self, payload, output: Path | None) -> list[PhotoAsset]:
         return [
             PhotoAsset(
                 uuid=str(item["uuid"]),
@@ -229,10 +256,11 @@ class PhotoKitProvider:
                 is_photo=bool(item.get("is_photo")),
                 source_path=(
                     ensure_within(Path(str(item["source_path"])), output)
-                    if item.get("source_path")
+                    if item.get("source_path") and output is not None
                     else None
                 ),
                 provider_error=item.get("provider_error"),
+                review_render=bool(item.get("review_render")),
             )
             for item in payload
         ]
@@ -253,9 +281,3 @@ def _json_result(result: CommandResult):
         return json.loads(result.stdout.splitlines()[-1])
     except (IndexError, json.JSONDecodeError) as error:
         raise RuntimeError("PhotoKit source helper returned invalid JSON") from error
-
-
-def _safe_directory(identifier: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(identifier.encode()).hexdigest()[:24]

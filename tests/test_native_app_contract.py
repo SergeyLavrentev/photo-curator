@@ -24,10 +24,12 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert '"taste_round_prepare"' in app
     assert 'call("taste_round_submit"' in app
     assert '"from_stage": "decisions"' in app
-    assert "Кликните на три фотографии" in app
+    assert "Настроить вкус" in app
+    assert "Остальные останутся нейтральными" in app
     assert "TasteGridCard" in app
-    assert "tasteSelectedIDs.count != round.selectionLimit" in app
-    assert "Альбом для анализа станет доступен после трёх раундов" in app
+    assert "tasteRejectedIDs" in app
+    assert '"rejected_uuids": rejected' in app
+    assert "прежде чем запускать первый анализ" in app
     assert "QuickLookController.shared.show" in app
     assert '.keyboardShortcut("1", modifiers: [])' in app
     assert ".keyboardShortcut(.space, modifiers: [])" in app
@@ -42,7 +44,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "Размер итогового Best‑альбома" in app
     assert "Исходный альбом анализируется целиком" in app
     assert "Продолжить без персонализации" not in app
-    assert "case .taste" in app.split("enum WorkflowStep", 1)[1].split("case .album", 1)[0]
+    workflow_step = app.split("enum WorkflowStep", 1)[1].split("enum SelectionBucket", 1)[0]
+    assert "case .album" in workflow_step
+    assert "case .taste" not in workflow_step
     assert ".allowsHitTesting(false)" in app
     assert "struct PhotoCard: View, Equatable" in app
     assert ".equatable()" in app
@@ -54,18 +58,23 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'call("decisions_batch"' in app
     assert "Переместить в плохие" in app
     assert "Переместить в хорошие" in app
+    assert 'title: "Отбор фотографий"' not in app
+    assert "Проверьте две готовые подборки" not in app
+    assert "Выбрать видимые" not in app
+    assert "Отметьте фотографии галочками" not in app
+    assert "selectAllVisiblePhotos" not in app
     assert "Решить позже" not in app
     assert "finalReview" not in app
-    assert "private let selectionCardWidth: CGFloat = 320" in app
-    assert ".adaptive(minimum: selectionCardWidth, maximum: selectionCardWidth)" in app
-    assert ".frame(width: selectionCardWidth)" in app
-    assert "let buttonWidth = max(0, (geometry.size.width - 1) / 2)" in app
-    assert ".frame(width: buttonWidth, height: 34)" in app
+    assert "private let selectionCardMinimumWidth: CGFloat = 210" in app
+    assert "private let selectionCardMaximumWidth: CGFloat = 260" in app
+    assert ".adaptive(" in app
+    assert ".aspectRatio(4 / 3, contentMode: .fit)" in app
+    assert 'systemImage: bucket == .keep ? "checkmark.circle" : "xmark.circle"' in app
     assert 'call("binary_decisions"' in app
     assert '"disposition": selectionBucket.rawValue' in app
     assert "SelectionBucket.allCases" in app
-    assert '("keep", "Хорошие")' in app
-    assert '("reject", "Плохие")' in app
+    assert '"keep", "Хорошие", "checkmark", Color.green' in app
+    assert '"reject", "Плохие", "xmark", Color.red' in app
     assert "currentDecisionModelVersion = 2" in app
     assert "Обновляем критерии отбора" in app
     assert 'Label("Почему?"' not in app
@@ -74,6 +83,8 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'call("delete_project"' in app
     assert "Отменить новый анализ" in app
     assert "ForEach(model.projects)" in app
+    assert "ToolbarItemGroup(placement: .primaryAction)" in app
+    assert "TasteProfileEditorView" in app
     assert 'call("cleanup_abandoned_projects"' not in app
     assert 'call("taste_round_cancel"' in app
     assert "Сменить альбом" in app
@@ -102,6 +113,22 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "PHOTO_CURATOR_DEVELOPER_TOOLS" in app
     assert "if model.developerToolsEnabled" in app
     assert ".accessibilityHint" in app
+    assert 'Window("Справка Photo Curator", id: "photo-curator-help")' in app
+    assert 'Button("Справка Photo Curator")' in app
+    assert 'case .howItWorks: return "Как это работает"' in app
+    assert "struct HowItWorksHelpView: View" in app
+    assert "struct AnalysisPipelineDiagram: View" in app
+    assert "Swipe Score" in app
+    assert "Технические дефекты" in app
+    assert "Apple Vision" in app
+    assert "struct AppleVisionHelpView: View" in app
+    assert "VNCalculateImageAestheticsScoresRequest" in app
+    assert "VNGenerateImageFeaturePrintRequest" in app
+    assert "VNGenerateAttentionBasedSaliencyImageRequest" in app
+    assert "VNDetectFaceLandmarksRequest + VNDetectFaceCaptureQualityRequest" in app
+    assert "Что анализируем" in app
+    assert "Движок и фреймворк" in app
+    assert "Ваше ручное решение всегда имеет приоритет" in app
     assert "localhost" not in app + worker
     assert "127.0.0.1" not in app + worker
 
@@ -176,6 +203,11 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "PhotoCuratorSource-Info.plist" in build
     assert "PHAssetCollection.fetchAssetCollections" in helper
     assert "PHImageManager.default().requestImage" in helper
+    assert 'reviewRenderVersion = "review-v2-2048-q88"' in helper
+    assert "maximumConcurrentRenders = 3" in helper
+    assert 'case "asset-metadata-jsonl"' in helper
+    assert "targetSize: NSSize(width: 2048, height: 2048)" in helper
+    assert "targetSize: NSSize(width: 2560, height: 2560)" not in helper
     assert "Photos.sqlite" not in helper
     assert "photo_curator_publish.swift" in build
     assert "duplicate_asset_identifiers" in publisher

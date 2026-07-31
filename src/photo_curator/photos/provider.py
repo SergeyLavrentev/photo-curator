@@ -54,6 +54,7 @@ class PhotoAsset:
     derivative_paths: tuple[Path, ...] = field(default_factory=tuple)
     apple_scores: dict[str, float] | None = None
     provider_error: str | None = None
+    review_render: bool = False
 
     @property
     def pixel_count(self) -> int:

@@ -148,21 +148,27 @@ def test_photokit_provider_streams_per_asset_render_progress(tmp_path: Path) -> 
             )
         raise AssertionError(command)
 
+    streaming_commands = []
+
     def streaming_runner(command, *, on_stdout_line, timeout):
         del timeout
-        assert command[1] == "assets-jsonl"
-        output = Path(command[3])
-        output.mkdir(parents=True, exist_ok=True)
+        streaming_commands.append(command[1])
+        assert command[1] in {"asset-metadata-jsonl", "assets-jsonl"}
+        output = Path(command[3]) if command[1] == "assets-jsonl" else None
+        if output:
+            output.mkdir(parents=True, exist_ok=True)
         items = []
         lines = []
         for index in range(2):
-            render = output / f"{index}.jpg"
-            render.write_bytes(b"jpeg")
+            render = output / f"{index}.jpg" if output else None
+            if render:
+                render.write_bytes(b"jpeg")
             items.append(
                 {
                     "uuid": f"asset-{index}",
                     "is_photo": True,
-                    "source_path": str(render),
+                    "source_path": str(render) if render else None,
+                    "review_render": render is not None,
                 }
             )
             lines.append(json.dumps({"type": "progress", "processed": index + 1, "total": 2}))
@@ -177,6 +183,14 @@ def test_photokit_provider_streams_per_asset_render_progress(tmp_path: Path) -> 
         runner=runner,
         streaming_runner=streaming_runner,
     )
+    metadata_progress = []
+    metadata = provider.list_asset_metadata_with_progress(
+        "album-1", lambda processed, total: metadata_progress.append((processed, total))
+    )
+    assert [asset.uuid for asset in metadata] == ["asset-0", "asset-1"]
+    assert all(asset.source_path is None and not asset.review_render for asset in metadata)
+    assert metadata_progress == [(1, 2), (2, 2)]
+
     progress = []
 
     assets = provider.list_assets_with_progress(
@@ -184,4 +198,6 @@ def test_photokit_provider_streams_per_asset_render_progress(tmp_path: Path) -> 
     )
 
     assert [asset.uuid for asset in assets] == ["asset-0", "asset-1"]
+    assert all(asset.review_render for asset in assets)
     assert progress == [(1, 2), (2, 2)]
+    assert streaming_commands == ["asset-metadata-jsonl", "assets-jsonl"]

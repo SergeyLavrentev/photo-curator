@@ -301,7 +301,7 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     assert worker.dispatch("taste_profile", {})["preference_count"] == 0
 
 
-def test_native_taste_onboarding_trains_from_three_top_three_rounds(
+def test_native_taste_onboarding_trains_from_explicit_positive_and_negative_rounds(
     tmp_path: Path,
 ) -> None:
     paths, provider, coordinator, _ = build_pipeline(tmp_path)
@@ -347,6 +347,7 @@ def test_native_taste_onboarding_trains_from_three_top_three_rounds(
             {
                 "round_id": round_value["id"],
                 "selected_uuids": photo_ids[:3],
+                "rejected_uuids": photo_ids[3:6],
             },
         )
         profile = submitted["profile"]
@@ -354,14 +355,14 @@ def test_native_taste_onboarding_trains_from_three_top_three_rounds(
 
     assert profile["onboarding_complete"] is True
     assert profile["status"] == "ready"
-    assert profile["calibration_count"] == 54
+    assert profile["calibration_count"] == 18
     assert profile["held_out_count"] == 9
-    assert profile["training_examples"] == 54
+    assert profile["training_examples"] == 18
     assert profile["evidence"]["onboarding_version"] == 2
 
     restored = worker.dispatch("taste_profile", {})
     assert restored["onboarding_complete"] is True
-    assert restored["preference_count"] == 63
+    assert restored["preference_count"] == 27
     worker.dispatch("taste_reset", {})
     reset = worker.dispatch("taste_profile", {})
     assert reset["onboarding_rounds_completed"] == 0
@@ -369,6 +370,54 @@ def test_native_taste_onboarding_trains_from_three_top_three_rounds(
     with database_connection(paths.database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM taste_rounds").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM taste_assets").fetchone()[0] == 0
+
+
+def test_native_taste_adjustment_uses_only_explicitly_rejected_photos(tmp_path: Path) -> None:
+    paths, provider, coordinator, _ = build_pipeline(tmp_path)
+    originals = list(provider._assets)
+    provider._assets = [
+        replace(
+            originals[index % len(originals)],
+            uuid=f"taste-adjust-{index:02d}",
+            taken_at=f"2026-07-{index + 1:02d}T12:00:00+03:00",
+        )
+        for index in range(40)
+    ]
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    for _ in range(3):
+        prepared = worker.dispatch("taste_round_prepare", {"album_id": provider.ALBUM_ID})
+        photo_ids = [photo["asset_uuid"] for photo in prepared["round"]["photos"]]
+        worker.dispatch(
+            "taste_round_submit",
+            {
+                "round_id": prepared["round"]["id"],
+                "selected_uuids": photo_ids[:3],
+                "rejected_uuids": photo_ids[3:6],
+            },
+        )
+
+    adjustment = worker.dispatch(
+        "taste_round_prepare",
+        {"album_id": provider.ALBUM_ID, "mode": "adjust"},
+    )
+    round_value = adjustment["round"]
+    assert round_value["is_adjustment"] is True
+    photo_ids = [photo["asset_uuid"] for photo in round_value["photos"]]
+    updated = worker.dispatch(
+        "taste_round_submit",
+        {
+            "round_id": round_value["id"],
+            "selected_uuids": photo_ids[:3],
+            "rejected_uuids": photo_ids[3:6],
+        },
+    )
+    assert updated["profile"]["onboarding_complete"] is True
+    assert updated["profile"]["preference_count"] == 36
+    with database_connection(paths.database) as connection:
+        completed = repository.list_taste_rounds(connection)[-1]
+    assert completed["selected_uuids"] == photo_ids[:3]
+    assert completed["rejected_uuids"] == photo_ids[3:6]
 
 
 def test_native_worker_rejects_unknown_resume_stage(tmp_path: Path) -> None:

@@ -58,6 +58,20 @@ class LocalAlbumsProvider:
         progress(len(assets), len(assets))
         return assets
 
+    def list_asset_metadata_with_progress(
+        self, album_id: str, progress: Callable[[int, int], None]
+    ) -> list[PhotoAsset]:
+        if album_id.startswith(self.PREFIX):
+            assets = self._read_album(album_id)[1]
+            progress(len(assets), len(assets))
+            return assets
+        metadata = getattr(self.base, "list_asset_metadata_with_progress", None)
+        if metadata:
+            return metadata(album_id, progress)
+        assets = self.base.list_assets(album_id)
+        progress(len(assets), len(assets))
+        return assets
+
     def list_shared_assets(self, album_id: str) -> list[PhotoAsset]:
         return self.base.list_shared_assets(album_id)
 

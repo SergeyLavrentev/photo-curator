@@ -11,6 +11,7 @@ from typing import TextIO
 from photo_curator.acceptance import build_native_quality_evidence, evaluate_acceptance
 from photo_curator.analysis.native_vision import NativeVisionEngine
 from photo_curator.analysis.taste import (
+    MIN_CALIBRATION_PAIRS,
     capture_preference,
     capture_preference_vectors,
     feature_vector,
@@ -31,6 +32,7 @@ TASTE_ONBOARDING_VERSION = 2
 TASTE_ROUND_COUNT = 3
 TASTE_ROUND_SIZE = 10
 TASTE_ROUND_SELECTIONS = 3
+TASTE_ROUND_REJECTIONS = 3
 
 
 class NativeWorkerError(ValueError):
@@ -297,6 +299,9 @@ class NativeWorker:
 
     def _handle_taste_round_prepare(self, params: dict[str, object]) -> dict[str, object]:
         album_id = _required_string(params, "album_id")
+        mode = params.get("mode", "onboarding")
+        if mode not in {"onboarding", "adjust"}:
+            raise NativeWorkerError("Unknown taste round mode")
         albums = {
             album.id: album
             for album in [
@@ -311,7 +316,10 @@ class NativeWorker:
             repository.ensure_taste_profile(connection)
             rounds = repository.list_taste_rounds(connection)
             completed = [item for item in rounds if item["status"] == "completed"]
-            if len(completed) >= TASTE_ROUND_COUNT:
+            completed_onboarding = [
+                item for item in completed if int(item["round_index"]) < TASTE_ROUND_COUNT
+            ]
+            if mode == "onboarding" and len(completed_onboarding) >= TASTE_ROUND_COUNT:
                 profile = repository.get_taste_profile(connection)
                 examples = repository.list_preference_examples(connection)
                 return {
@@ -337,7 +345,7 @@ class NativeWorker:
             for example in repository.list_preference_examples(connection):
                 used.add(str(example["left_uuid"]))
                 used.add(str(example["right_uuid"]))
-            round_index = len(completed)
+            round_index = max((int(item["round_index"]) for item in rounds), default=-1) + 1
 
         self._taste_progress("loading", 0, TASTE_ROUND_SIZE)
         sampler = getattr(self.provider, "sample_assets", None)
@@ -433,13 +441,21 @@ class NativeWorker:
     def _handle_taste_round_submit(self, params: dict[str, object]) -> dict[str, object]:
         round_id = _required_string(params, "round_id")
         raw_selected = params.get("selected_uuids")
+        raw_rejected = params.get("rejected_uuids")
         if not isinstance(raw_selected, list) or not all(
             isinstance(value, str) and value for value in raw_selected
         ):
             raise NativeWorkerError("selected_uuids must be a string array")
         selected = list(dict.fromkeys(raw_selected))
+        if not isinstance(raw_rejected, list) or not all(
+            isinstance(value, str) and value for value in raw_rejected
+        ):
+            raise NativeWorkerError("rejected_uuids must be a string array")
+        rejected = list(dict.fromkeys(raw_rejected))
         if len(selected) != TASTE_ROUND_SELECTIONS:
             raise NativeWorkerError("Нужно выбрать ровно 3 фотографии")
+        if len(rejected) != TASTE_ROUND_REJECTIONS:
+            raise NativeWorkerError("Нужно отметить ровно 3 неподходящие фотографии")
         with database_connection(self.paths.database) as connection:
             rounds = repository.list_taste_rounds(connection)
             round_value = next((item for item in rounds if item["id"] == round_id), None)
@@ -448,6 +464,10 @@ class NativeWorker:
             candidates = [str(value) for value in round_value["candidate_uuids"]]
             if not set(selected).issubset(candidates):
                 raise NativeWorkerError("Выбрана фотография вне текущего раунда")
+            if not set(rejected).issubset(candidates):
+                raise NativeWorkerError("Отмечена фотография вне текущего раунда")
+            if set(selected).intersection(rejected):
+                raise NativeWorkerError("Фотография не может одновременно нравиться и не нравиться")
             assets = repository.taste_assets(connection, candidates)
             if set(assets) != set(candidates):
                 raise NativeWorkerError("Данные фотографий раунда неполны")
@@ -459,7 +479,6 @@ class NativeWorker:
                     connection,
                     schemas.pop(),
                 )
-            rejected = [value for value in candidates if value not in selected]
             for selected_index, preferred_uuid in enumerate(selected):
                 for rejected_index, rejected_uuid in enumerate(rejected):
                     preferred = assets[preferred_uuid]
@@ -475,18 +494,28 @@ class NativeWorker:
                         right_feature_base64=str(other["feature_base64"]),
                         split=("held_out" if rejected_index == selected_index else "calibration"),
                     )
-            repository.complete_taste_round(connection, round_id, selected)
+            repository.complete_taste_round(connection, round_id, selected, rejected)
             rounds = repository.list_taste_rounds(connection)
-            completed = [item for item in rounds if item["status"] == "completed"]
-            if len(completed) >= TASTE_ROUND_COUNT:
+            completed_onboarding = [
+                item
+                for item in rounds
+                if item["status"] == "completed" and int(item["round_index"]) < TASTE_ROUND_COUNT
+            ]
+            calibration = [
+                item
+                for item in repository.list_preference_examples(connection)
+                if item["split"] == "calibration"
+            ]
+            if len(calibration) >= MIN_CALIBRATION_PAIRS:
                 profile = train_taste_profile(connection)
-                profile = repository.update_taste_evidence(
-                    connection,
-                    {
-                        "onboarding_version": TASTE_ONBOARDING_VERSION,
-                        "onboarding_rounds": len(completed),
-                    },
-                )
+                if len(completed_onboarding) >= TASTE_ROUND_COUNT:
+                    profile = repository.update_taste_evidence(
+                        connection,
+                        {
+                            "onboarding_version": TASTE_ONBOARDING_VERSION,
+                            "onboarding_rounds": len(completed_onboarding),
+                        },
+                    )
             else:
                 profile = repository.get_taste_profile(connection)
             examples = repository.list_preference_examples(connection)
@@ -928,7 +957,10 @@ def _taste_payload(
     rounds = rounds or []
     calibration_count = sum(example["split"] == "calibration" for example in examples)
     held_out_count = sum(example["split"] == "held_out" for example in examples)
-    completed_rounds = sum(item["status"] == "completed" for item in rounds)
+    completed_rounds = sum(
+        item["status"] == "completed" and int(item["round_index"]) < TASTE_ROUND_COUNT
+        for item in rounds
+    )
     evidence = profile.get("evidence") or {}
     return {
         "id": profile["id"],
@@ -965,6 +997,8 @@ def _taste_round_payload(
         "album_id": round_value["album_id"],
         "album_name": round_value["album_name"],
         "selection_limit": TASTE_ROUND_SELECTIONS,
+        "rejection_limit": TASTE_ROUND_REJECTIONS,
+        "is_adjustment": int(round_value["round_index"]) >= TASTE_ROUND_COUNT,
         "photos": [
             {
                 "asset_uuid": asset_uuid,

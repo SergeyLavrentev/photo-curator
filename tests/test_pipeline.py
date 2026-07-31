@@ -1,5 +1,6 @@
 import base64
 import struct
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 
@@ -125,6 +126,59 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         "decisions",
     }
     assert all(job["status"] in {"done", "warning"} for job in jobs)
+
+
+def test_pipeline_inventory_does_not_render_until_preview_stage(tmp_path: Path) -> None:
+    class SplitInventoryProvider(FakePhotosProvider):
+        metadata_calls = 0
+        render_calls = 0
+
+        def list_asset_metadata_with_progress(self, album_id, progress):
+            self.metadata_calls += 1
+            assets = [
+                replace(asset, source_path=None, review_render=False)
+                for asset in super().list_assets(album_id)
+            ]
+            for index in range(len(assets)):
+                progress(index + 1, len(assets))
+            return assets
+
+        def list_assets_with_progress(self, album_id, progress):
+            self.render_calls += 1
+            assets = [replace(asset, review_render=True) for asset in super().list_assets(album_id)]
+            for index in range(len(assets)):
+                progress(index + 1, len(assets))
+            return assets
+
+    paths = default_application_paths(tmp_path)
+    paths.ensure()
+    provider = SplitInventoryProvider(paths.cache_dir / "sources")
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        project_id = repository.create_project(
+            connection,
+            name="Split inventory",
+            library=provider.get_current_library(),
+            album=provider.list_regular_albums()[0],
+        )
+    coordinator = PipelineCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+    )
+
+    coordinator._stage_inventory(project_id)
+    with database_connection(paths.database) as connection:
+        inventoried = repository.list_assets(connection, project_id)
+    assert provider.metadata_calls == 1
+    assert provider.render_calls == 0
+    assert all(asset["source_path"] is None for asset in inventoried)
+
+    coordinator._stage_previews(project_id)
+    with database_connection(paths.database) as connection:
+        previewed = repository.list_assets(connection, project_id)
+    assert provider.render_calls == 1
+    assert all(asset["cache_state"] == "ready" for asset in previewed)
 
 
 def test_manual_override_survives_reanalysis(tmp_path: Path) -> None:

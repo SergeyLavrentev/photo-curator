@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -28,7 +29,11 @@ from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.render_resolver import resolve_source_render
 from photo_curator.pipeline.duplicates import find_duplicate_groups
-from photo_curator.pipeline.previews import build_previews, source_fingerprint
+from photo_curator.pipeline.previews import (
+    build_previews,
+    shared_thumbnail_cache_path,
+    source_fingerprint,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -126,8 +131,15 @@ class PipelineCoordinator:
             project = repository.get_project(connection, project_id)
             job_id = repository.create_job(connection, project_id, "inventory", 0)
 
+        last_progress_write = 0.0
+
         def report_progress(processed: int, total: int) -> None:
+            nonlocal last_progress_write
             self._check_cancelled(project_id)
+            now = time.monotonic()
+            if processed < total and processed > 1 and now - last_progress_write < 0.25:
+                return
+            last_progress_write = now
             with database_connection(self.database_path) as connection:
                 connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (total, job_id))
                 repository.update_job(
@@ -137,7 +149,7 @@ class PipelineCoordinator:
                     message=f"PhotoKit: подготовлено {processed} из {total}",
                 )
 
-        streaming = getattr(self.provider, "list_assets_with_progress", None)
+        streaming = getattr(self.provider, "list_asset_metadata_with_progress", None)
         source_assets = (
             streaming(str(project["album_id"]), report_progress)
             if streaming
@@ -162,11 +174,42 @@ class PipelineCoordinator:
             project = repository.get_project(connection, project_id)
             stored = repository.list_assets(connection, project_id)
             job_id = repository.create_job(connection, project_id, "previews", len(stored))
-        current_assets = {
-            asset.uuid: asset
-            for asset in self.provider.list_assets(str(project["album_id"]))
-            if asset.is_photo
-        }
+        last_progress_write = 0.0
+
+        def report_render_progress(processed: int, total: int) -> None:
+            nonlocal last_progress_write
+            self._check_cancelled(project_id)
+            now = time.monotonic()
+            if processed < total and processed > 1 and now - last_progress_write < 0.25:
+                return
+            last_progress_write = now
+            with database_connection(self.database_path) as connection:
+                connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (total, job_id))
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=processed,
+                    message=f"PhotoKit render {processed} из {total}",
+                )
+
+        streaming = getattr(self.provider, "list_assets_with_progress", None)
+        source_assets = (
+            streaming(str(project["album_id"]), report_render_progress)
+            if streaming
+            else self.provider.list_assets(str(project["album_id"]))
+        )
+        current_assets = {asset.uuid: asset for asset in source_assets if asset.is_photo}
+        renders_reported = bool(current_assets) and all(
+            asset.review_render for asset in current_assets.values()
+        )
+        # Native progress includes videos because list_assets preserves the
+        # provider contract. The preview job itself tracks only inventoried
+        # photos, so restore its final denominator before thumbnail work.
+        with database_connection(self.database_path) as connection:
+            connection.execute(
+                "UPDATE jobs SET total_items=?, processed_items=MIN(processed_items, ?) WHERE id=?",
+                (len(stored), len(stored), job_id),
+            )
         errors = warnings = 0
         cache = self.paths.cache_dir / project_id
         for index, row in enumerate(stored, start=1):
@@ -205,10 +248,12 @@ class PipelineCoordinator:
                             repository.update_job(
                                 connection,
                                 job_id,
-                                processed=index,
+                                processed=len(stored) if renders_reported else index,
                                 warnings=warnings,
                                 errors=errors,
-                                message=f"Preview {index} из {len(stored)} · cache",
+                                message=f"Thumbnail {index} из {len(stored)} · cache"
+                                if renders_reported
+                                else f"Preview {index} из {len(stored)} · cache",
                             )
                         continue
                     with PREVIEW_LIMIT:
@@ -217,6 +262,12 @@ class PipelineCoordinator:
                             review_path,
                             thumbnail_path,
                             source_kind=render.kind,
+                            source_is_review_render=asset.review_render,
+                            shared_thumbnail_path=(
+                                shared_thumbnail_cache_path(render.path)
+                                if asset.review_render
+                                else None
+                            ),
                         )
                     stat = render.path.stat()
                     with database_connection(self.database_path) as connection:
@@ -256,10 +307,12 @@ class PipelineCoordinator:
                 repository.update_job(
                     connection,
                     job_id,
-                    processed=index,
+                    processed=len(stored) if renders_reported else index,
                     warnings=warnings,
                     errors=errors,
-                    message=f"Preview {index} из {len(stored)}",
+                    message=f"Thumbnail {index} из {len(stored)}"
+                    if renders_reported
+                    else f"Preview {index} из {len(stored)}",
                 )
         with database_connection(self.database_path) as connection:
             repository.update_job(

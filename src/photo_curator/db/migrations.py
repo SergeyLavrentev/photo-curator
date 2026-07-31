@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -368,6 +368,10 @@ CREATE TABLE taste_assets (
 );
 """
 
+MIGRATION_12 = """
+ALTER TABLE taste_rounds ADD COLUMN rejected_json TEXT;
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -418,4 +422,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 11:
         connection.executescript(MIGRATION_11)
         connection.execute("PRAGMA user_version = 11")
+        version = 11
+    if version < 12:
+        connection.executescript(MIGRATION_12)
+        connection.execute("PRAGMA user_version = 12")
     connection.commit()

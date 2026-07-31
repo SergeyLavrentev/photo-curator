@@ -856,8 +856,10 @@ def list_taste_rounds(
     for row in rows:
         value = dict(row)
         selected_json = value.pop("selected_json")
+        rejected_json = value.pop("rejected_json")
         value["candidate_uuids"] = json.loads(str(value.pop("candidate_json")))
         value["selected_uuids"] = json.loads(str(selected_json)) if selected_json else []
+        value["rejected_uuids"] = json.loads(str(rejected_json)) if rejected_json else []
         result.append(value)
     return result
 
@@ -880,8 +882,8 @@ def create_taste_round(
         """
         INSERT INTO taste_rounds (
             id, profile_id, album_id, album_name, round_index, status,
-            candidate_json, selected_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?)
+            candidate_json, selected_json, rejected_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, ?, ?)
         """,
         (
             round_id,
@@ -935,6 +937,7 @@ def complete_taste_round(
     connection: sqlite3.Connection,
     round_id: str,
     selected_uuids: list[str],
+    rejected_uuids: list[str],
     profile_id: str = "default",
 ) -> dict[str, object]:
     rounds = list_taste_rounds(connection, profile_id)
@@ -948,13 +951,19 @@ def complete_taste_round(
         raise ValueError("Нужно выбрать ровно 3 фотографии")
     if not set(selected_uuids).issubset(candidates):
         raise ValueError("Выбрана фотография вне текущего раунда")
+    if len(rejected_uuids) != 3 or len(set(rejected_uuids)) != 3:
+        raise ValueError("Нужно отметить ровно 3 неподходящие фотографии")
+    if not set(rejected_uuids).issubset(candidates):
+        raise ValueError("Отмечена фотография вне текущего раунда")
+    if set(selected_uuids).intersection(rejected_uuids):
+        raise ValueError("Фотография не может одновременно нравиться и не нравиться")
     connection.execute(
         """
         UPDATE taste_rounds
-        SET status='completed', selected_json=?, updated_at=?
+        SET status='completed', selected_json=?, rejected_json=?, updated_at=?
         WHERE id=? AND profile_id=?
         """,
-        (json.dumps(selected_uuids), utc_now(), round_id, profile_id),
+        (json.dumps(selected_uuids), json.dumps(rejected_uuids), utc_now(), round_id, profile_id),
     )
     return next(
         item for item in list_taste_rounds(connection, profile_id) if item["id"] == round_id

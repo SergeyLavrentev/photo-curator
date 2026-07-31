@@ -9,6 +9,9 @@ class PhotosProvider(Protocol):
     def list_regular_albums(self) -> list[PhotoAlbum]: ...
     def list_shared_albums(self) -> list[PhotoAlbum]: ...
     def list_assets(self, album_id: str) -> list[PhotoAsset]: ...
+    def list_asset_metadata_with_progress(
+        self, album_id: str, progress: Callable[[int, int], None]
+    ) -> list[PhotoAsset]: ...
     def list_shared_assets(self, album_id: str) -> list[PhotoAsset]: ...
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]: ...
     def asset_still_in_album(self, album_id: str, asset_uuid: str) -> bool: ...
@@ -20,6 +23,17 @@ class PhotosProvider(Protocol):
 читает regular/shared albums, получает локальные review-renders, повторно проверяет
 membership перед публикацией и передаёт Python worker только JSON и пути внутри cache.
 Публикация принятого набора также выполняется через отдельный PhotoKit helper.
+
+Inventory не запрашивает пиксели: helper сначала передаёт UUID и метаданные альбома, поэтому
+первый этап не блокируется на локальном render или загрузке из iCloud. На этапе previews
+PhotoKit асинхронно подготавливает до трёх изображений одновременно и сразу выдаёт конечный
+2048 px JPEG. Python переиспользует его как review-render без повторного JPEG-кодирования и
+создаёт только thumbnail. Versioned thumbnail также хранится в общем cache и связывается
+с project cache без повторного декодирования при следующем анализе.
+
+Render cache общий для проектов и альбомов. Его ключ включает asset UUID, PhotoKit
+`modificationDate`, размеры и версию render-настроек: неизменённый кадр переиспользуется,
+а отредактированный не получает устаревшую копию.
 
 ## Diagnostic `OSXPhotosProvider`
 

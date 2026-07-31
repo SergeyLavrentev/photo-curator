@@ -120,6 +120,22 @@ Top-K не копируются в truth labels. Review-галерея отде�
 Там же кнопка «Оценить заполненный набор…» запускает тот же versioned evaluator через
 локальный JSONL worker и не требует CLI.
 
+## PhotoKit import benchmark
+
+Реальный album benchmark 2026-07-31: `Карелия: осень 2023`, 103 фотографии,
+MacBook Air M1 16 GB, macOS 26.5.2 arm64. Время берётся из persisted `jobs.started_at` /
+`finished_at`; cold cache проверяется по пустому `photokit-renders/assets-v2`.
+
+| Вариант | Inventory | Previews | Пользовательский «импорт» |
+| --- | ---: | ---: | ---: |
+| Baseline, последовательный 2560 px export | 369,11 с | 13,08 с | 382,19 с |
+| Optimized, пустой v2 render cache | 0,74 с | 7,60 с | 8,34 с |
+| Optimized, общий render + thumbnail cache | 1,60 с | 1,81 с | 3,41 с |
+
+В cold run созданы ровно 103 versioned 2048 px renders. В финальном warm run не создано
+ни одного нового cache-файла. Benchmark-проекты после измерения удалены; общий cache
+сохранён для проверки реального повторного workflow.
+
 ## S1 native Vision benchmark
 
 Swift helper должен собираться с deployment target macOS 13, а aesthetics capability

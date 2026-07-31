@@ -127,6 +127,8 @@ struct TasteRound {
     let albumID: String
     let albumName: String
     let selectionLimit: Int
+    let rejectionLimit: Int
+    let isAdjustment: Bool
     let photos: [PhotoItem]
 
     init?(_ value: [String: Any]) {
@@ -140,6 +142,8 @@ struct TasteRound {
         roundNumber = value["round_number"] as? Int ?? 1
         roundTotal = value["round_total"] as? Int ?? 3
         selectionLimit = value["selection_limit"] as? Int ?? 3
+        rejectionLimit = value["rejection_limit"] as? Int ?? 3
+        isAdjustment = value["is_adjustment"] as? Bool ?? false
         photos = (value["photos"] as? [[String: Any]] ?? []).compactMap(PhotoItem.init)
         guard photos.count == 10 else { return nil }
     }

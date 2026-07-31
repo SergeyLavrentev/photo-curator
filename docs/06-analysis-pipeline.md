@@ -7,8 +7,8 @@
 ## Product pipeline
 
 ```text
-source inventory
-  → safe render + immutable fingerprint
+metadata-only source inventory
+  → bounded PhotoKit render + immutable fingerprint
   → exact duplicate protection
   → Apple Vision native signals
   → optional Core ML / Apple Photos enrichment
@@ -24,6 +24,11 @@ source inventory
 Each stage is independently resumable and records processed/total, warnings, failures,
 versions and current message. A failed signal degrades confidence; it must not silently turn
 an asset into Bad.
+
+`inventory` никогда не экспортирует изображения. `previews` получает versioned 2048 px
+PhotoKit renders с ограниченным параллелизмом, переиспользует межпроектный cache и создаёт
+320 px thumbnails. Запись progress throttled, чтобы число SQLite transactions не росло
+линейно с частотой native callbacks.
 
 ## Signal layers
 
