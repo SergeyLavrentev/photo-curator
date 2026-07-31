@@ -281,7 +281,12 @@ func renderPayloads(
             group.leave()
         }
     }
-    group.wait()
+    while group.wait(timeout: .now() + 0.05) == .timedOut {
+        _ = RunLoop.current.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.01)
+        )
+    }
     return values.compactMap { $0 }
 }
 

@@ -212,6 +212,8 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "for _ in 0..<workerCount" in helper
     assert "let photoTotal = assets.reduce" in helper
     assert "DispatchSemaphore(value: maximumConcurrentRenders)" not in helper
+    assert "while group.wait(timeout: .now() + 0.05) == .timedOut" in helper
+    assert "RunLoop.current.run(" in helper
     assert 'case "asset-metadata-jsonl"' in helper
     assert "targetSize: NSSize(width: 2048, height: 2048)" in helper
     assert "targetSize: NSSize(width: 2560, height: 2560)" not in helper
