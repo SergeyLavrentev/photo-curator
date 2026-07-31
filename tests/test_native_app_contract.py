@@ -202,9 +202,16 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "-framework Photos" in build
     assert "PhotoCuratorSource-Info.plist" in build
     assert "PHAssetCollection.fetchAssetCollections" in helper
-    assert "PHImageManager.default().requestImage" in helper
+    assert "let manager = PHImageManager.default()" in helper
+    assert "manager.requestImage" in helper
     assert 'reviewRenderVersion = "review-v2-2048-q88"' in helper
     assert "maximumConcurrentRenders = 3" in helper
+    assert "reviewRenderTimeoutSeconds = 120.0" in helper
+    assert "options.isSynchronous = false" in helper
+    assert "let workerCount = min(maximumConcurrentRenders, assets.count)" in helper
+    assert "for _ in 0..<workerCount" in helper
+    assert "let photoTotal = assets.reduce" in helper
+    assert "DispatchSemaphore(value: maximumConcurrentRenders)" not in helper
     assert 'case "asset-metadata-jsonl"' in helper
     assert "targetSize: NSSize(width: 2048, height: 2048)" in helper
     assert "targetSize: NSSize(width: 2560, height: 2560)" not in helper

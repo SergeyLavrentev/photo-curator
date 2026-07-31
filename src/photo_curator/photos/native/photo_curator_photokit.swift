@@ -125,6 +125,7 @@ func safeStem(_ identifier: String) -> String {
 
 let reviewRenderVersion = "review-v2-2048-q88"
 let maximumConcurrentRenders = 3
+let reviewRenderTimeoutSeconds = 120.0
 
 func renderCacheKey(_ asset: PHAsset) -> String {
     let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
@@ -137,21 +138,44 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
         return (destination.path, nil)
     }
     let options = PHImageRequestOptions()
-    options.isSynchronous = true
+    options.isSynchronous = false
     options.isNetworkAccessAllowed = true
     options.deliveryMode = .highQualityFormat
     options.resizeMode = .exact
+    let manager = PHImageManager.default()
+    let completion = DispatchSemaphore(value: 0)
+    let stateLock = NSLock()
     var rendered: NSImage?
     var requestError: String?
-    PHImageManager.default().requestImage(
+    var finished = false
+    let requestID = manager.requestImage(
         for: asset,
         targetSize: NSSize(width: 2048, height: 2048),
         contentMode: .aspectFit,
         options: options
     ) { image, info in
+        let isDegraded = info?[PHImageResultIsDegradedKey] as? Bool == true
+        let error = info?[PHImageErrorKey] as? Error
+        let isCancelled = info?[PHImageCancelledKey] as? Bool == true
+        guard !isDegraded || error != nil || isCancelled else { return }
+        stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
         rendered = image
-        if let error = info?[PHImageErrorKey] as? Error { requestError = error.localizedDescription }
-        if info?[PHImageCancelledKey] as? Bool == true { requestError = "PhotoKit request cancelled" }
+        if let error { requestError = error.localizedDescription }
+        if isCancelled { requestError = "PhotoKit request cancelled" }
+        finished = true
+        stateLock.unlock()
+        completion.signal()
+    }
+    if completion.wait(timeout: .now() + reviewRenderTimeoutSeconds) == .timedOut {
+        stateLock.lock()
+        finished = true
+        stateLock.unlock()
+        manager.cancelImageRequest(requestID)
+        return (nil, "PhotoKit render timed out after \(Int(reviewRenderTimeoutSeconds)) seconds")
     }
     guard let image = rendered,
           let tiff = image.tiffRepresentation,
@@ -217,21 +241,43 @@ func renderPayloads(
         qos: .userInitiated,
         attributes: .concurrent
     )
-    let limit = DispatchSemaphore(value: maximumConcurrentRenders)
     let lock = NSLock()
-    var completed = 0
+    let photoTotal = assets.reduce(0) { $0 + ($1.mediaType == .image ? 1 : 0) }
+    var completedPhotos = 0
+    var nextIndex = 0
     var values = Array<AssetPayload?>(repeating: nil, count: assets.count)
-    for (index, asset) in assets.enumerated() {
+    let workerCount = min(maximumConcurrentRenders, assets.count)
+    for _ in 0..<workerCount {
         group.enter()
         queue.async {
-            limit.wait()
-            let value = payload(asset, outputDirectory: outputDirectory)
-            limit.signal()
-            lock.lock()
-            values[index] = value
-            completed += 1
-            progress?(completed, assets.count, asset.localIdentifier)
-            lock.unlock()
+            while true {
+                lock.lock()
+                guard nextIndex < assets.count else {
+                    lock.unlock()
+                    break
+                }
+                let index = nextIndex
+                nextIndex += 1
+                lock.unlock()
+
+                let asset = assets[index]
+                let value = autoreleasepool {
+                    payload(asset, outputDirectory: outputDirectory)
+                }
+                var progressUpdate: (Int, Int, String)?
+                lock.lock()
+                values[index] = value
+                if asset.mediaType == .image {
+                    completedPhotos += 1
+                    progressUpdate = (
+                        completedPhotos, photoTotal, asset.localIdentifier
+                    )
+                }
+                lock.unlock()
+                if let update = progressUpdate {
+                    progress?(update.0, update.1, update.2)
+                }
+            }
             group.leave()
         }
     }
