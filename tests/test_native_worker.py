@@ -4,6 +4,7 @@ import io
 import json
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -391,6 +392,9 @@ def test_native_worker_marks_restart_interrupted_and_resumes_same_stage(tmp_path
         def start(self, received_project_id, from_stage=None):
             self.started.append((received_project_id, from_stage))
 
+        def is_running(self, received_project_id):
+            return False
+
         def cancel(self, received_project_id):
             return received_project_id == project_id
 
@@ -404,6 +408,30 @@ def test_native_worker_marks_restart_interrupted_and_resumes_same_stage(tmp_path
     assert resumed["from_stage"] == "metrics"
     assert coordinator.started == [(project_id, "metrics")]
     assert worker.dispatch("cancel_analysis", {"project_id": project_id})["status"] == "cancelling"
+
+
+def test_native_worker_resume_is_idempotent_while_cancellation_unwinds(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    entered = Event()
+    release = Event()
+    original_list_assets = provider.list_assets
+
+    def blocking_list_assets(album_id: str):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original_list_assets(album_id)
+
+    provider.list_assets = blocking_list_assets
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    worker.dispatch("start_analysis", {"project_id": project_id})
+    assert entered.wait(timeout=5)
+    assert worker.dispatch("cancel_analysis", {"project_id": project_id})["status"] == "cancelling"
+
+    resumed = worker.dispatch("resume_analysis", {"project_id": project_id})
+
+    assert resumed == {"status": "already_running", "project_id": project_id}
+    release.set()
+    coordinator._futures[project_id].result(timeout=5)
 
 
 def test_native_worker_returns_only_latest_job_for_each_stage(tmp_path: Path) -> None:

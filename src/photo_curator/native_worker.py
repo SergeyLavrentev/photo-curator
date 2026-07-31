@@ -168,6 +168,11 @@ class NativeWorker:
 
     def _handle_resume_analysis(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
+        # Cancellation is cooperative: a blocking PhotoKit/Vision call may still
+        # be unwinding after the UI has offered "Continue".  Retrying resume in
+        # that interval must be idempotent instead of attempting a second run.
+        if self.coordinator.is_running(project_id):
+            return {"status": "already_running", "project_id": project_id}
         with database_connection(self.paths.database) as connection:
             repository.get_project(connection, project_id)
             jobs = repository.latest_jobs(connection, project_id)

@@ -70,6 +70,12 @@ class PipelineCoordinator:
             self._futures[project_id] = future
         return project_id
 
+    def is_running(self, project_id: str) -> bool:
+        """Return whether this coordinator still owns a live pipeline."""
+        with self._lock:
+            current = self._futures.get(project_id)
+            return current is not None and not current.done()
+
     def cancel(self, project_id: str) -> bool:
         with self._lock:
             current = self._futures.get(project_id)
