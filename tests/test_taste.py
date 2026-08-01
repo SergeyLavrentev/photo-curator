@@ -54,6 +54,7 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
     assert profile["evidence"]["calibration_accuracy"] == 1.0
     assert profile["evidence"]["held_out_pairs"] == 1
     assert model is not None
+    assert 0 < model.reliability < 0.1
     assert model.personal_delta(signals["demo-012"]["feature_print"]) > model.personal_delta(
         signals["demo-001"]["feature_print"]
     )
@@ -61,7 +62,8 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
     coordinator.run(project_id, from_stage="decisions")
     with database_connection(paths.database) as connection:
         scores = repository.list_swipe_scores(connection, project_id)
-    assert any(abs(float(score["personal_delta"])) >= 2 for score in scores)
+    assert any(abs(float(score["personal_delta"])) > 0.05 for score in scores)
+    assert all(float(score["components"]["personal_taste_reliability"]) < 10 for score in scores)
     assert all("personal_taste" in score["model_versions"] for score in scores)
 
 
@@ -106,7 +108,7 @@ def test_taste_model_is_explicitly_invalidated_when_vision_schema_changes(
         restored = repository.get_taste_profile(connection)
         restored_scores = repository.list_swipe_scores(connection, project_id)
     assert restored["status"] == "ready"
-    assert any(abs(float(score["personal_delta"])) >= 2 for score in restored_scores)
+    assert any(abs(float(score["personal_delta"])) > 0.05 for score in restored_scores)
 
 
 def test_preference_vectors_survive_project_deletion_and_reset_is_complete(tmp_path: Path) -> None:

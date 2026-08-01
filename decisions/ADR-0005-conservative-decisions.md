@@ -8,7 +8,14 @@
 
 ## Decision
 
-Automatic reject по умолчанию применяется только к уверенным duplicate losers. Technical defects и эстетические сомнения идут в review. Favorite, edited, missing, leaders и ambiguous groups защищены.
+Automatic reject по умолчанию применяется только к exact duplicate losers и к уверенным
+near-duplicate losers из одной короткой серии, когда одновременно подтверждены близкое время,
+сильное визуальное сходство, заметный проигрыш лидеру и объективный technical defect. Низкий
+album-relative score сам по себе никогда не означает reject. Очень низкие aesthetic и
+personal-taste сигналы могут означать reject только при высокой confidence и согласии нескольких
+независимых признаков; одиночный или слабо проверенный сигнал приводит к keep.
+Ограничение разнообразия влияет только на ранжирование, но не переводит кадр в Bad.
+Favorite, edited, missing, leaders и ambiguous groups защищены.
 
 ## Consequences
 

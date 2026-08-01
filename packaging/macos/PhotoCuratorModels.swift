@@ -26,6 +26,7 @@ struct ProjectItem: Identifiable, Equatable {
     let albumID: String
     let albumName: String
     let decisionModelVersion: Int
+    let analysisMode: String
     let createdAt: String
     let updatedAt: String
 
@@ -43,8 +44,26 @@ struct ProjectItem: Identifiable, Equatable {
         self.albumName = albumName
         let settings = value["settings"] as? [String: Any]
         decisionModelVersion = settings?["decision_model_version"] as? Int ?? 0
+        analysisMode = settings?["analysis_mode"] as? String ?? "local"
         createdAt = value["created_at"] as? String ?? ""
         updatedAt = value["updated_at"] as? String ?? ""
+    }
+}
+
+struct CodexConnectionStatus: Equatable {
+    let state: String
+    let ready: Bool
+    let version: String?
+    let authKind: String?
+    let detail: String?
+
+    init?(_ value: [String: Any]) {
+        guard let state = value["state"] as? String else { return nil }
+        self.state = state
+        ready = value["ready"] as? Bool ?? false
+        version = value["version"] as? String
+        authKind = value["auth_kind"] as? String
+        detail = value["detail"] as? String
     }
 }
 
@@ -184,6 +203,12 @@ private func reasonTitle(_ code: String) -> String {
         "below_album_cutoff": "Уступает другим кадрам этого альбома",
         "weaker_duplicate": "Есть более удачный похожий кадр",
         "possible_blur": "Недостаточная резкость",
+        "poor_face_capture": "Лицо снято неразборчиво",
+        "extreme_horizon": "Сильно завален горизонт",
+        "bad_angle": "Неудачный ракурс",
+        "blocked_subject": "Главный объект перекрыт",
+        "codex_confirmed_defect": "Codex подтвердил явный дефект",
+        "no_confirmed_defect": "Явных дефектов не найдено",
         "underexposed": "Слишком тёмный кадр",
         "overexposed": "Пересвеченный кадр",
         "low_contrast": "Слабый контраст",

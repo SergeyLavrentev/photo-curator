@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from photo_curator.analysis.decision_engine import album_selection_threshold, decide_asset
-from photo_curator.analysis.swipe_score import apple_score_percentiles, calculate_swipe_score
+from photo_curator.analysis.swipe_score import (
+    POSITIVE_APPLE_SCORE_KEYS,
+    apple_score_percentiles,
+    calculate_swipe_score,
+)
 
 
 def _asset(uuid: str, **values: object) -> dict[str, object]:
@@ -89,10 +93,53 @@ def test_missing_aesthetics_is_neutral_and_lowers_confidence() -> None:
     native = calculate_swipe_score(_asset("native"), None, _signals(0.2))
     fallback = calculate_swipe_score(_asset("fallback"), None, {})
 
-    assert fallback.generic_score == 52
+    assert fallback.generic_score == 52.76
     assert fallback.components["generic_aesthetics"] == 50
     assert fallback.confidence < native.confidence
     assert fallback.personal_delta == 0
+
+
+def test_missing_detailed_apple_scores_are_neutral_not_repeated_aesthetic_votes() -> None:
+    score = calculate_swipe_score(_asset("photo"), None, _signals(0.8))
+
+    assert score.components["generic_aesthetics"] == 90
+    assert score.components["content_appeal"] == 50
+    assert score.components["moment_and_subject"] == 50
+
+
+def test_aesthetic_consensus_can_reject_an_absolute_low_outlier() -> None:
+    apple = {key: 0.10 for keys in POSITIVE_APPLE_SCORE_KEYS.values() for key in keys}
+    photo = _asset("consensus-low")
+    score = calculate_swipe_score(
+        photo,
+        None,
+        _signals(-0.8),
+        apple_percentiles=apple,
+    )
+
+    decision = decide_asset(photo, None, "balanced", score)
+
+    assert score.score <= 25
+    assert score.confidence >= 0.82
+    assert decision.disposition == "reject"
+    assert decision.reasons[0]["code"] == "weak_aesthetics"
+
+
+def test_reliable_personal_mismatch_can_corroborate_low_generic_aesthetics() -> None:
+    photo = _asset("personally-low")
+    score = calculate_swipe_score(
+        photo,
+        None,
+        _signals(-0.8),
+        personal_delta=-10,
+        taste_model_version="test",
+        taste_reliability=0.8,
+    )
+
+    decision = decide_asset(photo, None, "balanced", score)
+
+    assert decision.disposition == "reject"
+    assert any(reason["code"] == "personal_taste_mismatch" for reason in decision.reasons)
 
 
 def test_rich_apple_scores_are_relative_and_zero_means_missing_positive_signal() -> None:
@@ -137,7 +184,7 @@ def test_album_relative_threshold_makes_balanced_selection_meaningfully_strict()
     assert sum(score >= balanced for score in scores) <= 20
 
 
-def test_rejected_photo_exposes_only_negative_user_facing_reasons() -> None:
+def test_low_ranked_photo_is_kept_without_confirmed_duplicate_defect() -> None:
     photo = _asset("soft", sharpness_percentile=0.01)
     score = calculate_swipe_score(photo, None, _signals(0.8))
 
@@ -154,11 +201,6 @@ def test_rejected_photo_exposes_only_negative_user_facing_reasons() -> None:
         if reason["code"] not in {"selection_score", "swipe_score"}
     }
 
-    assert decision.disposition == "reject"
-    assert "possible_blur" in visible_codes
-    assert not visible_codes & {
-        "strong_aesthetics",
-        "strong_composition",
-        "interesting_subject",
-        "strong_moment",
-    }
+    assert decision.disposition == "keep"
+    assert "no_confirmed_defect" in visible_codes
+    assert "below_album_cutoff" not in visible_codes

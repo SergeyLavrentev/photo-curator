@@ -16,7 +16,21 @@ class DecisionResult:
     reasons: list[dict[str, object]]
 
 
-DECISION_MODEL_VERSION = 2
+DECISION_MODEL_VERSION = 3
+NEAR_DUPLICATE_MAX_SECONDS = 15.0
+NEAR_DUPLICATE_MIN_CONFIDENCE = 0.92
+NEAR_DUPLICATE_MIN_QUALITY_MARGIN = 0.12
+NEAR_DUPLICATE_MAX_PIXEL_MAE = 0.12
+CONFIRMED_DEFECT_FLAGS = {
+    "possible_blur",
+    "underexposed",
+    "overexposed",
+    "low_contrast",
+    "poor_face_capture",
+    "extreme_horizon",
+    "bad_angle",
+    "blocked_subject",
+}
 SELECTED_THRESHOLDS = {
     "compact": 82,
     "balanced": 74,
@@ -46,12 +60,12 @@ def binary_disposition(
     *,
     selected_threshold: int | None = None,
 ) -> str:
-    """Resolve every automatic result into the two user-facing buckets."""
+    """Resolve legacy review rows without turning a low rank into a defect."""
+    del score, selection_density, selected_threshold
     flag_set = set(flags)
     if flag_set & {"missing_preview", "analysis_error", "ambiguous_duplicate"}:
         return "keep"
-    threshold = selected_threshold or SELECTED_THRESHOLDS.get(selection_density, 74)
-    return "keep" if score >= threshold else "reject"
+    return "reject" if "exact_duplicate" in flag_set else "keep"
 
 
 def decide_asset(
@@ -84,6 +98,9 @@ def decide_asset(
             flags.add("duplicate_loser")
     metric_flags = _metric_flags(asset)
     flags.update(metric_flags)
+    codex_flags = asset.get("codex_flags")
+    if isinstance(codex_flags, list):
+        flags.update(str(flag) for flag in codex_flags)
     if swipe_score is None:
         score, components = _selection_score(asset, duplicate, metric_flags)
         decision_confidence = 0.65
@@ -119,8 +136,9 @@ def decide_asset(
         )
     if duplicate and not duplicate.get("is_leader"):
         confidence = float(duplicate.get("confidence") or 0.0)
-        quality_margin = float(duplicate.get("quality_margin") or 0.0)
-        if duplicate.get("kind") == "exact" or (confidence >= 0.92 and quality_margin >= 0.08):
+        if duplicate.get("kind") == "exact" or _confirmed_bad_near_duplicate(
+            duplicate, metric_flags | (flags & CONFIRMED_DEFECT_FLAGS)
+        ):
             return _result(
                 "reject",
                 confidence,
@@ -132,8 +150,17 @@ def decide_asset(
                 threshold,
                 leading_reason="weaker_duplicate",
             )
-        # A weak near-duplicate signal is not enough on its own. The regular
-        # selection threshold below decides whether the frame stays.
+        return _result(
+            "keep",
+            min(0.9, max(0.55, confidence)),
+            score,
+            components,
+            flags,
+            duplicate,
+            swipe_score,
+            threshold,
+            leading_reason="no_confirmed_defect",
+        )
     if duplicate and duplicate.get("is_leader"):
         return _result(
             "keep",
@@ -146,7 +173,36 @@ def decide_asset(
             threshold,
             leading_reason="best_in_series",
         )
-    disposition = "keep" if score >= threshold else "reject"
+    if (
+        asset.get("codex_reject_recommended")
+        and float(asset.get("codex_confidence") or 0.0) >= 0.9
+        and flags & CONFIRMED_DEFECT_FLAGS
+    ):
+        return _result(
+            "reject",
+            float(asset.get("codex_confidence") or 0.0),
+            score,
+            components,
+            flags,
+            duplicate,
+            swipe_score,
+            threshold,
+            leading_reason="codex_confirmed_defect",
+        )
+    if swipe_score and _confirmed_low_appeal(swipe_score, metric_flags):
+        return _result(
+            "reject",
+            swipe_score.confidence,
+            score,
+            components,
+            flags,
+            duplicate,
+            swipe_score,
+            threshold,
+        )
+    # Swipe Score ranks the album and helps choose Best candidates. A low relative
+    # rank is not evidence that the photo itself is bad.
+    disposition = "keep"
     confidence = _threshold_confidence(score, threshold, decision_confidence)
     return _result(
         disposition,
@@ -157,7 +213,69 @@ def decide_asset(
         duplicate,
         swipe_score,
         threshold,
+        leading_reason="no_confirmed_defect" if score < threshold else None,
     )
+
+
+def _confirmed_bad_near_duplicate(duplicate: dict[str, object], metric_flags: set[str]) -> bool:
+    """Require a close burst, strong visual match and an objective loser defect."""
+    if duplicate.get("kind") != "near":
+        return False
+    confidence = float(duplicate.get("confidence") or 0.0)
+    quality_margin = float(duplicate.get("quality_margin") or 0.0)
+    time_delta = duplicate.get("time_delta_seconds")
+    evidence = duplicate.get("pair_evidence")
+    pair = evidence if isinstance(evidence, dict) else {}
+    pixel_mae = pair.get("normalized_pixel_mae")
+    pixel_close = (
+        isinstance(pixel_mae, (int, float)) and float(pixel_mae) <= NEAR_DUPLICATE_MAX_PIXEL_MAE
+    )
+    phash_distance = pair.get("phash_distance")
+    dhash_distance = pair.get("dhash_distance")
+    hash_close = (
+        isinstance(phash_distance, (int, float))
+        and float(phash_distance) <= 4
+        and isinstance(dhash_distance, (int, float))
+        and float(dhash_distance) <= 8
+        and float(pair.get("histogram_similarity") or 0.0) >= 0.90
+    )
+    return bool(
+        confidence >= NEAR_DUPLICATE_MIN_CONFIDENCE
+        and isinstance(time_delta, (int, float))
+        and float(time_delta) <= NEAR_DUPLICATE_MAX_SECONDS
+        and quality_margin >= NEAR_DUPLICATE_MIN_QUALITY_MARGIN
+        and metric_flags & CONFIRMED_DEFECT_FLAGS
+        and (pixel_close or hash_close)
+    )
+
+
+def _confirmed_low_appeal(swipe_score: SwipeScoreResult, metric_flags: set[str]) -> bool:
+    """Reject only an absolute low outlier supported by independent evidence."""
+    if swipe_score.score > 25 or swipe_score.confidence < 0.82:
+        return False
+    components = swipe_score.components
+    generic_negative = float(components.get("generic_aesthetics") or 50.0) <= 25.0
+    detailed_negatives = sum(
+        float(components.get(key) or 50.0) <= 25.0
+        for key in (
+            "content_appeal",
+            "composition_and_attention",
+            "moment_and_subject",
+        )
+    )
+    detailed_consensus = detailed_negatives >= 2
+    taste_reliable = float(components.get("personal_taste_reliability") or 0.0) >= 50.0
+    taste_negative = taste_reliable and swipe_score.personal_delta <= -6.0
+    technical_negative = bool(metric_flags & CONFIRMED_DEFECT_FLAGS)
+    corroborating_families = sum(
+        (
+            generic_negative,
+            detailed_consensus,
+            taste_negative,
+            technical_negative,
+        )
+    )
+    return (generic_negative or detailed_consensus) and corroborating_families >= 2
 
 
 def _threshold_confidence(score: int, threshold: int, signal_confidence: float) -> float:
@@ -255,6 +373,10 @@ def _decision_reasons(
         "overexposed",
         "low_contrast",
         "apple_low_overall",
+        "poor_face_capture",
+        "extreme_horizon",
+        "bad_angle",
+        "blocked_subject",
     )
     for code in negative_flag_order:
         if code in flags:
@@ -362,4 +484,12 @@ def _metric_flags(asset: dict[str, object]) -> set[str]:
     apple = asset.get("apple_overall_percentile")
     if apple is not None and float(apple) <= 0.05:
         flags.add("apple_low_overall")
+    face_quality = asset.get("face_capture_quality")
+    if (
+        int(asset.get("face_count") or 0) > 0
+        and int(asset.get("eyes_detected") or 0) == 0
+        and face_quality is not None
+        and float(face_quality) <= 0.20
+    ):
+        flags.add("poor_face_capture")
     return flags

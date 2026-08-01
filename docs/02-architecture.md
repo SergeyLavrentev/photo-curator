@@ -10,6 +10,8 @@ flowchart TD
     AC --> VI["Apple Vision: aesthetics, feature print, saliency, faces"]
     AC --> CM["Core ML: validated semantic and aesthetic models"]
     AC --> PW["Python enrichment worker"]
+    AC -. "explicit opt-in" .-> CX["Installed Codex CLI / ChatGPT workspace"]
+    CX --> SS
     VI --> SS["Swipe Score and scene ranker"]
     CM --> SS
     PW --> SS
@@ -33,6 +35,8 @@ JavaScript, FastAPI, a browser or a localhost port.
 - **Core ML engine** runs only versioned, benchmarked models with declared compute policy.
 - **Python worker** is a temporary stateless enrichment boundary, never a second backend.
 - **Taste Profile** owns versioned preference examples and lightweight ranking parameters.
+- **Codex Vision adapter** is optional, cloud-backed and disabled by default. It auto-discovers
+  the installed official CLI, requires ChatGPT authentication and emits schema-validated signals.
 
 ## State and IPC
 

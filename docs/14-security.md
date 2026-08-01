@@ -44,7 +44,14 @@ subprocess.run(argv, shell=False, check=False, ...)
 ## Privacy
 
 - no telemetry;
-- no cloud calls;
+- no cloud calls в стандартном локальном режиме;
 - no analytics;
 - no external CDN;
 - не логировать GPS/person names/image data.
+
+Optional Codex Vision является единственным явным cloud boundary. Он выключен по умолчанию,
+показывает предупреждение перед созданием проекта и передаёт только service-owned review-копии
+после подтверждения пользователя. Приложение не читает и не копирует Codex credentials:
+официальный CLI самостоятельно использует существующую ChatGPT session. API-key auth для этого
+режима считается неготовым состоянием. Команда запускается фиксированным argv с `shell=False`,
+`--ephemeral`, `--ignore-user-config`, `--ignore-rules` и read-only sandbox.

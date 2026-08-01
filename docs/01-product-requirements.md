@@ -42,10 +42,13 @@ Photo Curator превращает большой альбом Apple Photos в �
 - Разнообразие финального Top K, чтобы одна серия или один сюжет не заняли весь результат.
 - Manual override, undo, keyboard navigation, Quick Look и state restoration.
 - Safe publish: dry-run, source revalidation, explicit confirmation и новый Best-альбом.
+- Отдельный optional Codex Vision mode: disabled by default, explicit privacy/usage warning,
+  automatic official CLI discovery, ChatGPT-auth-only preflight and resumable batches.
 
 ## Non-functional requirements
 
-- Полностью локальная обработка без cloud API и telemetry.
+- Полностью локальная обработка без cloud API и telemetry по умолчанию; Codex Vision —
+  единственный явный opt-in cloud boundary по ADR-0008.
 - Поддержка 5 000 фотографий с измеренными latency, peak memory и energy budgets.
 - Core ML использует доступные CPU/GPU/Neural Engine через совместимые compute units.
 - Один владелец mutable project state; Python worker не пишет состояние самостоятельно.

@@ -22,6 +22,7 @@
 | Resume and invalidation | coordinator + ProjectStore | restart/model/source change tests |
 | One mutable state owner | native store + versioned IPC | architecture and concurrency tests |
 | Local-only privacy | app/network boundary | entitlement/network audit |
+| Explicit Codex cloud mode | consent + CLI adapter | auth/discovery/schema tests + warning content review |
 | Signed native release | build pipeline | verified macOS `.dmg` + codesign + notarization |
 
 ## Historical implementation mapping

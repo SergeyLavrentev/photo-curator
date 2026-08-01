@@ -53,7 +53,7 @@ def test_exact_duplicate_loser_is_excluded_and_leader_is_selected() -> None:
     assert "duplicate_leader" in leader.flags
 
 
-def test_selection_score_drives_selected_review_and_excluded_buckets() -> None:
+def test_selection_score_ranks_photos_without_calling_a_low_score_bad() -> None:
     high = asset("high")
     low = asset("low")
     low.update(
@@ -65,16 +65,17 @@ def test_selection_score_drives_selected_review_and_excluded_buckets() -> None:
     )
 
     selected = decide_asset(high, None)
-    excluded = decide_asset(low, None)
+    low_ranked = decide_asset(low, None)
 
     assert selected.disposition == "keep"
     assert selected.score >= 70
-    assert excluded.disposition == "reject"
-    assert excluded.score < 38
-    assert excluded.components["exposure"] < selected.components["exposure"]
+    assert low_ranked.disposition == "keep"
+    assert low_ranked.score < 38
+    assert low_ranked.components["exposure"] < selected.components["exposure"]
+    assert low_ranked.reasons[0]["code"] == "no_confirmed_defect"
 
 
-def test_selection_density_changes_the_size_of_the_auto_selection() -> None:
+def test_selection_density_does_not_turn_a_valid_photo_bad() -> None:
     borderline = asset("borderline")
     borderline.update(
         technical_quality=0.55,
@@ -84,7 +85,7 @@ def test_selection_density_changes_the_size_of_the_auto_selection() -> None:
         luma_mean=0.5,
     )
 
-    assert decide_asset(borderline, None, "compact").disposition == "reject"
+    assert decide_asset(borderline, None, "compact").disposition == "keep"
     assert decide_asset(borderline, None, "broad").disposition == "keep"
 
 
@@ -115,31 +116,60 @@ def test_score_breakdown_exposes_series_rank_and_selection_confidence() -> None:
     assert leader.components["selection_confidence"] == 93
 
 
-def test_near_duplicate_requires_both_confidence_and_quality_margin() -> None:
-    normal = {"favorite": False, "has_adjustments": False, "cache_state": "ready"}
+def test_near_duplicate_requires_close_time_match_quality_gap_and_defect() -> None:
+    normal = {
+        "favorite": False,
+        "has_adjustments": False,
+        "cache_state": "ready",
+        "sharpness_percentile": 0.05,
+    }
+    close_pair = {
+        "kind": "near",
+        "confidence": 0.98,
+        "quality_margin": 0.20,
+        "time_delta_seconds": 4.0,
+        "is_leader": False,
+        "flags": ["near_duplicate"],
+        "pair_evidence": {
+            "phash_distance": 2,
+            "dhash_distance": 4,
+            "histogram_similarity": 0.96,
+            "normalized_pixel_mae": 0.06,
+        },
+    }
     without_margin = decide_asset(
         normal,
-        {
-            "kind": "near",
-            "confidence": 0.98,
-            "quality_margin": 0.02,
-            "is_leader": False,
-            "flags": ["near_duplicate"],
-        },
+        {**close_pair, "quality_margin": 0.02},
     )
-    with_margin = decide_asset(
-        normal,
-        {
-            "kind": "near",
-            "confidence": 0.98,
-            "quality_margin": 0.20,
-            "is_leader": False,
-            "flags": ["near_duplicate"],
-        },
+    too_late = decide_asset(normal, {**close_pair, "time_delta_seconds": 45.0})
+    sharp_loser = decide_asset(
+        {**normal, "sharpness_percentile": 0.50},
+        close_pair,
     )
+    confirmed_blurred_loser = decide_asset(normal, close_pair)
 
-    assert without_margin.disposition == "reject"
-    assert with_margin.disposition == "reject"
+    assert without_margin.disposition == "keep"
+    assert too_late.disposition == "keep"
+    assert sharp_loser.disposition == "keep"
+    assert confirmed_blurred_loser.disposition == "reject"
+    assert confirmed_blurred_loser.reasons[0]["code"] == "weaker_duplicate"
+    assert any(reason["code"] == "possible_blur" for reason in confirmed_blurred_loser.reasons)
+
+
+def test_low_quality_portrait_flag_needs_a_confirmed_near_duplicate() -> None:
+    portrait = {
+        "favorite": False,
+        "has_adjustments": False,
+        "cache_state": "ready",
+        "face_count": 1,
+        "eyes_detected": 0,
+        "face_capture_quality": 0.10,
+    }
+
+    decision = decide_asset(portrait, None, selected_threshold=100)
+
+    assert decision.disposition == "keep"
+    assert "poor_face_capture" in decision.flags
 
 
 def test_favorite_edited_missing_and_ambiguous_assets_are_never_auto_rejected() -> None:

@@ -91,12 +91,24 @@ step, so twenty near-identical sunset frames cannot dominate the result.
 The score ranks this corpus; it is not a probability or a universal beauty judgement.
 Missing components are not treated as zero. Weights and calibration are versioned.
 
-## Binary selection model
+## Binary defect policy
 
-The engine always produces two user-facing categories: Good and Bad. Compact, balanced and
-broad target approximately 25%, 45% and 65% of the current album, while retaining an absolute
-quality floor for each mode. This makes the control describe the future Best album instead of
-applying one weak universal cutoff to every corpus.
+The engine always produces two user-facing categories: Good and Bad, but Bad is not the bottom
+part of an album ranking. Automatic Bad is limited to exact duplicate losers and highly
+confident near-duplicate losers captured within 15 seconds that have a confirmed visual match,
+a material quality gap and a concrete technical defect. A low album-relative score is ranking
+evidence only. Aesthetics and personal taste can make an absolute low outlier Bad only when
+confidence is high and at least two independent signals agree. Scene-diversity limits also rank
+candidates but never make a photo Bad.
+
+Generic Vision aesthetics is counted once. Missing detailed composition/content/moment scores
+stay neutral instead of duplicating that baseline. Personal Taste influence is multiplied by a
+reliability factor derived from sample count and held-out accuracy; calibration-only accuracy is
+explicitly discounted.
+
+Compact, balanced and broad remain ranking cutoffs for diagnostics and future Best-candidate
+presentation, not defect labels. If the product needs a fixed-size Best subset, that membership
+must be represented separately instead of reusing Good/Bad disposition.
 
 Decision confidence is calibrated from the distance to that album's cutoff and the reliability
 of the available signals. It is not copied from the Swipe Score confidence. Explanations are

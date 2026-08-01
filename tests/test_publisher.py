@@ -276,6 +276,24 @@ def test_resolution_inversion_blocks_publish_until_explicit_manual_confirmation(
     assert any("подтверждён вручную" in warning for warning in confirmed.warnings)
 
 
+def test_exact_copy_reject_is_not_a_resolution_inversion_when_full_size_copy_is_kept(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        runner=lambda args: CommandResult(args, 0, "--uuid-from-file --add-to-album --dry-run", ""),
+        executable="/usr/bin/true",
+    )
+
+    validation = publisher.validate(project_id)
+
+    assert not any("resolution inversion" in blocker for blocker in validation.blockers)
+
+
 def test_provider_failure_becomes_publish_blocker(tmp_path: Path) -> None:
     paths, provider, coordinator, project_id = build_pipeline(tmp_path)
     coordinator.run(project_id)

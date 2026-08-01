@@ -72,9 +72,11 @@ def calculate_swipe_score(
     apple_percentiles: dict[str, float] | None = None,
     personal_delta: float = 0.0,
     taste_model_version: str | None = None,
+    taste_reliability: float = 0.0,
 ) -> SwipeScoreResult:
     apple_percentiles = apple_percentiles or {}
     aesthetics = _signal_value(signals.get("aesthetics"))
+    codex = _signal_value(signals.get("codex_vision"))
     generic_source = "neutral"
     if aesthetics is not None and isinstance(aesthetics.get("overall_score"), (int, float)):
         generic = _clamp((float(aesthetics["overall_score"]) + 1.0) * 50.0)
@@ -84,24 +86,32 @@ def calculate_swipe_score(
         generic_source = "apple_photos_overall"
     else:
         generic = 50.0
+    if codex is not None and isinstance(codex.get("aesthetic_score"), (int, float)):
+        generic = _clamp(float(codex["aesthetic_score"]))
+        generic_source = "codex_vision"
 
-    content = _positive_component(
-        apple_percentiles, POSITIVE_APPLE_SCORE_KEYS["content_appeal"], generic
-    )
+    content = _positive_component(apple_percentiles, POSITIVE_APPLE_SCORE_KEYS["content_appeal"])
     composition = _positive_component(
         apple_percentiles,
         POSITIVE_APPLE_SCORE_KEYS["composition_and_attention"],
-        generic,
     )
     saliency = _signal_value(signals.get("attention_saliency"))
+    attention: float | None = None
     if saliency is not None:
         salient_objects = saliency.get("salient_objects")
         if isinstance(salient_objects, list):
             attention = {0: 50.0, 1: 88.0, 2: 78.0, 3: 66.0}.get(len(salient_objects), 55.0)
-            composition = (composition * 0.7) + (attention * 0.3)
-    moment = _positive_component(
-        apple_percentiles, POSITIVE_APPLE_SCORE_KEYS["moment_and_subject"], generic
-    )
+            composition = (
+                attention if composition is None else (composition * 0.7) + (attention * 0.3)
+            )
+    moment = _positive_component(apple_percentiles, POSITIVE_APPLE_SCORE_KEYS["moment_and_subject"])
+    if codex is not None:
+        if isinstance(codex.get("interestingness_score"), (int, float)):
+            content = _clamp(float(codex["interestingness_score"]))
+        if isinstance(codex.get("composition_score"), (int, float)):
+            composition = _clamp(float(codex["composition_score"]))
+        if isinstance(codex.get("moment_score"), (int, float)):
+            moment = _clamp(float(codex["moment_score"]))
     faces = _signal_value(signals.get("faces"))
     portrait_signal: float | None = None
     if faces is not None and int(faces.get("face_count") or 0) > 0:
@@ -111,19 +121,21 @@ def calculate_swipe_score(
     series = _series_score(duplicate)
     penalty = _technical_penalty(asset, duplicate)
     values_and_weights = [
-        (generic, 0.45),
-        (content, 0.20),
-        (composition, 0.15),
-        (moment, 0.10),
-        (series, 0.10),
+        (generic, 0.50),
+        (series, 0.08),
     ]
+    for value, weight in ((content, 0.18), (composition, 0.14), (moment, 0.10)):
+        if value is not None:
+            values_and_weights.append((value, weight))
     if portrait_signal is not None:
         values_and_weights.append((portrait_signal, 0.08))
     weighted = sum(value * weight for value, weight in values_and_weights) / sum(
         weight for _, weight in values_and_weights
     )
     utility_penalty = 8.0 if aesthetics is not None and aesthetics.get("is_utility") else 0.0
-    generic_rank_score = _clamp(weighted - penalty - utility_penalty)
+    codex_defects = codex.get("defects", []) if codex is not None else []
+    codex_penalty = min(20.0, 7.0 * len(codex_defects)) if isinstance(codex_defects, list) else 0.0
+    generic_rank_score = _clamp(weighted - penalty - utility_penalty - codex_penalty)
     personal_delta = max(-20.0, min(20.0, float(personal_delta)))
     score = round(_clamp(generic_rank_score + personal_delta))
 
@@ -135,19 +147,21 @@ def calculate_swipe_score(
     confidence += 0.05 if "feature_print" in available else 0
     confidence += 0.05 if portrait_signal is not None and "faces" in available else 0
     confidence += 0.07 if duplicate is not None else 0
-    confidence += 0.05 if taste_model_version else 0
+    confidence += 0.18 if "codex_vision" in available else 0
+    confidence += 0.05 * max(0.0, min(1.0, taste_reliability))
     confidence = min(0.98, confidence)
 
     components = {
         "generic_aesthetics": round(generic, 2),
-        "content_appeal": round(content, 2),
-        "composition_and_attention": round(composition, 2),
-        "moment_and_subject": round(moment, 2),
+        "content_appeal": round(content if content is not None else 50.0, 2),
+        "composition_and_attention": round(composition if composition is not None else 50.0, 2),
+        "moment_and_subject": round(moment if moment is not None else 50.0, 2),
         "portrait_signal": round(portrait_signal if portrait_signal is not None else 50.0, 2),
         "best_in_series": round(series, 2),
         "personal_taste": round(_clamp(50.0 + personal_delta * 2.5), 2),
+        "personal_taste_reliability": round(max(0.0, min(1.0, taste_reliability)) * 100.0, 2),
         "diversity_value": 50.0,
-        "technical_penalty": round(penalty + utility_penalty, 2),
+        "technical_penalty": round(penalty + utility_penalty + codex_penalty, 2),
     }
     reasons = _reasons(
         components,
@@ -178,9 +192,9 @@ def _signal_value(signal: dict[str, object] | None) -> dict[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
-def _positive_component(values: dict[str, float], keys: tuple[str, ...], fallback: float) -> float:
+def _positive_component(values: dict[str, float], keys: tuple[str, ...]) -> float | None:
     available = [float(values[key]) * 100.0 for key in keys if key in values]
-    return sum(available) / len(available) if available else fallback
+    return sum(available) / len(available) if available else None
 
 
 def _series_score(duplicate: dict[str, object] | None) -> float:

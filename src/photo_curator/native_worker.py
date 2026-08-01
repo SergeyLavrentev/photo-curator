@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TextIO
 
 from photo_curator.acceptance import build_native_quality_evidence, evaluate_acceptance
+from photo_curator.analysis.codex_vision import codex_status
 from photo_curator.analysis.native_vision import NativeVisionEngine
 from photo_curator.analysis.taste import (
     MIN_CALIBRATION_PAIRS,
@@ -107,6 +108,10 @@ class NativeWorker:
         with database_connection(self.paths.database) as connection:
             return [_project_payload(project) for project in repository.list_projects(connection)]
 
+    def _handle_codex_status(self, params: dict[str, object]) -> dict[str, object]:
+        del params
+        return codex_status().payload()
+
     def _handle_delete_project(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         with database_connection(self.paths.database) as connection:
@@ -132,6 +137,13 @@ class NativeWorker:
         density = str(params.get("selection_density") or "balanced")
         if density not in {"compact", "balanced", "broad"}:
             raise NativeWorkerError("Unknown selection density")
+        analysis_mode = str(params.get("analysis_mode") or "local")
+        if analysis_mode not in {"local", "codex"}:
+            raise NativeWorkerError("Unknown analysis mode")
+        if analysis_mode == "codex":
+            status = codex_status()
+            if not status.ready:
+                raise NativeWorkerError(status.detail or "Codex не готов к анализу")
         name = str(params.get("name") or "").strip() or album.name
         with database_connection(self.paths.database) as connection:
             shared_copy = repository.completed_shared_copy_for_album(connection, album.id)
@@ -142,6 +154,7 @@ class NativeWorker:
                 library=library,
                 album=album,
                 selection_density=density,
+                analysis_mode=analysis_mode,
                 source_provenance=(
                     "service_shared_copy"
                     if shared_copy
@@ -881,9 +894,9 @@ def _asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "swipe_score": asset.get("swipe_score"),
         "generic_score": asset.get("swipe_generic_score"),
         "personal_delta": asset.get("swipe_personal_delta"),
-        "confidence": asset.get("swipe_confidence"),
+        "confidence": asset.get("confidence"),
         "components": asset.get("swipe_components") or {},
-        "reasons": asset.get("swipe_reasons") or [],
+        "reasons": asset.get("reasons") or [],
         "duplicate_group": (asset.get("duplicate_context") or {}).get("group_id"),
         "duplicate_is_leader": bool((asset.get("duplicate_context") or {}).get("is_leader")),
         "quality_top_k_rank": asset.get("quality_top_k_rank"),

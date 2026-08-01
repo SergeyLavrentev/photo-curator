@@ -72,6 +72,32 @@ def test_native_worker_exposes_projects_ranked_assets_and_decisions_without_http
     assert set(batch_ids) <= rejected_ids
 
 
+def test_native_worker_exposes_final_decision_reasons_not_score_highlights(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    with database_connection(paths.database) as connection:
+        decision_asset = next(
+            asset
+            for asset in repository.list_assets(connection, project_id)
+            if asset["final_disposition"] == "reject"
+        )
+
+    visible = next(
+        item
+        for item in worker.dispatch(
+            "assets", {"project_id": project_id, "disposition": "reject", "limit": 5000}
+        )["items"]
+        if item["asset_uuid"] == decision_asset["asset_uuid"]
+    )
+
+    assert visible["reasons"] == decision_asset["reasons"]
+    assert visible["confidence"] == decision_asset["confidence"]
+    assert visible["reasons"] != decision_asset["swipe_reasons"]
+
+
 def test_native_worker_migrates_legacy_review_decisions_to_binary_buckets(
     tmp_path: Path,
 ) -> None:

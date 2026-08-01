@@ -69,6 +69,12 @@ final class AppModel: ObservableObject {
     @Published var density: String {
         didSet { UserDefaults.standard.set(density, forKey: "selectionDensity") }
     }
+    @Published var analysisMode: String {
+        didSet { UserDefaults.standard.set(analysisMode, forKey: "analysisMode") }
+    }
+    @Published var codexStatus: CodexConnectionStatus?
+    @Published var isCheckingCodex = false
+    @Published var codexConsentPending = false
     @Published var projects: [ProjectItem] = []
     @Published var project: ProjectItem?
     @Published var analysisDraftActive = false
@@ -123,7 +129,12 @@ final class AppModel: ObservableObject {
     let worker = NativeWorkerClient()
     let developerToolsEnabled =
         ProcessInfo.processInfo.environment["PHOTO_CURATOR_DEVELOPER_TOOLS"] == "1"
-    private let stageOrder = ["inventory", "previews", "metrics", "duplicates", "vision", "decisions"]
+    private var stageOrder: [String] {
+        let mode = project?.analysisMode ?? analysisMode
+        return mode == "codex"
+            ? ["inventory", "previews", "metrics", "duplicates", "vision", "codex", "decisions"]
+            : ["inventory", "previews", "metrics", "duplicates", "vision", "decisions"]
+    }
     private var pollTask: Task<Void, Never>?
     private var permissionHelpTask: Task<Void, Never>?
     private var decisionHistory: [DecisionUndo] = []
@@ -131,13 +142,15 @@ final class AppModel: ObservableObject {
     private var hasStarted = false
     private let galleryPageSize = 48
     private let retainedProjectDefaultsKey = "retainedProjectID"
-    private let currentDecisionModelVersion = 2
+    private let currentDecisionModelVersion = 3
 
     init() {
         selectedAlbumID = UserDefaults.standard.string(forKey: "selectedAlbumID") ?? ""
         let savedDensity = UserDefaults.standard.string(forKey: "selectionDensity") ?? "balanced"
         density = ["compact", "balanced", "broad"].contains(savedDensity)
             ? savedDensity : "balanced"
+        let savedMode = UserDefaults.standard.string(forKey: "analysisMode") ?? "local"
+        analysisMode = ["local", "codex"].contains(savedMode) ? savedMode : "local"
         tasteSourceAlbumID =
             UserDefaults.standard.string(forKey: "tasteSourceAlbumID") ?? ""
         hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "didCompleteOnboardingV1")
@@ -441,6 +454,7 @@ final class AppModel: ObservableObject {
                 let created = try await call("create_project", [
                     "album_id": selectedAlbumID,
                     "selection_density": density,
+                    "analysis_mode": analysisMode,
                 ])
                 guard let value = created as? [String: Any], let project = ProjectItem(value) else {
                     throw NativeWorkerClientError.invalidResponse
@@ -459,6 +473,49 @@ final class AppModel: ObservableObject {
                 operationMessage = nil
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    func requestAnalysis() {
+        if analysisMode == "codex" {
+            guard codexStatus?.ready == true else {
+                errorMessage = "Codex не подключён через ChatGPT. Проверьте подключение перед запуском."
+                refreshCodexStatus()
+                return
+            }
+            codexConsentPending = true
+        } else {
+            createAndAnalyze()
+        }
+    }
+
+    func refreshCodexStatus() {
+        guard !isCheckingCodex else { return }
+        isCheckingCodex = true
+        Task {
+            defer { isCheckingCodex = false }
+            do {
+                let result = try await call("codex_status")
+                guard let value = result as? [String: Any],
+                      let status = CodexConnectionStatus(value)
+                else { throw NativeWorkerClientError.invalidResponse }
+                codexStatus = status
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func openCodexForSignIn() {
+        let candidates = [
+            URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+            URL(fileURLWithPath: "/Applications/Codex.app"),
+        ]
+        if let app = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+            NSWorkspace.shared.openApplication(
+                at: app,
+                configuration: NSWorkspace.OpenConfiguration()
+            )
+        } else if let url = URL(string: "https://chatgpt.com/download") {
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -995,6 +1052,7 @@ final class AppModel: ObservableObject {
             }
             if let taste = rawTaste as? [String: Any] { applyTasteProfile(taste) }
             projects = (rawProjects as? [[String: Any]] ?? []).compactMap(ProjectItem.init)
+            if analysisMode == "codex" { refreshCodexStatus() }
             let restorable = projects.filter {
                 ["created", "ready", "running", "interrupted", "error"].contains($0.state)
             }
@@ -1286,6 +1344,7 @@ final class AppModel: ObservableObject {
             "metrics": "Проверяем качество",
             "duplicates": "Сравниваем серии",
             "vision": "Apple Vision оценивает кадры",
+            "codex": "Codex понимает сюжет и сравнивает серии",
             "decisions": "Формируем подборку",
         ][stage] ?? "Анализируем"
     }
@@ -1867,6 +1926,21 @@ struct RootView: View {
             Text(model.errorMessage ?? "")
         }
         .confirmationDialog(
+            "Разрешить анализ через Codex?",
+            isPresented: $model.codexConsentPending,
+            titleVisibility: .visible
+        ) {
+            Button("Передать review‑копии в Codex и начать") {
+                model.codexConsentPending = false
+                model.createAndAnalyze()
+            }
+            Button("Отмена", role: .cancel) { model.codexConsentPending = false }
+        } message: {
+            Text(
+                "Review‑копии фотографий будут отправлены в OpenAI через ваш локальный Codex. Прогон расходует лимиты подписки ChatGPT/Codex и может занять несколько часов. API key не используется. Исходный альбом Photos не изменяется."
+            )
+        }
+        .confirmationDialog(
             "Сохранить подборку в Photos?",
             isPresented: Binding(
                 get: { model.publishPlan != nil },
@@ -2127,6 +2201,51 @@ struct RootView: View {
                 Text(densityExplanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Divider()
+                Text("Движок анализа")
+                    .font(.subheadline.weight(.semibold))
+                Picker("Движок анализа", selection: $model.analysisMode) {
+                    Text("Локальный").tag("local")
+                    Text("Codex Vision · экспериментальный").tag("codex")
+                }
+                .pickerStyle(.segmented)
+                if model.analysisMode == "codex" {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(
+                            "Фото будут переданы в OpenAI и израсходуют лимиты вашей подписки Codex.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(.orange)
+                        Text("Photo Curator автоматически найдёт Codex на этом Mac и использует только вход через ChatGPT. Авторизация API key блокируется, чтобы исключить неожиданные списания.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            if model.isCheckingCodex {
+                                ProgressView().controlSize(.small)
+                                Text("Проверяем Codex…")
+                            } else if model.codexStatus?.ready == true {
+                                Label(
+                                    "Codex подключён через ChatGPT",
+                                    systemImage: "checkmark.circle.fill"
+                                )
+                                .foregroundStyle(.green)
+                            } else {
+                                Label(
+                                    model.codexStatus?.detail ?? "Codex ещё не проверен",
+                                    systemImage: "exclamationmark.circle"
+                                )
+                                .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Проверить") { model.refreshCodexStatus() }
+                            if model.codexStatus?.ready != true {
+                                Button("Открыть ChatGPT / Codex") { model.openCodexForSignIn() }
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
             }
             if model.tasteOnboardingComplete, !model.sharedAlbums.isEmpty {
                 Label("Для общего альбома PhotoKit подготовит локальные review‑копии; источник не изменится.", systemImage: "person.2")
@@ -2142,7 +2261,7 @@ struct RootView: View {
                 }
                 Spacer()
                 Button("Начать анализ") {
-                    model.createAndAnalyze()
+                    model.requestAnalysis()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
@@ -2152,6 +2271,9 @@ struct RootView: View {
                 )
                 }
             }
+        }
+        .onChange(of: model.analysisMode) { mode in
+            if mode == "codex" { model.refreshCodexStatus() }
         }
     }
 
@@ -2206,7 +2328,7 @@ struct RootView: View {
                 .disabled(model.isBusy)
             } else if model.project?.state != "ready" {
                 Button {
-                    model.createAndAnalyze()
+                    model.requestAnalysis()
                 } label: {
                     Label("Начать анализ", systemImage: "play.fill")
                 }

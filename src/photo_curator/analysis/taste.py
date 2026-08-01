@@ -9,7 +9,7 @@ import numpy as np
 from photo_curator.db import repository
 
 TASTE_PROFILE_SCHEMA_VERSION = 1
-TASTE_MODEL_VERSION = "pairwise-linear-v1"
+TASTE_MODEL_VERSION = "pairwise-linear-v2"
 MIN_CALIBRATION_PAIRS = 3
 
 
@@ -23,13 +23,14 @@ class TasteModel:
     model_version: str
     weights: np.ndarray
     training_examples: int
+    reliability: float
 
     def personal_delta(self, feature_signal: dict[str, object]) -> float:
         schema, vector, _ = feature_vector(feature_signal)
         if schema != self.feature_schema or vector.size != self.weights.size:
             return 0.0
         raw = float(np.dot(self.weights, _unit(vector)))
-        return math.tanh(raw * 2.0) * 20.0
+        return math.tanh(raw * 2.0) * 20.0 * self.reliability
 
 
 def capture_preference(
@@ -187,7 +188,32 @@ def load_taste_model(connection, profile_id: str = "default") -> TasteModel | No
         model_version=str(version),
         weights=weights,
         training_examples=int(profile["training_examples"]),
+        reliability=_taste_reliability(profile),
     )
+
+
+def _taste_reliability(profile: dict[str, object]) -> float:
+    """Shrink personal influence until preference quality is demonstrated."""
+    evidence = profile.get("evidence")
+    values = evidence if isinstance(evidence, dict) else {}
+    held_out_pairs = int(values.get("held_out_pairs") or 0)
+    held_out_accuracy = values.get("held_out_accuracy")
+    calibration_pairs = int(values.get("calibration_pairs") or 0)
+    calibration_accuracy = values.get("calibration_accuracy")
+    if held_out_pairs >= 3 and isinstance(held_out_accuracy, (int, float)):
+        pairs = held_out_pairs
+        accuracy = float(held_out_accuracy)
+        evaluation_strength = min(1.0, pairs / 12.0)
+    elif isinstance(calibration_accuracy, (int, float)):
+        pairs = calibration_pairs
+        accuracy = float(calibration_accuracy)
+        # In-sample accuracy is optimistic and therefore gets at most half trust.
+        evaluation_strength = min(0.5, pairs / 60.0)
+    else:
+        return 0.0
+    skill = max(0.0, min(1.0, (accuracy - 0.5) / 0.5))
+    sample_strength = min(1.0, int(profile.get("training_examples") or 0) / 30.0)
+    return round(min(sample_strength, evaluation_strength) * skill, 3)
 
 
 def compatible_taste_model(

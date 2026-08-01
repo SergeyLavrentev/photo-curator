@@ -193,6 +193,7 @@ def create_project(
     project_id: str | None = None,
     selection_density: str = "balanced",
     source_provenance: str = "regular_album",
+    analysis_mode: str = "local",
 ) -> str:
     project_id = project_id or new_id()
     now = utc_now()
@@ -223,6 +224,7 @@ def create_project(
                     "video_count": album.video_count,
                     "selection_density": selection_density,
                     "source_provenance": source_provenance,
+                    "analysis_mode": analysis_mode,
                 },
                 sort_keys=True,
             ),
@@ -1308,6 +1310,28 @@ def replace_duplicate_groups(connection: sqlite3.Connection, project_id: str, gr
         )
 
 
+def update_duplicate_group_leader(
+    connection: sqlite3.Connection,
+    project_id: str,
+    group_id: str,
+    leader_uuid: str,
+) -> None:
+    member = connection.execute(
+        "SELECT 1 FROM duplicate_members WHERE project_id=? AND group_id=? AND asset_uuid=?",
+        (project_id, group_id, leader_uuid),
+    ).fetchone()
+    if not member:
+        raise KeyError((project_id, group_id, leader_uuid))
+    connection.execute(
+        "UPDATE duplicate_members SET is_leader=(asset_uuid=?) WHERE project_id=? AND group_id=?",
+        (leader_uuid, project_id, group_id),
+    )
+    connection.execute(
+        "UPDATE duplicate_groups SET leader_uuid=?, updated_at=? WHERE project_id=? AND group_id=?",
+        (leader_uuid, utc_now(), project_id, group_id),
+    )
+
+
 def duplicate_context(
     connection: sqlite3.Connection, project_id: str
 ) -> dict[str, dict[str, object]]:
@@ -1340,6 +1364,8 @@ def duplicate_context(
             "is_leader": bool(row["is_leader"]),
             "resolution_ratio": row["resolution_ratio"],
             "quality_margin": float(row["leader_quality"] or 0) - float(row["quality_score"] or 0),
+            "time_delta_seconds": evidence.get("time_delta"),
+            "pair_evidence": evidence,
         }
     return result
 

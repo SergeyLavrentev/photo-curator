@@ -9,6 +9,16 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event, Lock, Semaphore
 
+from photo_curator.analysis.codex_vision import (
+    CODEX_ENGINE_VERSION,
+    DEFAULT_BULK_MODEL,
+    DEFAULT_COMPARE_MODEL,
+    CodexVisionCancelled,
+    CodexVisionError,
+    CodexVisionRunner,
+    build_batches,
+    codex_status,
+)
 from photo_curator.analysis.decision_engine import (
     DECISION_MODEL_VERSION,
     DecisionResult,
@@ -37,7 +47,7 @@ from photo_curator.pipeline.previews import (
 
 LOGGER = logging.getLogger(__name__)
 
-STAGES = ("inventory", "previews", "metrics", "duplicates", "vision", "decisions")
+STAGES = ("inventory", "previews", "metrics", "duplicates", "vision", "codex", "decisions")
 PREVIEW_LIMIT = Semaphore(2)
 
 
@@ -586,6 +596,119 @@ class PipelineCoordinator:
                 errors=errors,
             )
 
+    def _stage_codex(self, project_id: str) -> None:
+        with database_connection(self.database_path) as connection:
+            project = repository.get_project(connection, project_id)
+            settings = json.loads(str(project.get("settings_json") or "{}"))
+            if settings.get("analysis_mode") != "codex":
+                return
+            assets = [
+                asset
+                for asset in repository.list_assets(connection, project_id)
+                if asset.get("cache_state") == "ready" and asset.get("review_path")
+            ]
+            groups = repository.list_duplicate_groups(connection, project_id)
+            existing = repository.analysis_signals_by_asset(connection, project_id)
+        status = codex_status()
+        if not status.ready:
+            raise CodexVisionError(status.detail or "Codex больше не авторизован через ChatGPT")
+        pending = [
+            asset
+            for asset in assets
+            if existing.get(str(asset["asset_uuid"]), {}).get("codex_vision", {}).get("status")
+            != "ready"
+        ]
+        pending_ids = {str(asset["asset_uuid"]) for asset in pending}
+        pending_groups = []
+        for group in groups:
+            members = [
+                member
+                for member in group.get("members", [])
+                if str(member.get("asset_uuid")) in pending_ids
+            ]
+            if members:
+                pending_groups.append({**group, "members": members})
+        batches = build_batches(pending, pending_groups)
+        with database_connection(self.database_path) as connection:
+            job_id = repository.create_job(connection, project_id, "codex", len(batches))
+        runner = CodexVisionRunner(Path(str(status.executable)))
+        errors = 0
+        cache = self.paths.cache_dir / project_id / "codex"
+        for index, batch in enumerate(batches, start=1):
+            self._check_cancelled(project_id)
+            compare = any(asset.get("codex_group_id") for asset in batch)
+            model = DEFAULT_COMPARE_MODEL if compare else DEFAULT_BULK_MODEL
+            try:
+                result = runner.analyze(
+                    batch,
+                    work_dir=cache / f"batch-{index:04d}",
+                    model=model,
+                    cancelled=lambda: self._cancel_requested(project_id),
+                )
+                with database_connection(self.database_path) as connection:
+                    for asset in batch:
+                        asset_uuid = str(asset["asset_uuid"])
+                        repository.upsert_analysis_signal(
+                            connection,
+                            project_id,
+                            asset_uuid,
+                            signal_kind="codex_vision",
+                            schema_version=1,
+                            engine_name="codex-cli-chatgpt",
+                            engine_version=CODEX_ENGINE_VERSION,
+                            request_revision=1,
+                            source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                            status="ready",
+                            value=result[asset_uuid],
+                            duration_ms=None,
+                            error_text=None,
+                        )
+                    _apply_codex_leaders(connection, project_id, batch, result)
+            except CodexVisionCancelled as error:
+                raise PipelineCancelled(str(error)) from error
+            except (CodexVisionError, OSError, ValueError) as error:
+                errors += 1
+                LOGGER.exception("Codex vision batch failed project=%s batch=%s", project_id, index)
+                with database_connection(self.database_path) as connection:
+                    for asset in batch:
+                        repository.upsert_analysis_signal(
+                            connection,
+                            project_id,
+                            str(asset["asset_uuid"]),
+                            signal_kind="codex_vision",
+                            schema_version=1,
+                            engine_name="codex-cli-chatgpt",
+                            engine_version=CODEX_ENGINE_VERSION,
+                            request_revision=1,
+                            source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                            status="error",
+                            value=None,
+                            duration_ms=None,
+                            error_text=str(error)[-1000:],
+                        )
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=index,
+                    errors=errors,
+                    message=f"Codex Vision: пакет {index} из {len(batches)}",
+                )
+        with database_connection(self.database_path) as connection:
+            repository.update_job(
+                connection,
+                job_id,
+                status="warning" if errors else "done",
+                processed=len(batches),
+                errors=errors,
+                warnings=errors,
+                message=(
+                    f"Codex Vision завершён; ошибок пакетов: {errors}"
+                    if errors
+                    else "Codex Vision завершён"
+                ),
+            )
+
     def _stage_decisions(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
             assets = repository.list_assets(connection, project_id)
@@ -617,6 +740,7 @@ class PipelineCoordinator:
                         else 0.0
                     ),
                     taste_model_version=taste_model.model_version if taste_model else None,
+                    taste_reliability=taste_model.reliability if taste_model else 0.0,
                 )
                 for asset in assets
             ]
@@ -625,7 +749,9 @@ class PipelineCoordinator:
             )
             decisions = [
                 decide_asset(
-                    asset,
+                    _asset_with_codex_flags(
+                        asset, signal_by_asset.get(str(asset["asset_uuid"]), {})
+                    ),
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
                     swipe_score,
@@ -643,7 +769,9 @@ class PipelineCoordinator:
             )
             decisions = [
                 decide_asset(
-                    asset,
+                    _asset_with_codex_flags(
+                        asset, signal_by_asset.get(str(asset["asset_uuid"]), {})
+                    ),
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
                     swipe_score,
@@ -654,14 +782,6 @@ class PipelineCoordinator:
             for index, (asset, swipe_score, decision) in enumerate(
                 zip(assets, swipe_scores, decisions, strict=True), start=1
             ):
-                diversity_item = diversity[str(asset["asset_uuid"])]
-                if diversity_item.demoted:
-                    decision = replace(
-                        decision,
-                        disposition="reject",
-                        flags=sorted({*decision.flags, "diversity_limit"}),
-                        reasons=[_diversity_reason(diversity_item, demoted=True)],
-                    )
                 repository.upsert_swipe_score(
                     connection,
                     project_id,
@@ -716,6 +836,59 @@ class PipelineCoordinator:
                 },
             )
             repository.update_job(connection, job_id, status="done", processed=len(assets))
+
+    def _cancel_requested(self, project_id: str) -> bool:
+        with self._lock:
+            event = self._cancel_events.get(project_id)
+        return bool(event and event.is_set())
+
+
+def _apply_codex_leaders(
+    connection,
+    project_id: str,
+    batch: list[dict[str, object]],
+    result: dict[str, dict[str, object]],
+) -> None:
+    group_members: dict[str, list[str]] = {}
+    for asset in batch:
+        group_id = str(asset.get("codex_group_id") or "")
+        if group_id:
+            group_members.setdefault(group_id, []).append(str(asset["asset_uuid"]))
+    for group_id, members in group_members.items():
+        leaders = [
+            asset_uuid
+            for asset_uuid in members
+            if int(result[asset_uuid].get("series_rank") or 0) == 1
+            and float(result[asset_uuid].get("confidence") or 0.0) >= 0.75
+        ]
+        if len(leaders) == 1:
+            repository.update_duplicate_group_leader(connection, project_id, group_id, leaders[0])
+
+
+def _asset_with_codex_flags(
+    asset: dict[str, object], signals: dict[str, dict[str, object]]
+) -> dict[str, object]:
+    signal = signals.get("codex_vision")
+    value = signal.get("value") if signal and signal.get("status") == "ready" else None
+    if not isinstance(value, dict):
+        return asset
+    mapping = {
+        "blur": "possible_blur",
+        "underexposed": "underexposed",
+        "overexposed": "overexposed",
+        "extreme_horizon": "extreme_horizon",
+        "bad_angle": "bad_angle",
+        "blocked_subject": "blocked_subject",
+    }
+    flags = {mapping[str(defect)] for defect in value.get("defects", []) if str(defect) in mapping}
+    if value.get("face_visibility") == "unrecognizable":
+        flags.add("poor_face_capture")
+    copy = dict(asset)
+    copy["codex_flags"] = sorted(flags)
+    copy["codex_reject_recommended"] = bool(value.get("reject_recommended"))
+    copy["codex_confidence"] = float(value.get("confidence") or 0.0)
+    copy["codex_reason"] = str(value.get("reason") or "")[:240]
+    return copy
 
 
 def _float(value: object) -> float | None:

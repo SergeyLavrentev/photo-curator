@@ -21,6 +21,8 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "PhotoKitProvider.from_environment" in native_worker
     assert "OSXPhotosProvider" not in native_worker
     assert "legacy_cli_enabled=False" in native_worker
+    assert '"reasons": asset.get("reasons") or []' in native_worker
+    assert '"confidence": asset.get("confidence")' in native_worker
     assert '"taste_round_prepare"' in app
     assert 'call("taste_round_submit"' in app
     assert '"from_stage": "decisions"' in app
@@ -75,7 +77,11 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "SelectionBucket.allCases" in app
     assert '"keep", "Хорошие", "checkmark", Color.green' in app
     assert '"reject", "Плохие", "xmark", Color.red' in app
-    assert "currentDecisionModelVersion = 2" in app
+    assert "currentDecisionModelVersion = 3" in app
+    assert "Codex Vision · экспериментальный" in app
+    assert "API key не используется" in app
+    assert 'call("codex_status")' in app
+    assert '"analysis_mode": analysisMode' in app
     assert "Обновляем критерии отбора" in app
     assert 'Label("Почему?"' not in app
     assert 'Image(systemName: "info.circle.fill")' in app
@@ -154,7 +160,10 @@ def test_native_progress_uses_fixed_stages_and_exposes_current_work() -> None:
     app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
     models = (ROOT / "packaging/macos/PhotoCuratorModels.swift").read_text()
 
-    assert 'private let stageOrder = ["inventory", "previews", "metrics"' in app
+    assert "private var stageOrder: [String]" in app
+    assert (
+        '["inventory", "previews", "metrics", "duplicates", "vision", "codex", "decisions"]' in app
+    )
     assert "completed / Double(stageOrder.count)" in app
     assert "Этап \\(stage) из \\(stageOrder.count)" in app
     assert "operationMessage" in app
@@ -334,5 +343,7 @@ def test_native_selection_localizes_positive_and_negative_reasons() -> None:
     assert '"strong_aesthetics": "Сильное первое впечатление"' in models
     assert '"similar_scene": "Похожая сцена уже представлена"' in models
     assert '"possible_blur": "Недостаточная резкость"' in models
+    assert '"poor_face_capture": "Лицо снято неразборчиво"' in models
+    assert '"no_confirmed_defect": "Явных дефектов не найдено"' in models
     assert '"below_album_cutoff": "Уступает другим кадрам этого альбома"' in models
     assert '"weaker_duplicate": "Есть более удачный похожий кадр"' in models

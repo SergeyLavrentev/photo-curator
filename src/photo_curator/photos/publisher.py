@@ -147,7 +147,16 @@ class PhotosPublisher:
                 and int(member.get("width") or 0) * int(member.get("height") or 0) < max_pixels
                 for member in members
             )
+            full_resolution_kept = any(
+                member.get("final_disposition") == "keep"
+                and int(member.get("width") or 0) * int(member.get("height") or 0) == max_pixels
+                for member in members
+            )
             for high in high_rejects:
+                # Rejecting one render-identical copy is safe when another
+                # full-resolution copy from the group is still kept.
+                if "exact_duplicate" in set(high.get("flags") or []) and full_resolution_kept:
+                    continue
                 if lower_kept:
                     message = f"{high['asset_uuid']}: resolution inversion в {group['group_id']}"
                     if high.get("manual_override"):
