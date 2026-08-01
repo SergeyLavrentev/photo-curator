@@ -45,7 +45,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'DisclosureGroup("Детали этапов", isExpanded: $analysisDetailsExpanded)' in app
     assert "Размер итогового Best‑альбома" in app
     assert "Исходный альбом анализируется целиком" in app
-    assert "Продолжить без персонализации" not in app
+    assert "анализ можно запустить и без него" in app
     workflow_step = app.split("enum WorkflowStep", 1)[1].split("enum SelectionBucket", 1)[0]
     assert "case .album" in workflow_step
     assert "case .taste" not in workflow_step
@@ -213,10 +213,12 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "PHAssetCollection.fetchAssetCollections" in helper
     assert "let manager = PHImageManager.default()" in helper
     assert "manager.requestImage" in helper
-    assert 'reviewRenderVersion = "review-v2-2048-q88"' in helper
+    assert 'reviewRenderVersion = "review-v3-local-2048-q88"' in helper
     assert "maximumConcurrentRenders = 3" in helper
-    assert "reviewRenderTimeoutSeconds = 120.0" in helper
+    assert "reviewRenderTimeoutSeconds = 12.0" in helper
     assert "options.isSynchronous = false" in helper
+    assert "options.isNetworkAccessAllowed = false" in helper
+    assert "Фото доступно только в iCloud" in helper
     assert "let workerCount = min(maximumConcurrentRenders, assets.count)" in helper
     assert "for _ in 0..<workerCount" in helper
     assert "let photoTotal = assets.reduce" in helper

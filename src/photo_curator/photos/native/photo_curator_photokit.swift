@@ -123,9 +123,12 @@ func safeStem(_ identifier: String) -> String {
         .replacingOccurrences(of: "=", with: "")
 }
 
-let reviewRenderVersion = "review-v2-2048-q88"
+// Taste onboarding must never block on an iCloud download.  It only uses
+// previews that Photos already has on this Mac; a full project render can be
+// requested later by the user and reports its own progress.
+let reviewRenderVersion = "review-v3-local-2048-q88"
 let maximumConcurrentRenders = 3
-let reviewRenderTimeoutSeconds = 120.0
+let reviewRenderTimeoutSeconds = 12.0
 
 func renderCacheKey(_ asset: PHAsset) -> String {
     let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
@@ -139,7 +142,7 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
     }
     let options = PHImageRequestOptions()
     options.isSynchronous = false
-    options.isNetworkAccessAllowed = true
+    options.isNetworkAccessAllowed = false
     options.deliveryMode = .highQualityFormat
     options.resizeMode = .exact
     let manager = PHImageManager.default()
@@ -166,6 +169,9 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
         rendered = image
         if let error { requestError = error.localizedDescription }
         if isCancelled { requestError = "PhotoKit request cancelled" }
+        if info?[PHImageResultIsInCloudKey] as? Bool == true, image == nil {
+            requestError = "Фото доступно только в iCloud. Откройте его в Photos, чтобы скачать локальную копию."
+        }
         finished = true
         stateLock.unlock()
         completion.signal()

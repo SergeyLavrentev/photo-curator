@@ -419,11 +419,6 @@ final class AppModel: ObservableObject {
             startExistingProject(project)
             return
         }
-        guard tasteOnboardingComplete else {
-            tasteMessage = "Сначала завершите три раунда настройки вкуса."
-            openTasteEditor()
-            return
-        }
         guard !selectedAlbumID.isEmpty else {
             errorMessage = "Сначала выберите альбом"
             return
@@ -963,12 +958,7 @@ final class AppModel: ObservableObject {
         analysisDraftActive = true
         publishPlan = nil
         publishMessage = nil
-        if tasteOnboardingComplete {
-            currentStep = .album
-        } else {
-            tasteMessage = "Перед первым анализом создайте профиль вкуса."
-            openTasteEditor()
-        }
+        currentStep = .album
     }
 
     func cancelNewAnalysis() {
@@ -2149,16 +2139,7 @@ struct RootView: View {
 
     private var sourceSection: some View {
         StepCard(number: 2, title: "Выберите альбом", symbol: "photo.on.rectangle.angled") {
-            if !model.tasteOnboardingComplete {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Сначала создайте профиль вкуса", systemImage: "heart.text.square")
-                        .font(.headline)
-                    Text("В нём вы отдельно отметите любимые и не нравящиеся кадры. После трёх коротких раундов станет доступен запуск анализа.")
-                        .foregroundStyle(.secondary)
-                    Button("Настроить вкус") { model.openTasteEditor() }
-                        .buttonStyle(.borderedProminent)
-                }
-            } else if model.albums.isEmpty {
+            if model.albums.isEmpty {
                 if model.photoAccessNeedsAction {
                     Label(
                         "Разрешите доступ в системном запросе или настройках macOS.",
@@ -2247,13 +2228,20 @@ struct RootView: View {
                     .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 }
             }
-            if model.tasteOnboardingComplete, !model.sharedAlbums.isEmpty {
+            if !model.tasteOnboardingComplete {
+                Label(
+                    "Персональный вкус пока не настроен: анализ можно запустить и без него, а профиль добавить позже.",
+                    systemImage: "heart.text.square"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            if !model.sharedAlbums.isEmpty {
                 Label("Для общего альбома PhotoKit подготовит локальные review‑копии; источник не изменится.", systemImage: "person.2")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if model.tasteOnboardingComplete {
-                HStack {
+            HStack {
                 if model.analysisDraftActive {
                     Button("Отменить новый анализ") { model.cancelNewAnalysis() }
                 } else {
@@ -2266,10 +2254,8 @@ struct RootView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     model.selectedAlbumID.isEmpty
-                        || !model.tasteOnboardingComplete
                         || model.isBusy
                 )
-                }
             }
         }
         .onChange(of: model.analysisMode) { mode in
