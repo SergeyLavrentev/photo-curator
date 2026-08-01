@@ -112,6 +112,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'call("taste_status"' in app
     assert 'call("taste_reset")' in app
     assert "refreshDecisionsForTaste" in app
+    assert "Статус обработки" in app
+    assert "Codex Vision" in app
+    assert "ProcessingStatRow" in app
     assert "tasteCalibrationExamples" in app
     assert "tasteHeldOutExamples" in app
     assert '"incompatible": "Нужна повторная настройка после обновления анализа"' in app
@@ -215,11 +218,11 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "manager.requestImage" in helper
     assert "let stdoutLock = NSLock()" in helper
     assert "stdoutLock.lock()" in helper
-    assert 'reviewRenderVersion = "review-v3-local-2048-q88"' in helper
+    assert 'reviewRenderVersion = "review-v4-2048-q88"' in helper
     assert "maximumConcurrentRenders = 3" in helper
-    assert "reviewRenderTimeoutSeconds = 12.0" in helper
+    assert "let timeout = allowNetwork ? 120.0 : 12.0" in helper
     assert "options.isSynchronous = false" in helper
-    assert "options.isNetworkAccessAllowed = false" in helper
+    assert "options.isNetworkAccessAllowed = allowNetwork" in helper
     assert "Фото доступно только в iCloud" in helper
     assert "let workerCount = min(maximumConcurrentRenders, assets.count)" in helper
     assert "for _ in 0..<workerCount" in helper

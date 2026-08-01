@@ -1669,6 +1669,18 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         (project_id,),
     ).fetchall():
         result[f"{kind}_groups"] = int(count)
+    for engine, status, count in connection.execute(
+        """
+        SELECT engine_name, status, COUNT(DISTINCT asset_uuid)
+        FROM analysis_signals
+        WHERE project_id=?
+          AND engine_name IN ('apple-vision-native', 'codex-cli-chatgpt')
+        GROUP BY engine_name, status
+        """,
+        (project_id,),
+    ).fetchall():
+        prefix = "apple_vision" if engine == "apple-vision-native" else "codex"
+        result[f"{prefix}_{status}"] = int(count)
     counts = connection.execute(
         """
         SELECT SUM(a.favorite), SUM(a.has_adjustments),

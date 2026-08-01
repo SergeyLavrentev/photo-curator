@@ -84,6 +84,13 @@ final class AppModel: ObservableObject {
     @Published var selectionBucket: SelectionBucket = .keep
     @Published var keptTotal = 0
     @Published var rejectedTotal = 0
+    @Published var totalAssets = 0
+    @Published var previewReady = 0
+    @Published var previewMissing = 0
+    @Published var appleVisionReady = 0
+    @Published var appleVisionErrors = 0
+    @Published var codexReady = 0
+    @Published var codexErrors = 0
     @Published var isLoadingPhotos = false
     @Published var errorMessage: String?
     @Published var isBusy = false
@@ -430,6 +437,13 @@ final class AppModel: ObservableObject {
         selectionBucket = .keep
         keptTotal = 0
         rejectedTotal = 0
+        totalAssets = 0
+        previewReady = 0
+        previewMissing = 0
+        appleVisionReady = 0
+        appleVisionErrors = 0
+        codexReady = 0
+        codexErrors = 0
         binaryProjects.removeAll()
         selectedPhotoID = nil
         decisionHistory = []
@@ -1252,6 +1266,13 @@ final class AppModel: ObservableObject {
         guard let summary else { return }
         keptTotal = summary["keep"] as? Int ?? keptTotal
         rejectedTotal = summary["reject"] as? Int ?? rejectedTotal
+        totalAssets = summary["total"] as? Int ?? totalAssets
+        previewReady = summary["ready"] as? Int ?? previewReady
+        previewMissing = summary["missing"] as? Int ?? previewMissing
+        appleVisionReady = summary["apple_vision_ready"] as? Int ?? appleVisionReady
+        appleVisionErrors = summary["apple_vision_error"] as? Int ?? appleVisionErrors
+        codexReady = summary["codex_ready"] as? Int ?? codexReady
+        codexErrors = summary["codex_error"] as? Int ?? codexErrors
     }
 
     private func adjustDecisionCounts(from previous: String?, to updated: String?) {
@@ -1896,6 +1917,7 @@ private struct HelpTechnologyRow: View {
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var analysisDetailsExpanded = true
+    @State private var processingDetailsExpanded = false
     @State private var confirmsAnalysisStop = false
     @State private var projectPendingDeletion: ProjectItem?
 
@@ -2366,6 +2388,44 @@ struct RootView: View {
                     .disabled(model.isBusy || model.keptTotal == 0)
                 }
 
+                DisclosureGroup(isExpanded: $processingDetailsExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ProcessingStatRow(
+                            title: "Фото в альбоме",
+                            detail: "\(model.totalAssets)",
+                            symbol: "photo.on.rectangle"
+                        )
+                        ProcessingStatRow(
+                            title: "Локальные review-копии",
+                            detail: "\(model.previewReady) готовы · \(model.previewMissing) недоступны",
+                            symbol: "internaldrive"
+                        )
+                        ProcessingStatRow(
+                            title: "Apple Vision",
+                            detail: "\(model.appleVisionReady) обработано · \(model.appleVisionErrors) ошибок",
+                            symbol: "eye"
+                        )
+                        if model.project?.analysisMode == "codex" {
+                            ProcessingStatRow(
+                                title: "Codex Vision",
+                                detail: "\(model.codexReady) обработано · \(model.codexErrors) ошибок",
+                                symbol: "sparkles"
+                            )
+                        }
+                        if model.previewMissing > 0 {
+                            Text("Недоступные preview-копии не передаются в Apple Vision или Codex. Откройте нужные фото в Photos, чтобы iCloud завершил загрузку, затем повторите анализ.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Label("Статус обработки", systemImage: "chart.bar.doc.horizontal")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 10))
+
                 if model.isBusy, let operation = model.operationMessage {
                     if model.publishTotal > 0 {
                         ProgressView(
@@ -2664,6 +2724,25 @@ private struct TasteProfileEditorView: View {
             }
         }
         .padding(8)
+    }
+}
+
+private struct ProcessingStatRow: View {
+    let title: String
+    let detail: String
+    let symbol: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(title)
+            Spacer()
+            Text(detail)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

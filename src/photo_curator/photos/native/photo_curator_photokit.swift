@@ -128,26 +128,33 @@ func safeStem(_ identifier: String) -> String {
         .replacingOccurrences(of: "=", with: "")
 }
 
-// Taste onboarding must never block on an iCloud download.  It only uses
-// previews that Photos already has on this Mac; a full project render can be
-// requested later by the user and reports its own progress.
-let reviewRenderVersion = "review-v3-local-2048-q88"
+// Taste onboarding must never block on an iCloud download.  Project analysis,
+// on the other hand, may obtain review copies from iCloud and reports progress
+// for that work.  The mode forms part of the cache key so a local-only miss
+// never prevents a later full analysis from obtaining the same photo.
+let reviewRenderVersion = "review-v4-2048-q88"
 let maximumConcurrentRenders = 3
-let reviewRenderTimeoutSeconds = 12.0
 
-func renderCacheKey(_ asset: PHAsset) -> String {
+func renderCacheKey(_ asset: PHAsset, allowNetwork: Bool) -> String {
     let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
-    return "\(reviewRenderVersion)|\(asset.localIdentifier)|\(modified)|\(asset.pixelWidth)x\(asset.pixelHeight)"
+    let source = allowNetwork ? "network" : "local"
+    return "\(reviewRenderVersion)|\(source)|\(asset.localIdentifier)|\(modified)|\(asset.pixelWidth)x\(asset.pixelHeight)"
 }
 
-func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, String?) {
-    let destination = outputDirectory.appendingPathComponent(safeStem(renderCacheKey(asset)) + ".jpg")
+func exportReviewRender(
+    _ asset: PHAsset,
+    outputDirectory: URL,
+    allowNetwork: Bool
+) -> (String?, String?) {
+    let destination = outputDirectory.appendingPathComponent(
+        safeStem(renderCacheKey(asset, allowNetwork: allowNetwork)) + ".jpg"
+    )
     if FileManager.default.fileExists(atPath: destination.path) {
         return (destination.path, nil)
     }
     let options = PHImageRequestOptions()
     options.isSynchronous = false
-    options.isNetworkAccessAllowed = false
+    options.isNetworkAccessAllowed = allowNetwork
     options.deliveryMode = .highQualityFormat
     options.resizeMode = .exact
     let manager = PHImageManager.default()
@@ -181,12 +188,13 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
         stateLock.unlock()
         completion.signal()
     }
-    if completion.wait(timeout: .now() + reviewRenderTimeoutSeconds) == .timedOut {
+    let timeout = allowNetwork ? 120.0 : 12.0
+    if completion.wait(timeout: .now() + timeout) == .timedOut {
         stateLock.lock()
         finished = true
         stateLock.unlock()
         manager.cancelImageRequest(requestID)
-        return (nil, "PhotoKit render timed out after \(Int(reviewRenderTimeoutSeconds)) seconds")
+        return (nil, "PhotoKit render timed out after \(Int(timeout)) seconds")
     }
     guard let image = rendered,
           let tiff = image.tiffRepresentation,
@@ -201,12 +209,20 @@ func exportReviewRender(_ asset: PHAsset, outputDirectory: URL) -> (String?, Str
     }
 }
 
-func payload(_ asset: PHAsset, outputDirectory: URL?) -> AssetPayload {
+func payload(
+    _ asset: PHAsset,
+    outputDirectory: URL?,
+    allowNetwork: Bool = true
+) -> AssetPayload {
     let resource = PHAssetResource.assetResources(for: asset).first
     let isPhoto = asset.mediaType == .image
     let shouldRender = isPhoto && outputDirectory != nil
     let render = shouldRender
-        ? exportReviewRender(asset, outputDirectory: outputDirectory!) : (nil, nil)
+        ? exportReviewRender(
+            asset,
+            outputDirectory: outputDirectory!,
+            allowNetwork: allowNetwork
+        ) : (nil, nil)
     return AssetPayload(
         uuid: asset.localIdentifier,
         original_filename: resource?.originalFilename,
@@ -239,6 +255,7 @@ func albumAssets(_ album: PHAssetCollection) -> [PHAsset] {
 func renderPayloads(
     _ assets: [PHAsset],
     outputDirectory: URL,
+    allowNetwork: Bool = true,
     progress: ((Int, Int, String) -> Void)? = nil
 ) throws -> [AssetPayload] {
     try FileManager.default.createDirectory(
@@ -273,7 +290,11 @@ func renderPayloads(
 
                 let asset = assets[index]
                 let value = autoreleasepool {
-                    payload(asset, outputDirectory: outputDirectory)
+                    payload(
+                        asset,
+                        outputDirectory: outputDirectory,
+                        allowNetwork: allowNetwork
+                    )
                 }
                 var progressUpdate: (Int, Int, String)?
                 lock.lock()
@@ -343,7 +364,7 @@ func assets(with identifiers: [String], outputDirectory: URL) throws -> [AssetPa
     var byIdentifier: [String: PHAsset] = [:]
     result.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
     let ordered = identifiers.compactMap { byIdentifier[$0] }
-    return try renderPayloads(ordered, outputDirectory: outputDirectory)
+    return try renderPayloads(ordered, outputDirectory: outputDirectory, allowNetwork: false)
 }
 
 func streamAssets(with identifiers: [String], outputDirectory: URL) throws {
@@ -357,7 +378,8 @@ func streamAssets(with identifiers: [String], outputDirectory: URL) throws {
     let ordered = identifiers.compactMap { byIdentifier[$0] }
     let values = try renderPayloads(
         ordered,
-        outputDirectory: outputDirectory
+        outputDirectory: outputDirectory,
+        allowNetwork: false
     ) { processed, total, identifier in
         try? printJSON(AssetProgressFrame(
             processed: processed,
