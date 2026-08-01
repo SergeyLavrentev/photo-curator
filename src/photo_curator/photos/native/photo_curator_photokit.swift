@@ -47,6 +47,11 @@ struct AssetResultFrame: Encodable {
     let assets: [AssetPayload]
 }
 
+// Render workers report progress concurrently.  FileHandle writes are not a
+// single atomic JSONL operation, so serialize each frame to keep the Python
+// transport from receiving two adjacent JSON documents on one line.
+let stdoutLock = NSLock()
+
 enum PhotoKitError: LocalizedError {
     case invalidArguments
     case authorizationDenied
@@ -387,6 +392,8 @@ func recentPhotoIdentifiers(in album: PHAssetCollection) -> [String] {
 
 func printJSON<T: Encodable>(_ value: T) throws {
     let data = try JSONEncoder().encode(value)
+    stdoutLock.lock()
+    defer { stdoutLock.unlock() }
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data([0x0A]))
 }

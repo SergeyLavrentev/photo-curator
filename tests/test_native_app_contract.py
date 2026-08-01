@@ -213,6 +213,8 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "PHAssetCollection.fetchAssetCollections" in helper
     assert "let manager = PHImageManager.default()" in helper
     assert "manager.requestImage" in helper
+    assert "let stdoutLock = NSLock()" in helper
+    assert "stdoutLock.lock()" in helper
     assert 'reviewRenderVersion = "review-v3-local-2048-q88"' in helper
     assert "maximumConcurrentRenders = 3" in helper
     assert "reviewRenderTimeoutSeconds = 12.0" in helper
