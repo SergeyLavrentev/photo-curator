@@ -953,6 +953,37 @@ def test_delete_project_fails_closed_when_database_backup_fails(
     assert [item["id"] for item in worker.dispatch("projects", {})] == [project_id]
 
 
+def test_delete_project_cannot_race_pipeline_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    entered = Event()
+    release = Event()
+
+    def blocked_run(received_project_id: str, *, from_stage: str | None = None) -> None:
+        del from_stage
+        assert received_project_id == project_id
+        entered.set()
+        assert release.wait(timeout=5)
+        with database_connection(paths.database) as connection:
+            repository.set_project_state(connection, project_id, "ready")
+
+    monkeypatch.setattr(coordinator, "run", blocked_run)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    worker.dispatch("start_analysis", {"project_id": project_id})
+    assert entered.wait(timeout=5)
+    with pytest.raises(NativeWorkerError, match="остановите выполняющийся анализ"):
+        worker.dispatch("delete_project", {"project_id": project_id, "confirmed": True})
+
+    with database_connection(paths.database) as connection:
+        assert repository.get_project(connection, project_id)["state"] == "running"
+    assert not (paths.data_dir / "destructive-actions.jsonl").exists()
+
+    release.set()
+    coordinator._futures[project_id].result(timeout=5)
+
+
 def test_native_worker_photokit_acceptance_requires_confirmation_and_audits_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

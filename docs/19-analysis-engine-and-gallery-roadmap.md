@@ -71,8 +71,12 @@ Quality Lab и нативной галереи в последовательну
   render/content fingerprint; любое изменение требует нового analysis/dry-run.
 - [ ] Добавить в snapshot и publish revalidation явные media type и modification/edit
   revision из PhotoKit вместо косвенной проверки через versioned render.
-- [ ] Сериализовать start/resume/delete/publish per-project lock/state machine; delete и
-  publish не могут пересекаться с работающим analysis Future.
+- [x] Сериализовать start/resume/delete per-project lock/state machine; delete не может
+  пересекаться с зарегистрированным analysis Future, даже до входа worker в `run`.
+  Evidence: coordinator фиксирует `running` до submit, а start/delete проходят через один
+  project operation lock; coordinated regression удерживает Future до DB work.
+- [ ] Провести publish/dry-run через тот же per-project lock и запретить их пересечение с
+  analysis Future и другим apply.
 - [ ] Зарезервировать уникальный destination album identity до apply и исключить reuse
   существующего одноимённого Photos album.
 
@@ -82,8 +86,10 @@ Quality Lab и нативной галереи в последовательну
   publish fail-closed до свежего анализа.
 - [x] Source-drift regression: membership/content change после dry-run блокирует apply.
 - [ ] Реальный PhotoKit regression: edit revision после dry-run блокирует apply.
-- [ ] Concurrency regression: coordinated start/delete и parallel apply не теряют локальные
-  данные и не объединяют разные destination albums.
+- [x] Concurrency regression: coordinated start/delete не удаляет проект между submit и
+  первым DB write pipeline.
+- [ ] Concurrency regression: parallel dry-run/apply не теряет локальные данные и не
+  объединяет разные destination albums.
 - [ ] Реальный disposable PhotoKit acceptance на edited asset и source membership drift.
 
 ## R2 — snapshot, schema и media integrity

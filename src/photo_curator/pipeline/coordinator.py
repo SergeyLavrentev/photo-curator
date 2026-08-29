@@ -6,7 +6,9 @@ import logging
 import os
 import statistics
 import time
+from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, Lock, Semaphore
@@ -109,15 +111,34 @@ class PipelineCoordinator:
         self._futures: dict[str, Future[None]] = {}
         self._cancel_events: dict[str, Event] = {}
         self._lock = Lock()
+        self._project_operation_locks: dict[str, Lock] = {}
+
+    @contextmanager
+    def project_operation(self, project_id: str) -> Iterator[None]:
+        """Serialize lifecycle mutations for one persisted analysis project."""
+        with self._lock:
+            operation_lock = self._project_operation_locks.setdefault(project_id, Lock())
+        with operation_lock:
+            yield
 
     def start(self, project_id: str, from_stage: str | None = None) -> str:
-        with self._lock:
-            current = self._futures.get(project_id)
-            if current and not current.done():
-                raise RuntimeError("Pipeline is already running")
-            self._cancel_events[project_id] = Event()
-            future = self._executor.submit(self.run, project_id, from_stage=from_stage)
-            self._futures[project_id] = future
+        with self.project_operation(project_id):
+            with self._lock:
+                current = self._futures.get(project_id)
+                if current and not current.done():
+                    raise RuntimeError("Pipeline is already running")
+            with database_connection(self.database_path) as connection:
+                previous_state = str(repository.get_project(connection, project_id)["state"])
+                repository.set_project_state(connection, project_id, "running")
+            try:
+                with self._lock:
+                    self._cancel_events[project_id] = Event()
+                    future = self._executor.submit(self.run, project_id, from_stage=from_stage)
+                    self._futures[project_id] = future
+            except Exception:
+                with database_connection(self.database_path) as connection:
+                    repository.set_project_state(connection, project_id, previous_state)
+                raise
         return project_id
 
     def is_running(self, project_id: str) -> bool:

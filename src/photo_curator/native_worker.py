@@ -175,31 +175,34 @@ class NativeWorker:
         project_id = _required_string(params, "project_id")
         if params.get("confirmed") is not True:
             raise NativeWorkerError("Project deletion requires confirmed=true")
-        with database_connection(self.paths.database) as connection:
-            project = repository.get_project(connection, project_id)
-            if project["state"] == "running":
+        with self.coordinator.project_operation(project_id):
+            if self.coordinator.is_running(project_id):
                 raise NativeWorkerError("Сначала остановите выполняющийся анализ")
-        _append_destructive_audit(
-            self.paths,
-            action="delete_project",
-            status="requested",
-            project_id=project_id,
-        )
-        backup = create_database_backup(
-            self.paths.database,
-            self.paths.data_dir / "backups",
-            reason=f"before-delete-{project_id}",
-        )
-        with database_connection(self.paths.database) as connection:
-            repository.delete_project(connection, project_id)
-        _remove_project_cache(self.paths, project_id)
-        _append_destructive_audit(
-            self.paths,
-            action="delete_project",
-            status="completed",
-            project_id=project_id,
-            backup_path=str(backup),
-        )
+            with database_connection(self.paths.database) as connection:
+                project = repository.get_project(connection, project_id)
+                if project["state"] == "running":
+                    raise NativeWorkerError("Сначала остановите выполняющийся анализ")
+            _append_destructive_audit(
+                self.paths,
+                action="delete_project",
+                status="requested",
+                project_id=project_id,
+            )
+            backup = create_database_backup(
+                self.paths.database,
+                self.paths.data_dir / "backups",
+                reason=f"before-delete-{project_id}",
+            )
+            with database_connection(self.paths.database) as connection:
+                repository.delete_project(connection, project_id)
+            _remove_project_cache(self.paths, project_id)
+            _append_destructive_audit(
+                self.paths,
+                action="delete_project",
+                status="completed",
+                project_id=project_id,
+                backup_path=str(backup),
+            )
         return {"status": "deleted", "project_id": project_id, "backup_path": str(backup)}
 
     def _handle_create_project(self, params: dict[str, object]) -> dict[str, object]:
