@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from PIL import Image
@@ -43,6 +44,19 @@ def test_source_fingerprint_changes_with_source(tmp_path: Path) -> None:
     source.write_bytes(b"first")
     first = source_fingerprint(source, "original")
     source.write_bytes(b"second-version")
+
+    assert source_fingerprint(source, "original") != first
+
+
+def test_source_fingerprint_detects_content_change_with_preserved_stat(tmp_path: Path) -> None:
+    source = tmp_path / "image.bin"
+    source.write_bytes(b"first-content")
+    original_stat = source.stat()
+    first = source_fingerprint(source, "original")
+
+    source.write_bytes(b"other-content")
+    assert source.stat().st_size == original_stat.st_size
+    os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
 
     assert source_fingerprint(source, "original") != first
 

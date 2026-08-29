@@ -12,7 +12,9 @@ from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.native_publisher import NativePhotosImporter
-from photo_curator.photos.provider import PhotosProvider
+from photo_curator.photos.provider import PhotoAsset, PhotosProvider
+from photo_curator.photos.render_resolver import resolve_source_render
+from photo_curator.pipeline.previews import source_fingerprint
 from photo_curator.utils.safe_paths import ensure_within
 from photo_curator.utils.subprocesses import CommandResult, find_executable, run_command
 
@@ -91,6 +93,7 @@ class PhotosPublisher:
         revalidation_ids = sorted(
             group_member_ids.union(str(asset["asset_uuid"]) for asset in candidates)
         )
+        by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
         try:
             self.provider.refresh_library()
             refreshed = {
@@ -99,6 +102,12 @@ class PhotosPublisher:
             current_library = self.provider.get_current_library()
             membership = {
                 asset_uuid: self.provider.asset_still_in_album(str(project["album_id"]), asset_uuid)
+                for asset_uuid in revalidation_ids
+            }
+            revision_matches = {
+                asset_uuid: _source_revision_matches(
+                    by_uuid.get(asset_uuid), refreshed.get(asset_uuid)
+                )
                 for asset_uuid in revalidation_ids
             }
         except Exception:
@@ -113,6 +122,9 @@ class PhotosPublisher:
             current = refreshed.get(uuid)
             if not current or not membership.get(uuid, False):
                 removed.append(uuid)
+                continue
+            if not revision_matches.get(uuid, False):
+                blockers.append(f"{uuid}: изображение изменилось после анализа")
                 continue
             if kind == "best":
                 if row.get("cache_state") != "ready":
@@ -134,7 +146,6 @@ class PhotosPublisher:
             if not row.get("reviewed") and manual:
                 warnings.append(f"{uuid}: manual reject не отмечен reviewed")
             accepted.append(uuid)
-        by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
         unsafe_duplicate_rejects: set[str] = set()
         for group in groups if kind == "reject" else []:
             members = [by_uuid.get(str(member["asset_uuid"])) for member in group["members"]]
@@ -147,6 +158,7 @@ class PhotosPublisher:
                 and member.get("cache_state") == "ready"
                 and str(member["asset_uuid"]) in refreshed
                 and membership.get(str(member["asset_uuid"]), False)
+                and revision_matches.get(str(member["asset_uuid"]), False)
             ]
             active_by_uuid = {str(member["asset_uuid"]): member for member in members}
             rejected_members = [
@@ -403,6 +415,14 @@ class PhotosPublisher:
             if expected_mtime is not None and abs(stat.st_mtime - float(expected_mtime)) > 0.01:
                 blockers.append(f"{uuid}: файл изменился после анализа")
                 continue
+            expected_fingerprint = row.get("source_fingerprint")
+            source_kind = str(row.get("source_kind") or "original")
+            if (
+                not isinstance(expected_fingerprint, str)
+                or source_fingerprint(path, source_kind) != expected_fingerprint
+            ):
+                blockers.append(f"{uuid}: содержимое файла изменилось после анализа")
+                continue
             accepted.append(uuid)
         if not accepted:
             blockers.append("Нет отобранных фотографий")
@@ -432,6 +452,21 @@ class PhotosPublisher:
             args.append("--dry-run")
         args.append("--verbose")
         return args
+
+
+def _source_revision_matches(stored: dict[str, object] | None, current: PhotoAsset | None) -> bool:
+    if not stored or not current or stored.get("cache_state") != "ready":
+        return False
+    expected = stored.get("source_fingerprint")
+    if not isinstance(expected, str) or not expected:
+        return False
+    render = resolve_source_render(current)
+    if not render.path:
+        return False
+    try:
+        return source_fingerprint(render.path, render.kind) == expected
+    except OSError:
+        return False
 
 
 def unique_album_name(

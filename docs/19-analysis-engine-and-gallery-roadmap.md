@@ -60,13 +60,17 @@ Quality Lab и нативной галереи в последовательну
   исчезнувшие assets в активных gallery counts.
   Evidence: unavailable-asset и signal-rerank regressions, повторный inventory удалённого
   asset очищает metrics/group membership и уменьшает gallery total.
-- [ ] Исключить stale-revision assets из publish safety evidence и любых сохранённых leaders.
+- [x] Исключить stale-revision assets из publish safety evidence и любых сохранённых leaders.
+  Evidence: source fingerprint v2 включает SHA-256 содержимого, а publish revalidation
+  сравнивает свежий provider render каждого кандидата и duplicate leader.
 - [x] Запретить near/exact Reject, если fresh active snapshot не содержит проверенного
   сохранённого лидера или эквивалентной full-resolution копии.
   Evidence: publish всегда сбрасывает provider caches, заново читает assets/membership и
   исключает duplicate loser при исчезнувшем retained leader.
-- [ ] Перед каждым dry-run и apply заново читать exact source membership и сравнивать
-  media type, modification/edit revision и render/content fingerprint.
+- [x] Перед каждым dry-run и apply заново читать exact source membership и сравнивать
+  render/content fingerprint; любое изменение требует нового analysis/dry-run.
+- [ ] Добавить в snapshot и publish revalidation явные media type и modification/edit
+  revision из PhotoKit вместо косвенной проверки через versioned render.
 - [ ] Сериализовать start/resume/delete/publish per-project lock/state machine; delete и
   publish не могут пересекаться с работающим analysis Future.
 - [ ] Зарезервировать уникальный destination album identity до apply и исключить reuse
@@ -76,7 +80,8 @@ Quality Lab и нативной галереи в последовательну
 
 - [x] Ghost duplicate regression: после исчезновения лидера живая копия не получает Reject,
   publish fail-closed до свежего анализа.
-- [ ] Source-drift regression: membership/edit/content change после dry-run блокирует apply.
+- [x] Source-drift regression: membership/content change после dry-run блокирует apply.
+- [ ] Реальный PhotoKit regression: edit revision после dry-run блокирует apply.
 - [ ] Concurrency regression: coordinated start/delete и parallel apply не теряют локальные
   данные и не объединяют разные destination albums.
 - [ ] Реальный disposable PhotoKit acceptance на edited asset и source membership drift.

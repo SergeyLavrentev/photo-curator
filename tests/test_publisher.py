@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
@@ -218,6 +219,31 @@ def test_apply_requires_new_dry_run_after_source_drift(tmp_path: Path) -> None:
     dry_run = publisher.dry_run(project_id)
     reject_uuid = Path(str(dry_run["uuid_file"])).read_text(encoding="utf-8").splitlines()[0]
     provider._assets = [asset for asset in provider._assets if asset.uuid != reject_uuid]
+
+    with pytest.raises(ValueError, match="новый dry-run"):
+        publisher.apply(str(dry_run["id"]))
+
+
+def test_apply_requires_new_analysis_after_render_content_changes(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+
+    def runner(args: list[str]) -> CommandResult:
+        output = "--uuid-from-file --add-to-album --dry-run" if "--help" in args else "ok"
+        return CommandResult(args, 0, output, "")
+
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        runner=runner,
+        executable="/usr/bin/true",
+    )
+    dry_run = publisher.dry_run(project_id)
+    reject_uuid = Path(str(dry_run["uuid_file"])).read_text(encoding="utf-8").splitlines()[0]
+    source = next(asset.source_path for asset in provider._assets if asset.uuid == reject_uuid)
+    assert source is not None
+    Image.new("RGB", (320, 240), "red").save(source, "JPEG")
 
     with pytest.raises(ValueError, match="новый dry-run"):
         publisher.apply(str(dry_run["id"]))

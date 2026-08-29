@@ -21,9 +21,16 @@ class PreviewResult:
     source_fingerprint: str
 
 
-def source_fingerprint(path: Path, source_kind: str, settings_version: int = 1) -> str:
+def source_fingerprint(path: Path, source_kind: str, settings_version: int = 2) -> str:
     stat = path.stat()
-    payload = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{source_kind}|{settings_version}"
+    content = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            content.update(chunk)
+    payload = (
+        f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{content.hexdigest()}|"
+        f"{source_kind}|{settings_version}"
+    )
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
