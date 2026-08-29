@@ -6,11 +6,12 @@ problems, composition, and your own visual preferences while keeping you in cont
 every final decision.
 
 The original library is never edited or deleted. Photo Curator renders review-sized JPEGs
-into its private cache, proposes a selection, shows a dry run, and only creates a new Photos
-album after explicit confirmation.
+into private service-owned project storage, proposes a selection, shows a dry run, and only
+creates a new Photos album after explicit confirmation. Purgeable PhotoKit cache can be
+regenerated without leaving the gallery or Quality Lab permanently blank.
 
-> **Preview status:** this is an early public build. Treat its recommendations as review
-> assistance, not as an automatic verdict. Quality still needs validation on diverse,
+> **Private preview status:** this build is for non-commercial use without redistribution.
+> Treat recommendations as review assistance until the strict gates pass on diverse,
 > human-labelled real-world albums.
 
 ## Download
@@ -33,15 +34,16 @@ the app from the DMG to `Applications` before launching it.
 
 1. Select a regular or shared Apple Photos album.
 2. Choose an analysis mode and start the run.
-3. Review ranked Keep, Review, and Reject suggestions.
-4. Correct uncertain decisions and teach the local Personal Taste profile.
-5. Inspect a dry run and explicitly create a new album containing the approved selection.
+3. Review Pick, Alternatives, Review, and Reject in Grid, Loupe, Compare, or Survey.
+4. Use ratings 1–5, `P/U/X`, undo and batch actions; teach the local Personal Taste profile.
+5. Preview the exact immutable Pick set and explicitly create a Best album.
 
-The scoring pipeline combines:
+The analysis pipeline records:
 
-- Apple Vision aesthetics, saliency, face, and feature-print signals;
+- independently switchable Apple Vision, NIMA, MobileCLIP S0, and MUSIQ signals;
+- local aesthetic, semantic/genre, and multi-scale image-quality signals through Core ML;
 - technical quality signals such as blur, exposure, resolution, and horizon;
-- within-series comparison for near-duplicate bursts;
+- exact, burst, and scene grouping with crop/exposure and Vision-feature confirmation;
 - diversity protection so one scene does not dominate the result;
 - a local Personal Taste model trained from explicit A/B choices;
 - conservative safety rules that protect favourites, edits, originals, and uncertain cases.
@@ -50,8 +52,10 @@ The scoring pipeline combines:
 
 ### Local analysis (default)
 
-The standard mode runs on the Mac. It uses Apple Vision and the local scoring pipeline; no
-photo review copies are sent to an external AI service.
+The standard mode runs on the Mac. Apple Vision is the production ranking baseline. NIMA and
+MobileCLIP remain visible advisory signals until an album-separated held-out evaluation validates
+their normalized ensemble weights; MUSIQ contributes only a bounded technical-quality penalty.
+No photo review copies are sent to an external AI service.
 
 ### Codex Vision (explicit opt-in)
 
@@ -65,15 +69,21 @@ ChatGPT or Codex app and in `PATH`. No API key is requested or accepted by this 
 
 Codex Vision is optional. If it is unavailable or not selected, Photo Curator remains a
 fully local application.
+Codex scores use an anchored 0–100 contract and scale-collapse guard. They remain advisory for
+ranking until `validated_codex_ranking` has explicit human-labelled evidence; this prevents an
+experimental model or route-specific scale from replacing the Apple baseline silently.
 
 ## Privacy and safety
 
 - Local analysis is the default; Codex Vision requires an explicit choice and warning.
+- Every local engine can be enabled or disabled in Settings and is enabled by default.
+- The bundled NIMA/MUSIQ and MobileCLIP artifacts are restricted to this private,
+  non-commercial build; review their licenses before publication or commercial use.
 - The app has no telemetry and does not run a local web server.
 - Photos are accessed through public PhotoKit APIs, never by writing to `Photos.sqlite`.
 - Originals, edits, favourites, keywords, and existing albums are not modified.
 - There is no photo deletion API or automatic deletion workflow.
-- Publishing is separated into dry-run and confirmed apply steps.
+- Publishing shows the exact UUID-backed Pick set and is separated into dry-run and apply.
 - Local review renders and project data can be removed without touching the Photos library.
 - Secrets, authentication tokens, and API keys are not stored in this repository.
 
@@ -157,6 +167,27 @@ PHOTO_CURATOR_NATIVE_DEMO=1 make run
 The repository also contains reproducible benchmark and human-labelled acceptance tooling.
 See the architecture and pipeline documents for native Apple Vision, optional Core ML,
 gallery, release-hot-path, and held-out Swipe Score evaluation commands.
+Settings → **Проверка качества** opens a dedicated Quality Lab wizard. It guides the user through
+a deterministic blind 50–100-photo sample, explicit defect labels, held-out A/B comparisons,
+ordered Top-K, one human series/leader, completeness checks and export. Automatic recommendations
+are hidden during blind labelling and are never copied into the human truth set.
+
+The local-model performance gate compares bounded work batches and concurrency while checking
+score parity, peak RSS and thermal state. It intentionally exits non-zero until retained energy
+evidence is supplied:
+
+```bash
+uv run photo-curator local-model-performance-benchmark \
+  --asset-dir <preview-directory> --benchmark-modes 1x1,16x1,16x2 \
+  --iterations 2 --output local-model-performance.json
+```
+
+Export the immutable current, non-personalized and Apple-only score snapshots together with
+their provenance and the human-label manifest:
+
+```bash
+uv run photo-curator acceptance-evidence-export --project-id <id> --output evidence.json
+```
 
 ## Known limitations
 
@@ -166,7 +197,8 @@ gallery, release-hot-path, and held-out Swipe Score evaluation commands.
 - A broad real-photo, human-labelled acceptance corpus is still required before claiming
   production-level selection quality.
 
-## License
+## License and model-use boundary
 
-No open-source license has been selected yet. The repository and downloadable preview are
-public for evaluation, but no additional rights are granted by default.
+No open-source license has been selected. This installation is private and non-commercial.
+Bundled third-party model weights must not be redistributed or reused commercially without a
+separate license review.

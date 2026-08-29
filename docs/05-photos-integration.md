@@ -31,6 +31,13 @@ PhotoKit асинхронно подготавливает до трёх изо�
 создаёт только thumbnail. Versioned thumbnail также хранится в общем cache и связывается
 с project cache без повторного декодирования при следующем анализе.
 
+Если iCloud не отдаёт полноразмерный render, helper может сохранить локальный opportunistic
+preview только для отображения. Перед любым анализом pipeline fail-closed проверяет raster:
+короткая сторона должна быть не меньше 256 px, длинная — не меньше 512 px. Более мелкий кадр
+получает `cache_state=degraded`, остаётся видимым в галерее, но не передаётся в Apple Vision,
+Core ML или Codex и не участвует в automatic Pick/Reject. Повторный Codex-анализ после
+восстановления preview требует отдельного подтверждения в UI.
+
 Render cache общий для проектов и альбомов. Его ключ включает asset UUID, PhotoKit
 `modificationDate`, размеры и версию render-настроек: неизменённый кадр переиспользуется,
 а отредактированный не получает устаревшую копию.
@@ -78,7 +85,9 @@ Unedited:
 2. повторно валидирует membership и текущие решения;
 3. сохраняет immutable dry-run;
 4. после явного подтверждения создаёт новый regular album публичным PhotoKit API;
-5. сохраняет destination album identifier и audit результата.
+5. добавляет в него существующие `PHAsset` по local identifier без экспорта и создания
+   новых library assets;
+6. сохраняет destination album identifier, число новых membership и audit результата.
 
 Для legacy `OSXPhotosProvider` publisher:
 
@@ -121,4 +130,7 @@ UI scripting. PhotoKit используется позже только для �
 
 ## Capability gate
 
-Проверить на отдельном тестовом asset/альбоме до полноценной разработки publisher.
+`photokit-acceptance --confirm-create-test-album` создаёт уникальный regular album, добавляет
+один существующий `PHAsset`, проверяет отсутствие нового Photos asset, затем удаляет только
+созданный альбом по его `localIdentifier` и подтверждает сохранность исходного asset. Cleanup
+выполняется и при ошибке промежуточной membership-проверки; чужой альбом по имени не удаляется.

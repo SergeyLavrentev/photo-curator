@@ -16,7 +16,7 @@ The home window contains one large, sequential path rather than metric cards:
 2. **Выберите фотографии** — regular Photos album or guided Shared snapshot. This step unlocks
    after the initial taste profile is trained.
 3. **Получите подборку** — analysis with one overall progress bar and expanded stage details.
-4. **Отбор** — Good / Bad galleries, direct correction and creation of the Best album.
+4. **Отбор** — Pick / Alternatives / Review / Reject and creation of the Best album.
 
 Only the current action is visually dominant. Statistics, Doctor, model versions and stage
 telemetry live under `Статус и детали`.
@@ -40,22 +40,31 @@ speculative ETA. Restart resumes completed fingerprints and visibly explains inv
 
 - default order: personal Swipe Score, then best-in-series and diversity;
 - fluid, compact native thumbnails with prefetch and bounded cache; the default gallery shows at
-  least twelve cards in a typical desktop window;
-- two explicit `Хорошие` and `Плохие` tabs with counts, visually matching the workflow-step
-  navigation;
-- direct `Хорошие` / `Плохие` correction as compact green-check and red-cross controls over every preview,
-  plus undo;
-- unobtrusive checkbox multi-selection in both tabs; clear and batch move actions appear only
+  least twenty-four cards in a typical desktop window, with a size slider and +/- zoom controls;
+- four explicit Pick / Alternatives / Review / Reject filters with counts;
+- Lightroom-style Grid, Loupe, Compare and Survey modes with filmstrip and inspector;
+- direct `P` Pick, `U` Unflag, `X` Reject, ratings 1–5, arrows, Space and undo;
+- collapsed series stacks that expand into Compare/Survey and may retain several distinct moments;
+- unobtrusive checkbox multi-selection; clear and batch move actions appear only
   after photos are selected;
-- double-click opens a large photo view together with the same decision evidence as the info
-  control; Space keeps the lightweight system Quick Look;
-- one compact information control; filenames and a separate `Почему?` button do not consume card
-  space;
+- double-click opens a large photo view with decision evidence; Space keeps the lightweight
+  system Quick Look;
+- cards keep only selection, series, rating and category badges; detailed decisions live in the
+  context menu, keyboard workflow and large detail view instead of per-card popovers;
 - category-specific explanations: positive evidence for Good, negative evidence for Bad;
+- manual decisions and engine recommendations are shown as separate fields; recommendation
+  reasons never masquerade as justification for a conflicting user override;
+- the active Pick/Reject control is visibly selected and disabled, so repeated no-op actions are
+  not presented as available commands;
 - decision reliability and internal ranking score are different concepts; the score is not shown
   as a universal quality percentage;
 - Quick Look, arrow navigation and configurable shortcuts;
-- AppKit `NSCollectionView` fallback if SwiftUI grid misses the 5 000-item performance gate.
+- 36-card keyset-paged SQLite DTOs, ImageIO downsampling with four concurrent decoders, a bounded
+  cache keyed by file identity and stale-response generation guards;
+- explicit unavailable thumbnails when a database `ready` row points to a deleted cache file,
+  plus a user-triggered **Restore previews** action; restoring a project never silently starts a
+  full re-analysis;
+- AppKit `NSCollectionView` fallback if SwiftUI misses a measured performance gate.
 
 The UI says «подходит вашему вкусу», not «объективно красиво». It never rates a person's
 worth or promises how another person will react.

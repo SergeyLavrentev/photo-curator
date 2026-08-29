@@ -6,8 +6,8 @@
 2. Приложение не пишет напрямую в Photos SQLite.
 3. Приложение не меняет originals.
 4. Приложение не меняет Favorite, keywords, title, description, location и date.
-5. Shared intake пишет только service-owned disk snapshot; отдельный publish может
-   импортировать подтверждённые Best-копии в новый regular Photos album.
+5. Regular PhotoKit publish добавляет существующие assets в новый Best album без дублей;
+   только Shared/service-owned disk snapshot импортирует отдельные Best-копии.
 6. Реальному publish всегда предшествует отдельный dry-run.
 7. Каждый publish использует новый уникальный album name.
 8. Финальное удаление выполняет пользователь в Photos.app.
@@ -37,6 +37,18 @@
 - publish album name и timestamp.
 - destination Photos album identifier для нативного импорта.
 
+Удаление локального анализа имеет отдельный fail-closed контур:
+
+- UI подтверждает действие, а worker дополнительно требует `confirmed=true`;
+- перед `DELETE ... ON CASCADE` SQLite backup API создаёт согласованную копию в
+  `~/Library/Application Support/PhotoCurator/backups` и проверяет её через
+  `PRAGMA integrity_check`;
+- если backup не создан или не прошёл проверку, проект не удаляется;
+- запрос и успешное завершение пишутся в `destructive-actions.jsonl` с project ID,
+  временем, PID и путём backup;
+- одновременно один каталог может обслуживать только один native worker; второй процесс
+  завершается до открытия БД.
+
 ## Source drift
 
 Перед publish повторно проверить:
@@ -53,7 +65,11 @@
 
 ## Cache safety
 
-- Cache только внутри `~/Library/Caches/PhotoCurator`.
+- Повторно получаемые PhotoKit renders и transient cache находятся только внутри
+  `~/Library/Caches/PhotoCurator` и могут быть вытеснены macOS.
+- Review/thumbnail artifacts готового проекта находятся внутри
+  `~/Library/Application Support/PhotoCurator/project-artifacts`; они нужны для
+  галереи и разметки и удаляются только вместе с проектом.
 - Persistent local albums только внутри
   `~/Library/Application Support/PhotoCurator/local_albums` и содержат atomic manifest.
 - Recursive delete только после resolved-path validation.

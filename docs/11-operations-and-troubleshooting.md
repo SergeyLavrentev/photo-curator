@@ -17,10 +17,14 @@ bundled PhotoKit/Vision helpers и разрешение Photos непосред�
 ## Cache
 
 ```text
-~/Library/Caches/PhotoCurator/<project-id>/
+~/Library/Caches/PhotoCurator/photokit-renders/
+~/Library/Application Support/PhotoCurator/project-artifacts/<project-id>/
 ```
 
-UI показывает размер и counts. Возможны очистка thumbnails, review previews, всего cache и удаление project state.
+Первый путь — повторно получаемый PhotoKit cache, который macOS может вытеснить.
+Второй — materialized review/thumbnail artifacts проекта, необходимые галерее и
+Quality Lab. UI обнаруживает их отсутствие и предлагает безопасное восстановление
+через PhotoKit. Удаление проекта удаляет оба service-owned каталога проекта.
 
 ## Typical issues
 
@@ -37,7 +41,7 @@ UI показывает размер и counts. Возможны очистка 
 
 ### Missing previews
 
-Открыть исходный альбом в Photos, дождаться загрузки, нажать `Повторить missing`.
+Открыть исходный альбом в Photos, дождаться загрузки, нажать `Восстановить изображения`.
 
 ### HEIC conversion failure
 

@@ -42,7 +42,9 @@
 
 `FakePhotosProvider` позволяет выполнять полный pipeline на любой платформе.
 Нативный demo запускается с `PHOTO_CURATOR_NATIVE_DEMO=1 make run`; CLI никогда не
-поднимает HTTP server.
+поднимает HTTP server. Demo publisher проходит тот же immutable dry-run, explicit confirmation,
+source revalidation и SQLite audit, но пишет только synthetic destination identifier и никогда
+не обращается к Apple Photos.
 
 ## Publisher tests
 
@@ -69,7 +71,15 @@ Mock subprocess runner проверяет:
 - Live Photo;
 - missing/iCloud-only при возможности.
 
-Проверить read gate, pipeline, review, dry-run и создание временного альбома. Ничего не удалять приложением.
+Проверить read gate, pipeline, review, dry-run, создание и cleanup временного альбома. Исходные
+assets не удалять: acceptance удаляет только созданный тестовый album container.
+
+Реальная проверка 2026-08-09 прошла на обычном PhotoKit album `документы`: установленное
+приложение проанализировало 11 фото, пользовательский Pick сформировал dry-run ровно из одного
+существующего `PHAsset`, а apply создал обычный album без копирования asset. Затем был удалён
+только созданный album container; исходный album сохранил все 11 фото. Полные идентификаторы,
+хеши сборки и границы проверки записаны в `docs/17-acceptance-2026-08-09.md`. Текущее состояние
+движка, iCloud-блокер и свежая сборка зафиксированы в `docs/18-acceptance-2026-08-27.md`.
 
 ## Commands
 
@@ -109,16 +119,31 @@ uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
   --labels labels.json --scores baseline.json --json
 ```
 
-Нативный Settings → «Проверка качества» экспортирует manifest из явных ручных решений
-и project-scoped A/B-пар, а также отдельный immutable Swipe Score snapshot с schema/model
+Нативный Settings → «Проверка качества» открывает отдельный мастер. Он выбирает стабильную
+для проекта выборку независимо от prediction, скрывает score/reasons/auto decision, проводит
+50–100 disposition labels, требует явный тип дефекта для Reject, собирает отдельные held-out
+A/B-пары, ordered Top-K и одну человеческую серию с лидером. Lab A/B хранится отдельно от
+профиля вкуса и не попадает в его обучение. В schema v18 lab-sampled provenance отделяет
+слепой corpus от ручных решений в prediction-conditioned review-галерее.
+
+Мастер экспортирует manifest и отдельный immutable Swipe Score snapshot с schema/model
 provenance. Экспорт fail-honest: predicted dispositions, duplicate groups и автоматический
-Top-K не копируются в truth labels. Review-галерея отдельно сохраняет явный ordered Top-K
-и выбранного человеком лидера серии в schema v10; серия готова только после manual decision
-для каждого кадра. Произвольная multi-selection позволяет разметить пропущенную алгоритмом
-серию и не создаёт prediction-conditioned recall. Summary переключает `release_ready` только
-при полной структуре corpus.
-Там же кнопка «Оценить заполненный набор…» запускает тот же versioned evaluator через
-локальный JSONL worker и не требует CLI.
+Top-K не копируются в truth labels; серия готова только после lab manual decision для каждого
+кадра. Итоговый экран перечисляет недостающие gates, запускает versioned evaluator без CLI и
+переключает `release_ready` только при полной структуре corpus.
+Quality Lab включается пользователем в Settings и не требует специальной environment variable.
+До выполнения этих человеческих действий `release_ready=false` является ожидаемым и обязательным
+результатом, а не поводом ослаблять gate.
+
+## Production gallery benchmark
+
+`make gallery-benchmark` компилирует production `PhotoCard`, `CachedThumbnail` и тот же SwiftUI
+код приложения с флагом, отключающим только application `@main`. Harness создаёт отдельные
+реальные JPEG, отображает production-страницу из 36 карточек и измеряет page-local DTO creation,
+initial layout/decode, scroll p95 и page-swap p95 для каталогов 2k/5k. DTO создаются постранично,
+как в production UI; отдельный SQLite gate проверяет data path на 50 000 строках. Прямоугольная
+surrogate-view больше не является release evidence. JSON сохраняется в
+`build/evidence/gallery-benchmark.json`.
 
 ## PhotoKit import benchmark
 
@@ -159,3 +184,40 @@ Swift helper компилируется независимо от конкрет
 совместимой лицензией, checksum и доказанным held-out uplift. Значение `.all` разрешает
 Core ML выбирать CPU/GPU/Neural Engine, но само по себе не доказывает использование ANE;
 hardware attribution и energy требуют отдельного Instruments acceptance run.
+
+## S3 batching, concurrency and energy gate
+
+`local-model-performance-benchmark` прогоняет один и тот же набор preview в режимах
+`work_batch_size × max_concurrency`. Для каждого режима проверяются нулевое число ошибок,
+структурное равенство output, числовой drift не более `1e-4`, peak RSS, состояния thermal до/после
+и throughput. Небезопасный режим не может стать recommended. Production helper ограничивает
+очередь 16 объектами и использует подтверждённый режим concurrency 2.
+
+```bash
+uv run photo-curator local-model-performance-benchmark \
+  --asset-dir /path/to/previews --max-assets 48 --iterations 2 \
+  --benchmark-modes 1x1,16x1,16x2 --max-peak-rss-mib 1024 \
+  --output build/evidence/local-model-performance.json
+```
+
+Energy gate fail-closed: отсутствие `xctrace` или одного из трёх аргументов
+`--energy-trace`, `--energy-joules`, `--max-energy-joules` оставляет общий `passed=false`, даже
+когда capacity gate прошёл. Наличие `.trace` без измеренного значения и заранее заданного бюджета
+также не считается доказательством.
+
+Локальный smoke 2026-08-27 на 12 сохранённых JPEG и всех трёх моделях подтвердил одинаковые
+результаты (max drift `5.6e-17`), nominal → nominal и ноль ошибок. Режим `16x2` дал 17.65 фото/с
+против 11.83 фото/с у `1x1` при peak RSS 88.5 MB против 76.6 MB. Это capacity evidence, а не
+закрытие energy/ANE gate; полный 48-photo run нужно повторить после восстановления preview.
+
+Реальный PhotoKit repair 2026-08-27 подтвердил Full Photos access, но Photos/iCloud вернул
+`CloudPhotoLibraryErrorDomain 1005` для полноразмерных кадров и только 48×64 cached previews для
+всех 394 фото альбома `Cape Town 2024`. Такие файлы теперь покрыты отдельным resolution gate:
+они остаются UI-only, все автоматические сигналы инвалидируются, а 394 решения переводятся в
+`Review`. Этот прогон не является 48-photo model/performance или ranking acceptance evidence.
+
+Decision confidence fail-closed: полнота сигналов и cross-model disagreement сохраняются и
+показываются отдельно. Расхождение считается по независимым aesthetic outputs на общей
+album-percentile шкале и уменьшает raw reliability, но не называется вероятностью. Вероятность
+корректности появляется только после валидации Platt calibrator на непересекающихся calibration и
+held-out albums; смена raw-confidence contract инвалидирует модели предыдущей версии.

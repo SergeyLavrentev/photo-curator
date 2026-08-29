@@ -142,9 +142,10 @@ Top-K evaluation without increasing false exclusions.
 
 ## S3 — semantic appeal and hardware acceleration
 
-- Keep Apple MobileCLIP code as a reference only: Apple's published pretrained weights
-  are research-only/non-commercial and cannot be used for this product. Benchmark only
-  weights with an explicit compatible commercial license against the native Vision baseline.
+- This is a private, non-commercial installation. NIMA, MUSIQ and Apple's research-only
+  MobileCLIP weights may be enabled for that declared use after their manifests and content
+  digests are verified. They must not be redistributed or silently promoted to a public or
+  commercial build without a new license review.
 - Convert the winning model to Core ML and use `.all` compute units where compatible.
 - Cache embeddings by immutable render fingerprint.
 - Batch inference and prevent duplicate image decoding across requests.
