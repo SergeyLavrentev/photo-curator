@@ -902,7 +902,7 @@ class NativeWorker:
             assets = repository.list_assets(connection, project_id)
         candidates = _quality_candidates(project_id, assets, raw_limit)
         labelled = sum(
-            candidate.get("manual_disposition") in {"keep", "review", "reject"}
+            candidate.get("quality_expected_disposition") in {"keep", "review", "reject"}
             for candidate in candidates
         )
         return {
@@ -960,7 +960,7 @@ class NativeWorker:
             asset
             for asset in _quality_candidates(project_id, assets, 100)
             if bool(asset.get("quality_lab_sampled"))
-            and asset.get("manual_disposition") in {"keep", "review", "reject"}
+            and asset.get("quality_expected_disposition") in {"keep", "review", "reject"}
         ]
         pair, remaining = _next_quality_pair(project_id, candidates, examples)
         return {
@@ -1301,7 +1301,7 @@ def _quality_asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "thumbnail_path": asset.get("thumbnail_path"),
         "review_path": asset.get("review_path"),
         "cache_state": asset.get("cache_state"),
-        "manual_disposition": asset.get("manual_disposition"),
+        "quality_disposition": asset.get("quality_expected_disposition"),
         "quality_top_k_rank": asset.get("quality_top_k_rank"),
         "quality_duplicate_group": asset.get("quality_duplicate_group"),
         "quality_expected_leader": bool(asset.get("quality_expected_leader")),

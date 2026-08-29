@@ -374,7 +374,8 @@ def test_native_worker_can_create_project_directly_from_shared_album(tmp_path: P
     candidates = worker.dispatch("quality_candidates", {"project_id": created["id"], "limit": 4})
     assert candidates["requested"] == 4
     assert candidates["available"] == 4
-    assert all(item["manual_disposition"] is None for item in candidates["items"])
+    assert all(item["quality_disposition"] is None for item in candidates["items"])
+    assert all("manual_disposition" not in item for item in candidates["items"])
 
     missing_id = candidates["items"][0]["asset_uuid"]
     with database_connection(paths.database) as connection:
@@ -862,6 +863,10 @@ def test_quality_wizard_is_blind_and_keeps_held_out_pairs_out_of_taste_profile(
     assert "swipe_score" not in first
     assert "reasons" not in first
     assert "final_disposition" not in first
+    assert "manual_disposition" not in first
+
+    with database_connection(paths.database) as connection:
+        product_decision_before = repository.get_asset(connection, project_id, first["asset_uuid"])
 
     with pytest.raises(ValueError, match="укажите хотя бы один дефект"):
         worker.dispatch(
@@ -885,8 +890,20 @@ def test_quality_wizard_is_blind_and_keeps_held_out_pairs_out_of_taste_profile(
             "note": "Смаз заметен на лице",
         },
     )
-    assert labelled["manual_disposition"] == "reject"
+    assert labelled["quality_disposition"] == "reject"
+    assert "manual_disposition" not in labelled
     assert labelled["quality_defect_codes"] == ["motion_blur"]
+    with database_connection(paths.database) as connection:
+        product_decision_after = repository.get_asset(connection, project_id, first["asset_uuid"])
+    assert (
+        product_decision_after["manual_disposition"]
+        == product_decision_before["manual_disposition"]
+    )
+    assert product_decision_after["manual_selection"] == product_decision_before["manual_selection"]
+    assert (
+        product_decision_after["final_disposition"] == product_decision_before["final_disposition"]
+    )
+    assert product_decision_after["final_selection"] == product_decision_before["final_selection"]
     second = candidates["items"][1]
     worker.dispatch(
         "quality_label",

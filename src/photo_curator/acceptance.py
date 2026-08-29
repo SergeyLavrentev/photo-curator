@@ -141,14 +141,13 @@ def build_native_quality_evidence(
 ) -> dict[str, object]:
     """Build an honest, portable quality corpus from explicit native-app feedback."""
     active_assets = [asset for asset in assets if not asset.get("no_longer_exists")]
-    manually_labelled = [
+    quality_labelled = [
         asset
         for asset in active_assets
-        if bool(asset.get("manual_override"))
-        and asset.get("manual_disposition") in ALLOWED_DISPOSITIONS
+        if asset.get("quality_expected_disposition") in ALLOWED_DISPOSITIONS
         and bool(asset.get("quality_lab_sampled", True))
     ]
-    manually_labelled_ids = {str(asset["asset_uuid"]) for asset in manually_labelled}
+    quality_labelled_ids = {str(asset["asset_uuid"]) for asset in quality_labelled}
     annotated_groups: dict[str, list[dict[str, object]]] = defaultdict(list)
     for asset in active_assets:
         group = asset.get("quality_duplicate_group")
@@ -158,7 +157,7 @@ def build_native_quality_evidence(
         group
         for group, members in annotated_groups.items()
         if len(members) >= 2
-        and {str(member["asset_uuid"]) for member in members} <= manually_labelled_ids
+        and {str(member["asset_uuid"]) for member in members} <= quality_labelled_ids
         and sum(bool(member.get("quality_expected_leader")) for member in members) == 1
     }
     top_k = [
@@ -196,7 +195,7 @@ def build_native_quality_evidence(
             {
                 "asset_uuid": str(asset["asset_uuid"]),
                 "filename": asset.get("current_filename"),
-                "expected_disposition": asset["manual_disposition"],
+                "expected_disposition": asset["quality_expected_disposition"],
                 "duplicate_group": (
                     asset.get("quality_duplicate_group")
                     if asset.get("quality_duplicate_group") in complete_groups
@@ -210,7 +209,7 @@ def build_native_quality_evidence(
                 "defect_confidence": asset.get("quality_defect_confidence"),
                 "quality_note": asset.get("quality_note"),
             }
-            for asset in manually_labelled
+            for asset in quality_labelled
         ],
     }
 
@@ -273,9 +272,9 @@ def build_native_quality_evidence(
         },
     }
     held_out = sum(pair["split"] == "held_out" for pair in pairs)
-    defect_labels = sum(bool(_quality_defect_codes(asset)) for asset in manually_labelled)
+    defect_labels = sum(bool(_quality_defect_codes(asset)) for asset in quality_labelled)
     release_ready = (
-        50 <= len(manually_labelled) <= 100
+        50 <= len(quality_labelled) <= 100
         and held_out >= MIN_HELD_OUT_PAIRS
         and len(top_k) >= MIN_TOP_K
         and bool(complete_groups)
@@ -287,7 +286,7 @@ def build_native_quality_evidence(
         "score_snapshot": snapshot,
         "baseline_snapshots": baseline_snapshots,
         "summary": {
-            "manual_labels": len(manually_labelled),
+            "manual_labels": len(quality_labelled),
             "preference_pairs": len(pairs),
             "held_out_pairs": held_out,
             "expected_top_k": len(top_k),

@@ -149,6 +149,7 @@ struct PhotoItem: Identifiable, Equatable, JSONDictionaryDTO {
     let qualityTopKRank: Int?
     let qualityDuplicateGroup: String?
     let qualityExpectedLeader: Bool
+    let qualityDisposition: String?
     let qualityDefectCodes: [String]
     let qualityDefectSeverity: Int?
     let qualityDefectConfidence: Double?
@@ -188,6 +189,7 @@ struct PhotoItem: Identifiable, Equatable, JSONDictionaryDTO {
         qualityTopKRank = value["quality_top_k_rank"]?.intValue
         qualityDuplicateGroup = value["quality_duplicate_group"]?.stringValue
         qualityExpectedLeader = value["quality_expected_leader"]?.boolValue ?? false
+        qualityDisposition = value["quality_disposition"]?.stringValue
         qualityDefectCodes = value["quality_defect_codes"]?.arrayValue?
             .compactMap(\.stringValue) ?? []
         qualityDefectSeverity = value["quality_defect_severity"]?.intValue

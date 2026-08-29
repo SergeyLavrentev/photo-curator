@@ -57,7 +57,8 @@ def list_assets_page(
             s.schema_version AS swipe_schema_version,
             q.top_k_rank AS quality_top_k_rank,
             q.duplicate_group AS quality_duplicate_group,
-            q.expected_leader AS quality_expected_leader
+            q.expected_leader AS quality_expected_leader,
+            q.expected_disposition AS quality_expected_disposition
         FROM assets a
         LEFT JOIN metrics m USING (project_id, asset_uuid)
         LEFT JOIN decisions d USING (project_id, asset_uuid)
@@ -132,7 +133,8 @@ def _list_ranked_decision_page(
             s.schema_version AS swipe_schema_version,
             q.top_k_rank AS quality_top_k_rank,
             q.duplicate_group AS quality_duplicate_group,
-            q.expected_leader AS quality_expected_leader
+            q.expected_leader AS quality_expected_leader,
+            q.expected_disposition AS quality_expected_disposition
         FROM ranked_scores s
         JOIN assets a USING (project_id, asset_uuid)
         LEFT JOIN metrics m USING (project_id, asset_uuid)

@@ -17,7 +17,7 @@ extension AppModel {
                 qualityCandidateRequested = response.requested
                 qualityCandidateAvailable = response.available
                 qualityCandidateIndex = response.items.firstIndex {
-                    $0.manualDisposition == nil
+                    $0.qualityDisposition == nil
                 } ?? max(0, response.items.count - 1)
                 await loadQualityStatus(projectID: project.id)
             } catch { errorMessage = error.localizedDescription }

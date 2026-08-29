@@ -1230,6 +1230,7 @@ def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[st
             q.top_k_rank AS quality_top_k_rank,
             q.duplicate_group AS quality_duplicate_group,
             q.expected_leader AS quality_expected_leader,
+            q.expected_disposition AS quality_expected_disposition,
             q.defect_codes_json AS quality_defect_codes_json,
             q.defect_severity AS quality_defect_severity,
             q.defect_confidence AS quality_defect_confidence,
@@ -1306,6 +1307,7 @@ def assets_by_uuid(
             q.top_k_rank AS quality_top_k_rank,
             q.duplicate_group AS quality_duplicate_group,
             q.expected_leader AS quality_expected_leader,
+            q.expected_disposition AS quality_expected_disposition,
             q.defect_codes_json AS quality_defect_codes_json,
             q.defect_severity AS quality_defect_severity,
             q.defect_confidence AS quality_defect_confidence,
@@ -1417,14 +1419,14 @@ def set_quality_label(
         raise ValueError("Тяжесть дефекта должна быть от 1 до 3")
     if defect_confidence is not None and not 0 <= defect_confidence <= 1:
         raise ValueError("Уверенность должна быть от 0 до 1")
-    set_manual_decision(connection, project_id, asset_uuid, disposition, note)
     connection.execute(
         """
         INSERT INTO quality_asset_labels (
-            project_id, asset_uuid, defect_codes_json, defect_severity,
+            project_id, asset_uuid, expected_disposition, defect_codes_json, defect_severity,
             defect_confidence, quality_note, lab_sampled, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
         ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
+            expected_disposition=excluded.expected_disposition,
             defect_codes_json=excluded.defect_codes_json,
             defect_severity=excluded.defect_severity,
             defect_confidence=excluded.defect_confidence,
@@ -1435,6 +1437,7 @@ def set_quality_label(
         (
             project_id,
             asset_uuid,
+            disposition,
             json.dumps(codes, sort_keys=True),
             defect_severity,
             defect_confidence,

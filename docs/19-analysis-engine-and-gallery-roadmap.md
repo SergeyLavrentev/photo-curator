@@ -48,8 +48,10 @@ Quality Lab и нативной галереи в последовательну
 
 ## R1 — немедленная изоляция опасных контуров
 
-- [ ] Отделить Quality Lab disposition/defect truth от `decisions`: лабораторная разметка
+- [x] Отделить Quality Lab disposition/defect truth от `decisions`: лабораторная разметка
   не меняет `manual_disposition`, `manual_selection`, Best или Reject.
+  Evidence: schema v19 хранит `expected_disposition` в `quality_asset_labels`; native
+  regression проверяет неизменность product disposition/selection после lab label.
 - [ ] Добавить безопасную миграцию уже созданных Quality Lab overrides. Миграция должна
   отличать lab provenance от настоящих пользовательских решений и не переписывать их
   без доказуемого происхождения и отдельного backup.

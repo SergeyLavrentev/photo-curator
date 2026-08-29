@@ -252,6 +252,8 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
             manual_override=index == 0,
             manual_disposition="keep" if index == 0 else None,
             final_disposition="reject" if index == 1 else "keep",
+            quality_expected_disposition="review" if index == 2 else None,
+            quality_lab_sampled=index == 2,
         )
     evidence = build_native_quality_evidence(
         "trip",
@@ -276,9 +278,9 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
 
     assert evidence["manifest"]["assets"] == [
         {
-            "asset_uuid": "asset-00",
-            "filename": "IMG_0000.JPG",
-            "expected_disposition": "keep",
+            "asset_uuid": "asset-02",
+            "filename": "IMG_0002.JPG",
+            "expected_disposition": "review",
             "duplicate_group": None,
             "expected_leader": False,
             "defect_codes": [],
@@ -312,8 +314,8 @@ def test_native_quality_export_becomes_ready_only_from_complete_human_annotation
             swipe_score=100 - index,
             swipe_schema_version=2,
             swipe_model_versions={"generic": "vision-v2"},
-            manual_override=True,
-            manual_disposition="keep" if index < 10 else "review",
+            quality_expected_disposition="keep" if index < 10 else "review",
+            quality_lab_sampled=True,
             quality_top_k_rank=index + 1 if index < 5 else None,
             quality_duplicate_group="human-series" if index < 2 else None,
             quality_expected_leader=index == 0,

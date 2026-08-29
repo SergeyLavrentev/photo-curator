@@ -136,6 +136,7 @@ def asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "quality_top_k_rank": asset.get("quality_top_k_rank"),
         "quality_duplicate_group": asset.get("quality_duplicate_group"),
         "quality_expected_leader": bool(asset.get("quality_expected_leader")),
+        "quality_disposition": asset.get("quality_expected_disposition"),
         "quality_defect_codes": list(raw_quality_defects or []),
         "quality_defect_severity": asset.get("quality_defect_severity"),
         "quality_defect_confidence": asset.get("quality_defect_confidence"),

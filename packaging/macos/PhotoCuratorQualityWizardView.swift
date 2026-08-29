@@ -291,12 +291,12 @@ struct QualityWizardView: View {
                 Button { model.toggleWizardQualityTopK(photoID: photo.id) } label: {
                     wizardGridCard(
                         photo,
-                        badge: photo.manualDisposition == nil
+                        badge: photo.qualityDisposition == nil
                             ? "Сначала шаг 2" : photo.qualityTopKRank.map { "№\($0)" }
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(photo.manualDisposition == nil)
+                .disabled(photo.qualityDisposition == nil)
             }
         }.padding(24)
     }
@@ -326,7 +326,7 @@ struct QualityWizardView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(photo.manualDisposition == nil)
+                .disabled(photo.qualityDisposition == nil)
                 .contextMenu {
                     if seriesSelection.contains(photo.id) {
                         Button("Назначить лучшим") { seriesLeader = photo.id }

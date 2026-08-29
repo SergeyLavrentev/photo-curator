@@ -61,6 +61,7 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "defect_confidence",
         "quality_note",
         "lab_sampled",
+        "expected_disposition",
     } <= quality_columns
 
 
@@ -70,6 +71,44 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
         migrate(connection)
 
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_migration_19_preserves_existing_quality_truth_without_erasing_decisions(
+    tmp_path: Path,
+) -> None:
+    with database_connection(tmp_path / "v18.sqlite3") as connection:
+        connection.executescript(
+            """
+            CREATE TABLE quality_asset_labels (
+                project_id TEXT NOT NULL,
+                asset_uuid TEXT NOT NULL,
+                lab_sampled INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (project_id, asset_uuid)
+            );
+            CREATE TABLE decisions (
+                project_id TEXT NOT NULL,
+                asset_uuid TEXT NOT NULL,
+                manual_disposition TEXT,
+                manual_override INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (project_id, asset_uuid)
+            );
+            INSERT INTO quality_asset_labels VALUES ('project', 'asset', 1);
+            INSERT INTO decisions VALUES ('project', 'asset', 'reject', 1);
+            PRAGMA user_version = 18;
+            """
+        )
+
+        migrate(connection)
+
+        quality = connection.execute(
+            "SELECT expected_disposition FROM quality_asset_labels"
+        ).fetchone()[0]
+        decision = connection.execute(
+            "SELECT manual_disposition, manual_override FROM decisions"
+        ).fetchone()
+
+    assert quality == "reject"
+    assert tuple(decision) == ("reject", 1)
 
 
 def test_schema_nine_database_upgrades_without_recreating_project_data(tmp_path: Path) -> None:

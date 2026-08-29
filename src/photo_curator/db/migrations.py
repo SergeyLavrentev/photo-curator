@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -469,6 +469,14 @@ CREATE INDEX quality_preference_examples_project
 ON quality_preference_examples(project_id, created_at);
 """
 
+MIGRATION_19 = """
+ALTER TABLE quality_asset_labels ADD COLUMN expected_disposition TEXT
+CHECK (
+    expected_disposition IS NULL
+    OR expected_disposition IN ('keep', 'review', 'reject')
+);
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -570,4 +578,29 @@ def migrate(connection: sqlite3.Connection) -> None:
         if quality_exists:
             connection.executescript(MIGRATION_18)
         connection.execute("PRAGMA user_version = 18")
+        version = 18
+    if version < 19:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "quality_asset_labels" in tables:
+            connection.executescript(MIGRATION_19)
+            if "decisions" in tables:
+                connection.execute(
+                    """
+                    UPDATE quality_asset_labels
+                    SET expected_disposition = (
+                        SELECT decisions.manual_disposition
+                        FROM decisions
+                        WHERE decisions.project_id=quality_asset_labels.project_id
+                          AND decisions.asset_uuid=quality_asset_labels.asset_uuid
+                          AND decisions.manual_override=1
+                    )
+                    WHERE lab_sampled=1 AND expected_disposition IS NULL
+                    """
+                )
+        connection.execute("PRAGMA user_version = 19")
     connection.commit()
