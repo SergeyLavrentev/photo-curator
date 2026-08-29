@@ -47,20 +47,40 @@ require_photos_entitlement() {
 MAIN="$CONTENTS/MacOS/PhotoCurator"
 BACKEND="$RESOURCES/backend/photo-curator-backend"
 VISION="$RESOURCES/native/photo-curator-vision"
+LOCAL_MODELS="$RESOURCES/native/photo-curator-local-models"
 SOURCE="$RESOURCES/native/photo-curator-photokit"
 PUBLISH="$RESOURCES/native/photo-curator-publish"
 
-for executable in "$MAIN" "$BACKEND" "$VISION" "$SOURCE" "$PUBLISH"; do
+for executable in "$MAIN" "$BACKEND" "$VISION" "$LOCAL_MODELS"; do
   require_executable "$executable"
   /usr/bin/codesign --verify --strict --verbose=2 "$executable"
 done
+require_executable "$SOURCE"
+require_executable "$PUBLISH"
+
+for resource in \
+  "$RESOURCES/models/nima-inception-v2-ava.mlpackage" \
+  "$RESOURCES/models/mobileclip_s0_image.mlpackage" \
+  "$RESOURCES/models/mobileclip-prompts.json" \
+  "$RESOURCES/models/models.json" \
+  "$RESOURCES/models/musiq-koniq10k.mlpackage"; do
+  [[ -e "$resource" ]] || fail "missing local model resource: $resource"
+done
+
+/usr/bin/python3 "$PROJECT_ROOT/packaging/macos/verify_model_manifest.py" \
+  "$RESOURCES/models" || fail "local model manifest verification failed"
 
 require_identifier "$MAIN" "local.photo-curator.app"
-require_identifier "$SOURCE" "local.photo-curator.source-helper"
-require_identifier "$PUBLISH" "local.photo-curator.publish-helper"
 require_photos_entitlement "$MAIN"
-require_photos_entitlement "$SOURCE"
-require_photos_entitlement "$PUBLISH"
+
+/usr/bin/grep -Fq -- '--photo-curator-source-helper' "$SOURCE" \
+  || fail "PhotoKit source launcher does not exec the main TCC identity"
+/usr/bin/grep -Fq -- '--photo-curator-publish-helper' "$PUBLISH" \
+  || fail "PhotoKit publish launcher does not exec the main TCC identity"
+[[ "$("$SOURCE" --capability)" == "photokit-source-v1" ]] \
+  || fail "PhotoKit source capability is unavailable through the main app"
+[[ "$("$PUBLISH" --capability)" == "photokit-publish-existing-assets-v6" ]] \
+  || fail "PhotoKit publish capability is unavailable through the main app"
 
 backend_entitlements="$(/usr/bin/codesign -d --entitlements :- "$BACKEND" 2>/dev/null)"
 backend_team="$(/usr/bin/codesign -d --verbose=4 "$BACKEND" 2>&1 \
@@ -72,12 +92,6 @@ if [[ -z "$backend_team" || "$backend_team" == "not set" ]]; then
     || fail "ad-hoc/local backend cannot load its signed Python framework"
 fi
 
-for helper in "$SOURCE" "$PUBLISH"; do
-  helper_signature="$(/usr/bin/codesign -d --verbose=4 "$helper" 2>&1)"
-  /usr/bin/grep -Eq '^Info.plist entries=[1-9][0-9]*$' <<<"$helper_signature" \
-    || fail "PhotoKit helper has no signed embedded Info.plist: $helper"
-done
-
 for excluded in osxphotos photoscript utitools fastapi jinja2; do
   [[ ! -e "$RESOURCES/backend/_internal/$excluded" ]] \
     || fail "legacy dependency is bundled: $excluded"
@@ -88,7 +102,7 @@ if [[ -n "$(/usr/bin/find "$APP" -type f \( -name '*.html' -o -name '*.js' \) -p
 fi
 
 size_kib="$(/usr/bin/du -sk "$APP" | /usr/bin/awk '{print $1}')"
-[[ "$size_kib" -le 81920 ]] || fail "bundle is larger than 80 MiB: ${size_kib} KiB"
+[[ "$size_kib" -le 327680 ]] || fail "bundle is larger than 320 MiB: ${size_kib} KiB"
 
 SMOKE_HOME="$(mktemp -d)"
 trap '/bin/rm -rf "$SMOKE_HOME"' EXIT

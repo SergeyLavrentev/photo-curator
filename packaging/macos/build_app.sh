@@ -10,6 +10,8 @@ RESOURCES="$CONTENTS/Resources"
 BACKEND_DIST="$BUILD_ROOT/pyinstaller-dist"
 BACKEND_WORK="$BUILD_ROOT/pyinstaller-work"
 ICON_WORK="$BUILD_ROOT/icon-work"
+SWIFT_MODULES="$BUILD_ROOT/swift-modules"
+MODEL_SOURCE="$PROJECT_ROOT/.model-cache"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$PROJECT_ROOT/pyproject.toml" | head -1)"
 
@@ -18,9 +20,22 @@ if [[ -z "$VERSION" ]]; then
   exit 1
 fi
 
+for resource in \
+  nima-inception-v2-ava.mlpackage \
+  mobileclip_s0_image.mlpackage \
+  mobileclip-prompts.json \
+  musiq-koniq10k.mlpackage; do
+  if [[ ! -e "$MODEL_SOURCE/$resource" ]]; then
+    echo "Отсутствует ресурс локальной модели: $MODEL_SOURCE/$resource" >&2
+    exit 1
+  fi
+done
+
 /bin/rm -rf "$BUILD_ROOT"
-mkdir -p "$CONTENTS/MacOS" "$RESOURCES/backend" "$BACKEND_DIST" "$BACKEND_WORK" "$ICON_WORK"
-mkdir -p "$RESOURCES/native"
+mkdir -p \
+  "$CONTENTS/MacOS" "$RESOURCES/backend" "$BACKEND_DIST" "$BACKEND_WORK" \
+  "$ICON_WORK" "$SWIFT_MODULES"
+mkdir -p "$RESOURCES/native" "$RESOURCES/models"
 
 cd "$PROJECT_ROOT"
 uv run pyinstaller \
@@ -31,6 +46,14 @@ uv run pyinstaller \
   "$SCRIPT_DIR/backend.spec"
 
 /usr/bin/ditto "$BACKEND_DIST/photo-curator-backend" "$RESOURCES/backend"
+for resource in \
+  nima-inception-v2-ava.mlpackage \
+  mobileclip_s0_image.mlpackage \
+  musiq-koniq10k.mlpackage; do
+  /usr/bin/ditto "$MODEL_SOURCE/$resource" "$RESOURCES/models/$resource"
+done
+/bin/cp "$MODEL_SOURCE/mobileclip-prompts.json" "$RESOURCES/models/mobileclip-prompts.json"
+/bin/cp "$PROJECT_ROOT/packaging/models/models.json" "$RESOURCES/models/models.json"
 xcrun swiftc \
   -swift-version 5 \
   -O \
@@ -43,38 +66,75 @@ xcrun swiftc \
   -swift-version 5 \
   -O \
   -target "$(uname -m)-apple-macosx13.0" \
-  -framework Photos \
+  -framework Vision \
+  -framework CoreML \
   -framework AppKit \
-  "$PROJECT_ROOT/src/photo_curator/photos/native/photo_curator_photokit.swift" \
-  -o "$RESOURCES/native/photo-curator-photokit" \
-  -Xlinker -sectcreate \
-  -Xlinker __TEXT \
-  -Xlinker __info_plist \
-  -Xlinker "$PROJECT_ROOT/src/photo_curator/photos/native/PhotoCuratorSource-Info.plist"
+  "$PROJECT_ROOT/src/photo_curator/analysis/native/photo_curator_local_models.swift" \
+  -o "$RESOURCES/native/photo-curator-local-models"
 xcrun swiftc \
   -swift-version 5 \
   -O \
+  -parse-as-library \
+  -target "$(uname -m)-apple-macosx13.0" \
+  -framework Photos \
+  -framework AppKit \
+  "$PROJECT_ROOT/src/photo_curator/photos/native/photo_curator_photokit.swift" \
+  -emit-library \
+  -static \
+  -emit-module \
+  -module-name PhotoCuratorSourceHelper \
+  -emit-module-path "$SWIFT_MODULES/PhotoCuratorSourceHelper.swiftmodule" \
+  -o "$SWIFT_MODULES/libPhotoCuratorSourceHelper.a"
+xcrun swiftc \
+  -swift-version 5 \
+  -O \
+  -parse-as-library \
   -target "$(uname -m)-apple-macosx13.0" \
   -framework Photos \
   "$PROJECT_ROOT/src/photo_curator/photos/native/photo_curator_publish.swift" \
-  -o "$RESOURCES/native/photo-curator-publish" \
-  -Xlinker -sectcreate \
-  -Xlinker __TEXT \
-  -Xlinker __info_plist \
-  -Xlinker "$PROJECT_ROOT/src/photo_curator/photos/native/PhotoCuratorPublish-Info.plist"
+  -emit-library \
+  -static \
+  -emit-module \
+  -module-name PhotoCuratorPublishHelper \
+  -emit-module-path "$SWIFT_MODULES/PhotoCuratorPublishHelper.swiftmodule" \
+  -o "$SWIFT_MODULES/libPhotoCuratorPublishHelper.a"
 xcrun swiftc \
   -swift-version 5 \
   -parse-as-library \
   -O \
+  -whole-module-optimization \
   -target "$(uname -m)-apple-macosx13.0" \
   -framework SwiftUI \
   -framework AppKit \
   -framework Photos \
   -framework QuickLookUI \
+  -I "$SWIFT_MODULES" \
+  "$SWIFT_MODULES/libPhotoCuratorSourceHelper.a" \
+  "$SWIFT_MODULES/libPhotoCuratorPublishHelper.a" \
+  "$SCRIPT_DIR/NativeIPC.swift" \
   "$SCRIPT_DIR/NativeWorkerClient.swift" \
   "$SCRIPT_DIR/PhotoCuratorModels.swift" \
+  "$SCRIPT_DIR/PhotoCuratorWorkerDTOs.swift" \
+  "$SCRIPT_DIR/PhotoCuratorImagePipeline.swift" \
+  "$SCRIPT_DIR/PhotoCuratorSettingsView.swift" \
+  "$SCRIPT_DIR/PhotoCuratorQualityWizardView.swift" \
+  "$SCRIPT_DIR/PhotoCuratorQualityModel.swift" \
+  "$SCRIPT_DIR/PhotoCuratorAppModel.swift" \
+  "$SCRIPT_DIR/PhotoCuratorHelpViews.swift" \
+  "$SCRIPT_DIR/PhotoCuratorRootView.swift" \
+  "$SCRIPT_DIR/PhotoCuratorGalleryViews.swift" \
   "$SCRIPT_DIR/PhotoCuratorApp.swift" \
   -o "$CONTENTS/MacOS/PhotoCurator"
+
+/usr/bin/ditto \
+  "$SCRIPT_DIR/photo-curator-photokit-wrapper.sh" \
+  "$RESOURCES/native/photo-curator-photokit"
+/usr/bin/ditto \
+  "$SCRIPT_DIR/photo-curator-publish-wrapper.sh" \
+  "$RESOURCES/native/photo-curator-publish"
+/bin/chmod 0755 \
+  "$RESOURCES/native/photo-curator-photokit" \
+  "$RESOURCES/native/photo-curator-publish"
 
 cp "$SCRIPT_DIR/Info.plist" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS/Info.plist"
@@ -101,16 +161,10 @@ else
 fi
 
 
-# Plain executables under Resources are not reliably discovered by `codesign --deep`.
-# Sign them first so TCC can bind Photos access to their embedded identities.
+# The PhotoKit launchers exec the main application binary so every Photos call
+# uses the one TCC identity the user granted to Photo Curator.
 /usr/bin/codesign "${SIGN_OPTIONS[@]}" "$RESOURCES/native/photo-curator-vision"
-for executable in \
-  "$RESOURCES/native/photo-curator-photokit" \
-  "$RESOURCES/native/photo-curator-publish"; do
-  /usr/bin/codesign "${SIGN_OPTIONS[@]}" \
-    --entitlements "$SCRIPT_DIR/Photos.entitlements" \
-    "$executable"
-done
+/usr/bin/codesign "${SIGN_OPTIONS[@]}" "$RESOURCES/native/photo-curator-local-models"
 /usr/bin/codesign "${SIGN_OPTIONS[@]}" \
   --entitlements "$SCRIPT_DIR/Photos.entitlements" \
   "$CONTENTS/MacOS/PhotoCurator"

@@ -23,7 +23,7 @@ PublishProgress = Callable[[str, int, int], None]
 
 
 class NativePhotosImporter:
-    """Create independent Photos assets through the public PhotoKit API."""
+    """Add existing assets or import independent files through public PhotoKit APIs."""
 
     def __init__(
         self,
@@ -57,7 +57,8 @@ class NativePhotosImporter:
                 self._ensure_compiled()
                 result = self.runner([str(self.executable), "--capability"], timeout=30)
                 self._capability = (
-                    result.returncode == 0 and "photokit-publish-duplicates-v2" in result.stdout
+                    result.returncode == 0
+                    and "photokit-publish-existing-assets-v6" in result.stdout
                 )
             except Exception:
                 LOGGER.warning("Native PhotoKit publisher unavailable", exc_info=True)
@@ -90,6 +91,47 @@ class NativePhotosImporter:
             },
             progress=progress,
         )
+
+    def add_assets(
+        self,
+        album_name: str,
+        asset_identifiers: list[str],
+        *,
+        progress: PublishProgress | None = None,
+    ) -> dict[str, object]:
+        return self._publish_request(
+            {
+                "album_name": album_name,
+                "existing_asset_identifiers": asset_identifiers,
+            },
+            progress=progress,
+        )
+
+    def delete_album(self, album_identifier: str) -> dict[str, object]:
+        """Delete only the exact PhotoKit album created for disposable acceptance."""
+
+        if not album_identifier:
+            raise ValueError("PhotoKit album identifier is required for cleanup")
+        if not self.capability_available:
+            raise ValueError("Нативная публикация в Photos недоступна")
+        result = self.runner(
+            [str(self.executable), "--delete-album", album_identifier],
+            timeout=120,
+        )
+        if result.returncode != 0:
+            lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+            raise ValueError((lines[-1] if lines else "PhotoKit cleanup failed")[-500:])
+        try:
+            parsed = json.loads(result.stdout.splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as error:
+            raise ValueError("PhotoKit helper вернул некорректный cleanup-результат") from error
+        if (
+            not isinstance(parsed, dict)
+            or parsed.get("album_identifier") != album_identifier
+            or parsed.get("deleted") is not True
+        ):
+            raise ValueError("PhotoKit helper не подтвердил удаление acceptance-альбома")
+        return parsed
 
     def _publish_request(
         self,
@@ -152,7 +194,12 @@ class NativePhotosImporter:
             raise ValueError("PhotoKit helper вернул некорректный результат") from error
         if not isinstance(parsed, dict):
             raise ValueError("PhotoKit helper вернул некорректный результат")
-        total = len(payload.get("duplicate_asset_identifiers") or payload.get("files") or [])
+        total = len(
+            payload.get("existing_asset_identifiers")
+            or payload.get("duplicate_asset_identifiers")
+            or payload.get("files")
+            or []
+        )
         if progress:
             progress("commit", total, total)
         return parsed

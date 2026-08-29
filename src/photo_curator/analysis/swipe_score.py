@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import median
 
+from photo_curator.analysis.ensemble import validated_ensemble_weights
 from photo_curator.analysis.normalization import percentile_ranks
 
-SWIPE_SCORE_SCHEMA_VERSION = 1
+SWIPE_SCORE_SCHEMA_VERSION = 2
 POSITIVE_APPLE_SCORE_KEYS = {
     "content_appeal": (
         "interesting_subject",
@@ -64,6 +66,32 @@ def apple_score_percentiles(
     return result
 
 
+def engine_score_percentiles(
+    assets: list[dict[str, object]],
+    signals_by_asset: dict[str, dict[str, dict[str, object]]],
+) -> dict[str, dict[str, float]]:
+    """Normalize ensemble inputs within an album before applying learned weights."""
+    result: dict[str, dict[str, float]] = {str(asset["asset_uuid"]): {} for asset in assets}
+    specifications = {
+        "apple": ("aesthetics", "overall_score", lambda value: (value + 1.0) * 50.0),
+        "nima": ("nima_aesthetics", "aesthetic_score", lambda value: value),
+        "mobileclip": ("mobileclip", "aesthetic_score", lambda value: value),
+        "codex": ("codex_vision", "aesthetic_score", lambda value: value),
+    }
+    for output_key, (signal_kind, value_key, transform) in specifications.items():
+        values: list[float | None] = []
+        for asset in assets:
+            signal = _signal_value(
+                signals_by_asset.get(str(asset["asset_uuid"]), {}).get(signal_kind)
+            )
+            raw = signal.get(value_key) if signal else None
+            values.append(transform(float(raw)) if isinstance(raw, (int, float)) else None)
+        for asset, rank in zip(assets, percentile_ranks(values), strict=True):
+            if rank is not None:
+                result[str(asset["asset_uuid"])][output_key] = rank * 100.0
+    return result
+
+
 def calculate_swipe_score(
     asset: dict[str, object],
     duplicate: dict[str, object] | None,
@@ -73,20 +101,71 @@ def calculate_swipe_score(
     personal_delta: float = 0.0,
     taste_model_version: str | None = None,
     taste_reliability: float = 0.0,
+    ensemble_model: dict[str, object] | None = None,
+    ensemble_percentiles: dict[str, float] | None = None,
+    codex_ranking_validated: bool = False,
 ) -> SwipeScoreResult:
     apple_percentiles = apple_percentiles or {}
     aesthetics = _signal_value(signals.get("aesthetics"))
     codex = _signal_value(signals.get("codex_vision"))
+    nima = _signal_value(signals.get("nima_aesthetics"))
+    mobileclip = _signal_value(signals.get("mobileclip"))
+    musiq = _signal_value(signals.get("musiq_quality"))
     generic_source = "neutral"
+    validated_weights = validated_ensemble_weights(ensemble_model)
+    weights = validated_weights or {"apple": 1.0, "nima": 0.0, "mobileclip": 0.0}
+    ensemble_percentiles = ensemble_percentiles or {}
+    local_scores: list[tuple[float, float]] = []
     if aesthetics is not None and isinstance(aesthetics.get("overall_score"), (int, float)):
-        generic = _clamp((float(aesthetics["overall_score"]) + 1.0) * 50.0)
+        apple_aesthetics = _clamp((float(aesthetics["overall_score"]) + 1.0) * 50.0)
+        local_scores.append(
+            (
+                ensemble_percentiles.get("apple", apple_aesthetics),
+                weights["apple"],
+            )
+        )
         generic_source = "apple_vision_aesthetics"
     elif asset.get("apple_overall_percentile") is not None:
-        generic = _clamp(float(asset["apple_overall_percentile"]) * 100.0)
+        apple_aesthetics = _clamp(float(asset["apple_overall_percentile"]) * 100.0)
+        local_scores.append(
+            (
+                ensemble_percentiles.get("apple", apple_aesthetics),
+                weights["apple"],
+            )
+        )
         generic_source = "apple_photos_overall"
     else:
+        apple_aesthetics = None
+    nima_score = _numeric_score(nima, "aesthetic_score")
+    mobileclip_score = _numeric_score(mobileclip, "aesthetic_score")
+    musiq_score = _numeric_score(musiq, "quality_score")
+    codex_aesthetics = _numeric_score(codex, "aesthetic_score") if codex_ranking_validated else None
+    model_disagreement, model_count = _model_disagreement(
+        apple=apple_aesthetics,
+        nima=nima_score,
+        mobileclip=mobileclip_score,
+        codex=codex_aesthetics,
+        normalized=ensemble_percentiles,
+    )
+    for key, value, weight in (
+        ("nima", nima_score, weights["nima"]),
+        ("mobileclip", mobileclip_score, weights["mobileclip"]),
+    ):
+        if value is not None and validated_weights is not None and weight > 0:
+            local_scores.append((ensemble_percentiles.get(key, value), weight))
+    if local_scores:
+        generic = sum(value * weight for value, weight in local_scores) / sum(
+            weight for _, weight in local_scores
+        )
+        if len(local_scores) > 1 or apple_aesthetics is None:
+            generic_source = "local_model_consensus"
+    else:
         generic = 50.0
-    if codex is not None and isinstance(codex.get("aesthetic_score"), (int, float)):
+    if (
+        codex_ranking_validated
+        and codex is not None
+        and isinstance(codex.get("aesthetic_score"), (int, float))
+    ):
         generic = _clamp(float(codex["aesthetic_score"]))
         generic_source = "codex_vision"
 
@@ -95,17 +174,8 @@ def calculate_swipe_score(
         apple_percentiles,
         POSITIVE_APPLE_SCORE_KEYS["composition_and_attention"],
     )
-    saliency = _signal_value(signals.get("attention_saliency"))
-    attention: float | None = None
-    if saliency is not None:
-        salient_objects = saliency.get("salient_objects")
-        if isinstance(salient_objects, list):
-            attention = {0: 50.0, 1: 88.0, 2: 78.0, 3: 66.0}.get(len(salient_objects), 55.0)
-            composition = (
-                attention if composition is None else (composition * 0.7) + (attention * 0.3)
-            )
     moment = _positive_component(apple_percentiles, POSITIVE_APPLE_SCORE_KEYS["moment_and_subject"])
-    if codex is not None:
+    if codex_ranking_validated and codex is not None:
         if isinstance(codex.get("interestingness_score"), (int, float)):
             content = _clamp(float(codex["interestingness_score"]))
         if isinstance(codex.get("composition_score"), (int, float)):
@@ -120,6 +190,10 @@ def calculate_swipe_score(
 
     series = _series_score(duplicate)
     penalty = _technical_penalty(asset, duplicate)
+    if musiq_score is not None:
+        # MUSIQ measures image quality, not attractiveness. It is a bounded technical
+        # penalty until a held-out ablation proves an aesthetic ranking contribution.
+        penalty += max(0.0, min(5.0, (40.0 - musiq_score) * 0.15))
     values_and_weights = [
         (generic, 0.50),
         (series, 0.08),
@@ -133,26 +207,44 @@ def calculate_swipe_score(
         weight for _, weight in values_and_weights
     )
     utility_penalty = 8.0 if aesthetics is not None and aesthetics.get("is_utility") else 0.0
-    codex_defects = codex.get("defects", []) if codex is not None else []
-    codex_penalty = min(20.0, 7.0 * len(codex_defects)) if isinstance(codex_defects, list) else 0.0
-    generic_rank_score = _clamp(weighted - penalty - utility_penalty - codex_penalty)
+    generic_rank_score = _clamp(weighted - penalty - utility_penalty)
     personal_delta = max(-20.0, min(20.0, float(personal_delta)))
     score = round(_clamp(generic_rank_score + personal_delta))
 
-    available = {kind for kind, signal in signals.items() if signal.get("status") == "ready"}
-    confidence = 0.42
-    confidence += 0.25 if "aesthetics" in available else 0
-    confidence += 0.08 if apple_percentiles else 0
-    confidence += 0.08 if "attention_saliency" in available else 0
-    confidence += 0.05 if "feature_print" in available else 0
-    confidence += 0.05 if portrait_signal is not None and "faces" in available else 0
-    confidence += 0.07 if duplicate is not None else 0
-    confidence += 0.18 if "codex_vision" in available else 0
-    confidence += 0.05 * max(0.0, min(1.0, taste_reliability))
-    confidence = min(0.98, confidence)
+    available = {kind for kind, signal in signals.items() if _signal_value(signal) is not None}
+    # Coverage and cross-model agreement are reliability evidence, not a probability.
+    # DecisionResult exposes a probability only after an album-held-out calibrator validates.
+    evidence_coverage = 0.30
+    evidence_coverage += 0.20 if "aesthetics" in available else 0
+    evidence_coverage += 0.08 if apple_percentiles else 0
+    evidence_coverage += 0.03 if "attention_saliency" in available else 0
+    evidence_coverage += 0.06 if "feature_print" in available else 0
+    evidence_coverage += 0.04 if portrait_signal is not None and "faces" in available else 0
+    evidence_coverage += 0.05 if duplicate is not None else 0
+    evidence_coverage += (
+        0.08 if validated_weights is not None and "nima_aesthetics" in available else 0
+    )
+    evidence_coverage += 0.10 if validated_weights is not None and "mobileclip" in available else 0
+    evidence_coverage += 0.04 if "musiq_quality" in available else 0
+    evidence_coverage += 0.10 if codex_ranking_validated and "codex_vision" in available else 0
+    evidence_coverage += 0.04 * max(0.0, min(1.0, taste_reliability))
+    evidence_coverage = min(0.90, evidence_coverage)
+    if model_disagreement is None:
+        # One aesthetic model cannot establish agreement with an independent model.
+        confidence = min(0.70, evidence_coverage * 0.80)
+    else:
+        confidence = evidence_coverage * (1.0 - 0.65 * model_disagreement)
+    confidence = max(0.20, min(0.90, confidence))
 
     components = {
         "generic_aesthetics": round(generic, 2),
+        "apple_aesthetics": round(apple_aesthetics if apple_aesthetics is not None else 50.0, 2),
+        "nima_aesthetics": round(nima_score if nima_score is not None else 50.0, 2),
+        "mobileclip_aesthetics": round(
+            mobileclip_score if mobileclip_score is not None else 50.0,
+            2,
+        ),
+        "musiq_quality": round(musiq_score if musiq_score is not None else 50.0, 2),
         "content_appeal": round(content if content is not None else 50.0, 2),
         "composition_and_attention": round(composition if composition is not None else 50.0, 2),
         "moment_and_subject": round(moment if moment is not None else 50.0, 2),
@@ -161,7 +253,10 @@ def calculate_swipe_score(
         "personal_taste": round(_clamp(50.0 + personal_delta * 2.5), 2),
         "personal_taste_reliability": round(max(0.0, min(1.0, taste_reliability)) * 100.0, 2),
         "diversity_value": 50.0,
-        "technical_penalty": round(penalty + utility_penalty + codex_penalty, 2),
+        "technical_penalty": round(penalty + utility_penalty, 2),
+        "evidence_coverage": round(evidence_coverage * 100.0, 2),
+        "model_count": float(model_count),
+        "model_disagreement": round((model_disagreement or 0.0) * 100.0, 2),
     }
     reasons = _reasons(
         components,
@@ -173,6 +268,10 @@ def calculate_swipe_score(
     model_versions = _model_versions(signals)
     if taste_model_version:
         model_versions["personal_taste"] = taste_model_version
+    if validated_weights:
+        model_versions["generic_ensemble"] = str(ensemble_model["model_version"])
+    if codex is not None and not codex_ranking_validated:
+        model_versions["codex_ranking"] = "advisory-unvalidated"
     return SwipeScoreResult(
         schema_version=SWIPE_SCORE_SCHEMA_VERSION,
         score=score,
@@ -197,6 +296,39 @@ def _positive_component(values: dict[str, float], keys: tuple[str, ...]) -> floa
     return sum(available) / len(available) if available else None
 
 
+def _numeric_score(value: dict[str, object] | None, key: str) -> float | None:
+    if value is None or not isinstance(value.get(key), (int, float)):
+        return None
+    return _clamp(float(value[key]))
+
+
+def _model_disagreement(
+    *,
+    apple: float | None,
+    nima: float | None,
+    mobileclip: float | None,
+    codex: float | None,
+    normalized: dict[str, float],
+) -> tuple[float | None, int]:
+    """Measure robust dispersion across independent aesthetic models.
+
+    Album percentiles are preferred for local models so their different training scales do not
+    masquerade as disagreement. Codex participates only after its ranking contract is validated.
+    A single model yields unknown disagreement rather than a false claim of perfect agreement.
+    """
+    values = []
+    for key, raw in (("apple", apple), ("nima", nima), ("mobileclip", mobileclip)):
+        if raw is not None:
+            values.append(_clamp(float(normalized.get(key, raw))))
+    if codex is not None:
+        values.append(_clamp(float(normalized.get("codex", codex))))
+    if len(values) < 2:
+        return None, len(values)
+    center = median(values)
+    mean_absolute_deviation = sum(abs(value - center) for value in values) / len(values)
+    return min(1.0, mean_absolute_deviation / 50.0), len(values)
+
+
 def _series_score(duplicate: dict[str, object] | None) -> float:
     if duplicate is None:
         return 70.0
@@ -209,14 +341,52 @@ def _series_score(duplicate: dict[str, object] | None) -> float:
 
 def _technical_penalty(asset: dict[str, object], duplicate: dict[str, object] | None) -> float:
     penalty = 0.0
-    sharpness = asset.get("sharpness_percentile")
-    if sharpness is not None and float(sharpness) <= 0.10:
+    laplacian = asset.get("subject_laplacian_variance")
+    gradient = asset.get("subject_gradient_energy")
+    if laplacian is None:
+        laplacian = asset.get("laplacian_variance")
+    if gradient is None:
+        gradient = asset.get("gradient_energy")
+    if (
+        laplacian is not None
+        and gradient is not None
+        and float(laplacian) < 0.0004
+        and float(gradient) < 0.00025
+    ):
         penalty += 12.0
-    luma = asset.get("luma_mean")
-    if luma is not None and (float(luma) < 0.12 or float(luma) > 0.90):
+    black_clipped = asset.get("subject_black_clipped_ratio")
+    white_clipped = asset.get("subject_white_clipped_ratio")
+    luma_p05 = asset.get("subject_luma_p05")
+    luma_p95 = asset.get("subject_luma_p95")
+    if black_clipped is None:
+        black_clipped = asset.get("black_clipped_ratio")
+    if white_clipped is None:
+        white_clipped = asset.get("white_clipped_ratio")
+    if luma_p05 is None:
+        luma_p05 = asset.get("luma_p05")
+    if luma_p95 is None:
+        luma_p95 = asset.get("luma_p95")
+    clipped_exposure = (
+        black_clipped is not None
+        and luma_p95 is not None
+        and float(black_clipped) >= 0.35
+        and float(luma_p95) <= 0.35
+    ) or (
+        white_clipped is not None
+        and luma_p05 is not None
+        and float(white_clipped) >= 0.35
+        and float(luma_p05) >= 0.65
+    )
+    if clipped_exposure:
         penalty += 14.0
-    contrast = asset.get("contrast_percentile")
-    if contrast is not None and float(contrast) <= 0.08:
+    contrast_std = asset.get("contrast_std")
+    dynamic_range = asset.get("dynamic_range")
+    if (
+        contrast_std is not None
+        and dynamic_range is not None
+        and float(contrast_std) < 0.06
+        and float(dynamic_range) < 0.25
+    ):
         penalty += 8.0
     if duplicate and not duplicate.get("is_leader"):
         penalty += 45.0 if duplicate.get("kind") == "exact" else 18.0

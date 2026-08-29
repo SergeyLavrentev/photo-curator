@@ -34,6 +34,16 @@ class FakeNativeImporter:
             "reused": 0,
         }
 
+    def add_assets(
+        self, album_name: str, asset_identifiers: list[str], **_: object
+    ) -> dict[str, object]:
+        self.calls.append((album_name, asset_identifiers))
+        return {
+            "album_identifier": "photos-album-1",
+            "imported": 0,
+            "reused": len(asset_identifiers),
+        }
+
 
 class FailingOnceNativeImporter(FakeNativeImporter):
     def __init__(self) -> None:
@@ -233,12 +243,18 @@ def test_best_album_publish_contains_selected_assets(tmp_path: Path) -> None:
         selected = {
             str(asset["asset_uuid"])
             for asset in repository.list_assets(connection, project_id)
+            if asset["final_selection"] == "pick"
+        }
+        kept = {
+            str(asset["asset_uuid"])
+            for asset in repository.list_assets(connection, project_id)
             if asset["final_disposition"] == "keep"
         }
 
     assert result["kind"] == "best"
     assert " — Best — " in str(result["album_name"])
     assert set(Path(str(result["uuid_file"])).read_text().splitlines()) == selected
+    assert selected < kept
 
 
 def test_resolution_inversion_blocks_publish_until_explicit_manual_confirmation(
@@ -260,17 +276,16 @@ def test_resolution_inversion_blocks_publish_until_explicit_manual_confirmation(
     with database_connection(paths.database) as connection:
         connection.execute(
             "UPDATE decisions SET final_disposition='reject', manual_override=0 "
-            "WHERE project_id=? AND asset_uuid='demo-001'",
+            "WHERE project_id=? AND asset_uuid='demo-004'",
             (project_id,),
         )
         repository.set_manual_decision(connection, project_id, "demo-003", "keep")
-        repository.set_manual_decision(connection, project_id, "demo-002", "keep")
 
     blocked = publisher.validate(project_id)
     assert any("resolution inversion" in blocker for blocker in blocked.blockers)
 
     with database_connection(paths.database) as connection:
-        repository.set_manual_decision(connection, project_id, "demo-001", "reject")
+        repository.set_manual_decision(connection, project_id, "demo-004", "reject")
     confirmed = publisher.validate(project_id)
     assert not any("resolution inversion" in blocker for blocker in confirmed.blockers)
     assert any("подтверждён вручную" in warning for warning in confirmed.warnings)

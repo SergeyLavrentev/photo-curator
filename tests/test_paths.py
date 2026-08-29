@@ -10,6 +10,9 @@ def test_default_paths_follow_macos_conventions() -> None:
         "/Users/tester/Library/Application Support/PhotoCurator/photo-curator.sqlite3"
     )
     assert paths.cache_dir == Path("/Users/tester/Library/Caches/PhotoCurator")
+    assert paths.project_artifacts_dir == Path(
+        "/Users/tester/Library/Application Support/PhotoCurator/project-artifacts"
+    )
     assert paths.log_file == Path("/Users/tester/Library/Logs/PhotoCurator/photo-curator.log")
 
 
@@ -20,3 +23,4 @@ def test_ensure_creates_private_directories(tmp_path: Path) -> None:
     assert paths.data_dir.is_dir()
     assert paths.cache_dir.is_dir()
     assert paths.log_dir.is_dir()
+    assert paths.project_artifacts_dir.is_dir()

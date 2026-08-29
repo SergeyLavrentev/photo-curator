@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import math
+import os
 import shutil
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock, local
 from typing import TextIO
 
 from photo_curator.acceptance import build_native_quality_evidence, evaluate_acceptance
 from photo_curator.analysis.codex_vision import codex_status
+from photo_curator.analysis.local_models import LocalModelEngine
 from photo_curator.analysis.native_vision import NativeVisionEngine
 from photo_curator.analysis.taste import (
     MIN_CALIBRATION_PAIRS,
@@ -19,16 +27,42 @@ from photo_curator.analysis.taste import (
     train_taste_profile,
 )
 from photo_curator.db import repository
-from photo_curator.db.connection import database_connection
+from photo_curator.db.connection import create_database_backup, database_connection
 from photo_curator.db.migrations import SCHEMA_VERSION, migrate
+from photo_curator.native_payloads import (
+    album_payload as _album_payload,
+)
+from photo_curator.native_payloads import (
+    asset_card_payload as _asset_card_payload,
+)
+from photo_curator.native_payloads import (
+    asset_payload as _asset_payload,
+)
+from photo_curator.native_payloads import (
+    job_payload as _job_payload,
+)
+from photo_curator.native_payloads import (
+    project_payload as _project_payload,
+)
+from photo_curator.native_payloads import (
+    publish_payload as _publish_payload,
+)
+from photo_curator.native_payloads import (
+    related_asset_payload as _related_asset_payload,
+)
 from photo_curator.paths import ApplicationPaths
+from photo_curator.photokit_acceptance import (
+    finalize_photokit_acceptance,
+    prepare_photokit_acceptance,
+    run_photokit_acceptance,
+)
 from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.photokit_provider import PhotoKitProvider
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.publisher import PhotosPublisher
 from photo_curator.pipeline.coordinator import STAGES, PipelineCoordinator
 
-WORKER_SCHEMA_VERSION = 2
+WORKER_SCHEMA_VERSION = 3
 TASTE_ONBOARDING_VERSION = 2
 TASTE_ROUND_COUNT = 3
 TASTE_ROUND_SIZE = 10
@@ -58,6 +92,7 @@ class NativeWorker:
             paths=paths,
             provider=provider,
             vision_engine=NativeVisionEngine(paths),
+            model_engine=LocalModelEngine(paths),
         )
         self.publisher = publisher or PhotosPublisher(
             database_path=paths.database,
@@ -65,7 +100,7 @@ class NativeWorker:
             provider=provider,
             legacy_cli_enabled=False,
         )
-        self._progress_callback: Callable[[dict[str, object]], None] | None = None
+        self._dispatch_state = local()
         with database_connection(paths.database) as connection:
             migrate(connection)
             repository.mark_running_jobs_interrupted(connection)
@@ -81,12 +116,12 @@ class NativeWorker:
         handler = getattr(self, f"_handle_{method}", None)
         if not handler or method.startswith("_"):
             raise NativeWorkerError(f"Unknown worker method: {method}")
-        previous = self._progress_callback
-        self._progress_callback = progress
+        previous = getattr(self._dispatch_state, "progress", None)
+        self._dispatch_state.progress = progress
         try:
             return handler(params)
         finally:
-            self._progress_callback = previous
+            self._dispatch_state.progress = previous
 
     def _handle_status(self, params: dict[str, object]) -> dict[str, object]:
         del params
@@ -112,15 +147,60 @@ class NativeWorker:
         del params
         return codex_status().payload()
 
+    def _handle_photokit_acceptance(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        if params.get("confirmed") is not True:
+            raise NativeWorkerError("PhotoKit acceptance requires confirmed=true")
+        result = run_photokit_acceptance(self.paths, project_id=project_id)
+        _append_photokit_acceptance_audit(self.paths, result)
+        return result
+
+    def _handle_photokit_acceptance_prepare(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        if params.get("confirmed") is not True:
+            raise NativeWorkerError("PhotoKit acceptance requires confirmed=true")
+        return prepare_photokit_acceptance(self.paths, project_id=project_id)
+
+    def _handle_photokit_acceptance_finalize(self, params: dict[str, object]) -> dict[str, object]:
+        if params.get("confirmed") is not True:
+            raise NativeWorkerError("PhotoKit acceptance requires confirmed=true")
+        prepared = params.get("prepared")
+        if not isinstance(prepared, dict):
+            raise NativeWorkerError("prepared must be an object")
+        result = finalize_photokit_acceptance(self.paths, prepared=prepared)
+        _append_photokit_acceptance_audit(self.paths, result)
+        return result
+
     def _handle_delete_project(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
+        if params.get("confirmed") is not True:
+            raise NativeWorkerError("Project deletion requires confirmed=true")
         with database_connection(self.paths.database) as connection:
             project = repository.get_project(connection, project_id)
             if project["state"] == "running":
                 raise NativeWorkerError("Сначала остановите выполняющийся анализ")
+        _append_destructive_audit(
+            self.paths,
+            action="delete_project",
+            status="requested",
+            project_id=project_id,
+        )
+        backup = create_database_backup(
+            self.paths.database,
+            self.paths.data_dir / "backups",
+            reason=f"before-delete-{project_id}",
+        )
+        with database_connection(self.paths.database) as connection:
             repository.delete_project(connection, project_id)
         _remove_project_cache(self.paths, project_id)
-        return {"status": "deleted", "project_id": project_id}
+        _append_destructive_audit(
+            self.paths,
+            action="delete_project",
+            status="completed",
+            project_id=project_id,
+            backup_path=str(backup),
+        )
+        return {"status": "deleted", "project_id": project_id, "backup_path": str(backup)}
 
     def _handle_create_project(self, params: dict[str, object]) -> dict[str, object]:
         album_id = _required_string(params, "album_id")
@@ -144,6 +224,10 @@ class NativeWorker:
             status = codex_status()
             if not status.ready:
                 raise NativeWorkerError(status.detail or "Codex не готов к анализу")
+        local_engines = {
+            name: _boolean_param(params, f"engine_{name}", default=True)
+            for name in ("apple", "nima", "mobileclip", "musiq")
+        }
         name = str(params.get("name") or "").strip() or album.name
         with database_connection(self.paths.database) as connection:
             shared_copy = repository.completed_shared_copy_for_album(connection, album.id)
@@ -155,6 +239,7 @@ class NativeWorker:
                 album=album,
                 selection_density=density,
                 analysis_mode=analysis_mode,
+                local_engines=local_engines,
                 source_provenance=(
                     "service_shared_copy"
                     if shared_copy
@@ -215,6 +300,8 @@ class NativeWorker:
             project = repository.get_project(connection, project_id)
             summary = repository.project_summary(connection, project_id)
             jobs = repository.latest_jobs(connection, project_id)
+            assets = repository.list_assets(connection, project_id)
+        summary["unavailable_preview_files"] = _unavailable_preview_files(assets)
         return {
             "project": _project_payload(project),
             "summary": summary,
@@ -235,27 +322,129 @@ class NativeWorker:
         project_id = _required_string(params, "project_id")
         limit = max(1, min(5000, int(params.get("limit") or 5000)))
         offset = max(0, int(params.get("offset") or 0))
+        raw_cursor = params.get("cursor")
+        cursor_score: float | None = None
+        cursor_asset_uuid: str | None = None
+        if raw_cursor is not None:
+            if not isinstance(raw_cursor, dict):
+                raise NativeWorkerError("cursor must be an object")
+            score = raw_cursor.get("score")
+            asset_uuid = raw_cursor.get("asset_uuid")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not math.isfinite(float(score))
+                or not isinstance(asset_uuid, str)
+                or not asset_uuid
+            ):
+                raise NativeWorkerError("Invalid assets cursor")
+            cursor_score = float(score)
+            cursor_asset_uuid = asset_uuid
+            offset = 0
+        focus_asset_uuid = str(params.get("focus_asset_uuid") or "")
         disposition = params.get("disposition")
         if disposition is not None and disposition not in {"keep", "review", "reject"}:
             raise NativeWorkerError("Unknown disposition filter")
+        selection = params.get("selection")
+        if selection is not None and selection not in {"pick", "alternative", "review", "reject"}:
+            raise NativeWorkerError("Unknown selection filter")
         with database_connection(self.paths.database) as connection:
-            assets = repository.list_assets(connection, project_id)
-            duplicate_context = repository.duplicate_context(connection, project_id)
-        if disposition is not None:
-            assets = [asset for asset in assets if asset.get("final_disposition") == disposition]
-        for asset in assets:
-            asset["duplicate_context"] = duplicate_context.get(str(asset["asset_uuid"]), {})
-        assets.sort(
-            key=lambda asset: (
-                -float(asset.get("swipe_score") or -1),
-                str(asset["asset_uuid"]),
+            total = repository.count_assets(
+                connection,
+                project_id,
+                disposition=str(disposition) if disposition is not None else None,
+                selection=str(selection) if selection is not None else None,
             )
-        )
+            raw_page = repository.list_assets_page(
+                connection,
+                project_id,
+                limit=limit,
+                offset=offset,
+                disposition=str(disposition) if disposition is not None else None,
+                selection=str(selection) if selection is not None else None,
+                cursor_score=cursor_score,
+                cursor_asset_uuid=cursor_asset_uuid,
+            )
+            page = list(raw_page)
+            if focus_asset_uuid and offset == 0 and raw_cursor is None and limit > 1:
+                try:
+                    focused = repository.get_asset(connection, project_id, focus_asset_uuid)
+                except KeyError:
+                    focused = None
+                if focused and (
+                    (disposition is None or focused.get("final_disposition") == disposition)
+                    and (selection is None or focused.get("final_selection") == selection)
+                    and not any(str(asset["asset_uuid"]) == focus_asset_uuid for asset in page)
+                ):
+                    page = [focused, *page[: limit - 1]]
+            page_ids = {str(asset["asset_uuid"]) for asset in page}
+            duplicate_context = repository.duplicate_context(connection, project_id, page_ids)
+            leader_ids = {
+                str(context["leader_uuid"])
+                for context in duplicate_context.values()
+                if context.get("leader_uuid") and str(context["leader_uuid"]) not in page_ids
+            }
+            leaders_by_uuid = repository.assets_by_uuid(connection, project_id, leader_ids)
+            album_references = [
+                _related_asset_payload(asset)
+                for asset in repository.list_assets_page(connection, project_id, limit=3)
+            ]
+        for asset in page:
+            asset["duplicate_context"] = duplicate_context.get(str(asset["asset_uuid"]), {})
+            leader_uuid = str(asset["duplicate_context"].get("leader_uuid") or "")
+            if leader_uuid and leader_uuid != str(asset["asset_uuid"]):
+                leader = leaders_by_uuid.get(leader_uuid)
+                if leader:
+                    asset["duplicate_leader"] = _related_asset_payload(leader)
+            if any(
+                isinstance(reason, dict) and reason.get("code") == "below_album_cutoff"
+                for reason in asset.get("reasons") or []
+            ):
+                asset["album_references"] = album_references
+        cursor_item = page[-1] if page else None
+        next_cursor = None
+        if cursor_item is not None and len(raw_page) == limit:
+            raw_score = cursor_item.get("swipe_score")
+            next_cursor = {
+                "score": float(raw_score) if raw_score is not None else -1.0,
+                "asset_uuid": str(cursor_item["asset_uuid"]),
+            }
         return {
-            "items": [_asset_payload(asset) for asset in assets[offset : offset + limit]],
-            "total": len(assets),
+            "schema_version": 1,
+            "items": [_asset_card_payload(asset) for asset in page],
+            "total": total,
             "offset": offset,
+            "next_cursor": next_cursor,
         }
+
+    def _handle_asset_details(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        asset_uuid = _required_string(params, "asset_uuid")
+        with database_connection(self.paths.database) as connection:
+            asset = repository.get_asset(connection, project_id, asset_uuid)
+            context = repository.duplicate_context(connection, project_id, {asset_uuid}).get(
+                asset_uuid, {}
+            )
+            asset["duplicate_context"] = context
+            leader_uuid = str(context.get("leader_uuid") or "")
+            if leader_uuid and leader_uuid != asset_uuid:
+                leader = repository.assets_by_uuid(connection, project_id, {leader_uuid}).get(
+                    leader_uuid
+                )
+                if leader:
+                    asset["duplicate_leader"] = _related_asset_payload(leader)
+            if any(
+                isinstance(reason, dict) and reason.get("code") == "below_album_cutoff"
+                for reason in asset.get("reasons") or []
+            ):
+                asset["album_references"] = [
+                    _related_asset_payload(row)
+                    for row in repository.list_assets_page(connection, project_id, limit=3)
+                ]
+        payload = _asset_payload(asset)
+        payload["payload_kind"] = "asset_details"
+        payload["payload_schema_version"] = 1
+        return payload
 
     def _handle_decision(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -264,12 +453,40 @@ class NativeWorker:
         if disposition not in {None, "keep", "reject"}:
             raise NativeWorkerError("Unknown disposition")
         note = str(params["note"])[:1000] if params.get("note") is not None else None
+        mutation_generation = params.get("mutation_generation")
+        if mutation_generation is not None and (
+            not isinstance(mutation_generation, int)
+            or isinstance(mutation_generation, bool)
+            or mutation_generation < 1
+        ):
+            raise NativeWorkerError("mutation_generation must be a positive integer")
         with database_connection(self.paths.database) as connection:
             repository.set_manual_decision(connection, project_id, asset_uuid, disposition, note)
             asset = repository.get_asset(connection, project_id, asset_uuid)
             asset["duplicate_context"] = repository.duplicate_context(connection, project_id).get(
                 asset_uuid, {}
             )
+            payload = _asset_payload(asset)
+            if mutation_generation is not None:
+                payload["mutation_generation"] = mutation_generation
+            return payload
+
+    def _handle_rating(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        asset_uuid = _required_string(params, "asset_uuid")
+        raw_rating = params.get("rating")
+        if raw_rating is not None and (
+            not isinstance(raw_rating, int)
+            or isinstance(raw_rating, bool)
+            or not 1 <= raw_rating <= 5
+        ):
+            raise NativeWorkerError("rating must be null or an integer between 1 and 5")
+        with database_connection(self.paths.database) as connection:
+            repository.set_manual_rating(connection, project_id, asset_uuid, raw_rating)
+            asset = repository.get_asset(connection, project_id, asset_uuid)
+            asset["duplicate_context"] = repository.duplicate_context(
+                connection, project_id, {asset_uuid}
+            ).get(asset_uuid, {})
             return _asset_payload(asset)
 
     def _handle_decisions_batch(self, params: dict[str, object]) -> dict[str, object]:
@@ -492,8 +709,10 @@ class NativeWorker:
                     connection,
                     schemas.pop(),
                 )
-            for selected_index, preferred_uuid in enumerate(selected):
-                for rejected_index, rejected_uuid in enumerate(rejected):
+            round_index = int(round_value["round_index"])
+            split = "held_out" if round_index == TASTE_ROUND_COUNT - 1 else "calibration"
+            for preferred_uuid in selected:
+                for rejected_uuid in rejected:
                     preferred = assets[preferred_uuid]
                     other = assets[rejected_uuid]
                     capture_preference_vectors(
@@ -505,7 +724,7 @@ class NativeWorker:
                         left_feature_base64=str(preferred["feature_base64"]),
                         right_feature_schema=str(other["feature_schema"]),
                         right_feature_base64=str(other["feature_base64"]),
-                        split=("held_out" if rejected_index == selected_index else "calibration"),
+                        split=split,
                     )
             repository.complete_taste_round(connection, round_id, selected, rejected)
             rounds = repository.list_taste_rounds(connection)
@@ -552,8 +771,9 @@ class NativeWorker:
         }
 
     def _taste_progress(self, phase: str, processed: int, total: int) -> None:
-        if self._progress_callback:
-            self._progress_callback(
+        progress = getattr(self._dispatch_state, "progress", None)
+        if progress:
+            progress(
                 {
                     "kind": "taste_progress",
                     "phase": phase,
@@ -651,12 +871,124 @@ class NativeWorker:
         with database_connection(self.paths.database) as connection:
             repository.get_project(connection, project_id)
             assets = repository.list_assets(connection, project_id)
-            examples = repository.list_preference_examples(connection)
-        return build_native_quality_evidence(project_id, assets, examples)
+            examples = [
+                *(
+                    example
+                    for example in repository.list_preference_examples(connection)
+                    if example.get("project_id") == project_id
+                ),
+                *repository.list_quality_preference_examples(connection, project_id),
+            ]
+            signals = repository.analysis_signals_by_asset(connection, project_id)
+        return build_native_quality_evidence(project_id, assets, examples, signals)
 
     def _handle_quality_status(self, params: dict[str, object]) -> dict[str, object]:
         evidence = self._handle_quality_export(params)
         return dict(evidence["summary"])
+
+    def _handle_quality_candidates(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        raw_limit = params.get("limit", 75)
+        if (
+            not isinstance(raw_limit, int)
+            or isinstance(raw_limit, bool)
+            or not 1 <= raw_limit <= 100
+        ):
+            raise NativeWorkerError("limit must be between 1 and 100")
+        with database_connection(self.paths.database) as connection:
+            project = repository.get_project(connection, project_id)
+            if project["state"] != "ready":
+                raise NativeWorkerError("Мастер доступен после завершения анализа")
+            assets = repository.list_assets(connection, project_id)
+        candidates = _quality_candidates(project_id, assets, raw_limit)
+        labelled = sum(
+            candidate.get("manual_disposition") in {"keep", "review", "reject"}
+            for candidate in candidates
+        )
+        return {
+            "items": [_quality_asset_payload(asset) for asset in candidates],
+            "requested": raw_limit,
+            "available": len(candidates),
+            "labelled": labelled,
+        }
+
+    def _handle_quality_label(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        asset_uuid = _required_string(params, "asset_uuid")
+        disposition = _required_string(params, "disposition")
+        raw_codes = params.get("defect_codes", [])
+        if not isinstance(raw_codes, list) or not all(
+            isinstance(value, str) for value in raw_codes
+        ):
+            raise NativeWorkerError("defect_codes must be a string array")
+        raw_severity = params.get("defect_severity")
+        if raw_severity is not None and (
+            not isinstance(raw_severity, int) or isinstance(raw_severity, bool)
+        ):
+            raise NativeWorkerError("defect_severity must be an integer")
+        raw_confidence = params.get("defect_confidence")
+        if raw_confidence is not None and (
+            not isinstance(raw_confidence, (int, float)) or isinstance(raw_confidence, bool)
+        ):
+            raise NativeWorkerError("defect_confidence must be a number")
+        note = params.get("note")
+        if note is not None and not isinstance(note, str):
+            raise NativeWorkerError("note must be a string")
+        with database_connection(self.paths.database) as connection:
+            repository.set_quality_label(
+                connection,
+                project_id,
+                asset_uuid,
+                disposition=disposition,
+                defect_codes=raw_codes,
+                defect_severity=raw_severity,
+                defect_confidence=float(raw_confidence) if raw_confidence is not None else None,
+                note=note,
+            )
+            asset = repository.get_asset(connection, project_id, asset_uuid)
+        return _quality_asset_payload(asset)
+
+    def _handle_quality_pair(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            project = repository.get_project(connection, project_id)
+            if project["state"] != "ready":
+                raise NativeWorkerError("Мастер доступен после завершения анализа")
+            assets = repository.list_assets(connection, project_id)
+            examples = repository.list_quality_preference_examples(connection, project_id)
+        candidates = [
+            asset
+            for asset in _quality_candidates(project_id, assets, 100)
+            if bool(asset.get("quality_lab_sampled"))
+            and asset.get("manual_disposition") in {"keep", "review", "reject"}
+        ]
+        pair, remaining = _next_quality_pair(project_id, candidates, examples)
+        return {
+            "pair": (
+                {
+                    "left": _quality_asset_payload(pair[0]),
+                    "right": _quality_asset_payload(pair[1]),
+                }
+                if pair
+                else None
+            ),
+            "completed": len(examples),
+            "eligible": len(candidates),
+            "remaining": remaining,
+        }
+
+    def _handle_quality_preference(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            example_id = repository.add_quality_preference_example(
+                connection,
+                project_id=project_id,
+                left_uuid=_required_string(params, "left_uuid"),
+                right_uuid=_required_string(params, "right_uuid"),
+                preferred_uuid=_required_string(params, "preferred_uuid"),
+            )
+            completed = len(repository.list_quality_preference_examples(connection, project_id))
+        return {"example_id": example_id, "split": "held_out", "completed": completed}
 
     def _handle_quality_top_k(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -714,11 +1046,23 @@ class NativeWorker:
         )
 
     def _handle_publish_dry_run(self, params: dict[str, object]) -> dict[str, object]:
-        return _publish_payload(
-            self.publisher.dry_run(
-                _required_string(params, "project_id"), str(params.get("kind") or "best")
-            )
-        )
+        project_id = _required_string(params, "project_id")
+        publish = self.publisher.dry_run(project_id, str(params.get("kind") or "best"))
+        uuid_file = Path(str(publish["uuid_file"]))
+        asset_uuids = [line for line in uuid_file.read_text(encoding="utf-8").splitlines() if line]
+        with database_connection(self.paths.database) as connection:
+            assets = repository.assets_by_uuid(connection, project_id, set(asset_uuids))
+        payload = _publish_payload(publish)
+        payload["asset_uuids"] = asset_uuids
+        payload["asset_set_sha256"] = hashlib.sha256(
+            ("\n".join(asset_uuids) + "\n").encode()
+        ).hexdigest()
+        payload["items"] = [
+            _related_asset_payload(assets[asset_uuid])
+            for asset_uuid in asset_uuids
+            if asset_uuid in assets
+        ]
+        return payload
 
     def _handle_publish_apply(self, params: dict[str, object]) -> dict[str, object]:
         if params.get("confirmed") is not True:
@@ -726,13 +1070,18 @@ class NativeWorker:
         return _publish_payload(
             self.publisher.apply(
                 _required_string(params, "publish_id"),
-                progress=self._publish_progress if self._progress_callback else None,
+                progress=(
+                    self._publish_progress
+                    if getattr(self._dispatch_state, "progress", None)
+                    else None
+                ),
             )
         )
 
     def _publish_progress(self, phase: str, processed: int, total: int) -> None:
-        if self._progress_callback:
-            self._progress_callback(
+        progress = getattr(self._dispatch_state, "progress", None)
+        if progress:
+            progress(
                 {
                     "kind": "publish_progress",
                     "phase": phase,
@@ -750,8 +1099,27 @@ def run_native_worker(
     worker: NativeWorker | None = None,
     demo: bool = False,
 ) -> int:
+    with _exclusive_worker_lock(paths):
+        return _run_native_worker_locked(
+            paths,
+            input_stream=input_stream,
+            output_stream=output_stream,
+            worker=worker,
+            demo=demo,
+        )
+
+
+def _run_native_worker_locked(
+    paths: ApplicationPaths,
+    *,
+    input_stream: TextIO,
+    output_stream: TextIO,
+    worker: NativeWorker | None,
+    demo: bool,
+) -> int:
     if worker is None:
         if demo:
+            from photo_curator.photos.demo_publisher import DemoPhotosPublisher
             from photo_curator.photos.fake_provider import FakePhotosProvider
 
             base = FakePhotosProvider(paths.cache_dir / "demo-sources")
@@ -762,37 +1130,27 @@ def run_native_worker(
                     "Встроенный PhotoKit source helper отсутствует; переустановите Photo Curator"
                 )
         provider = LocalAlbumsProvider(base, paths.data_dir / "local_albums")
-        worker = NativeWorker(paths, provider=provider)
-    for raw_line in input_stream:
-        line = raw_line.strip()
-        if not line:
-            continue
-        request_id: object = None
+        publisher = DemoPhotosPublisher(database_path=paths.database, paths=paths) if demo else None
+        worker = NativeWorker(paths, provider=provider, publisher=publisher)
+    output_lock = Lock()
+
+    def emit(frame: dict[str, object]) -> None:
+        with output_lock:
+            output_stream.write(json.dumps(frame, ensure_ascii=False) + "\n")
+            output_stream.flush()
+
+    def execute(request: dict[str, object]) -> None:
+        request_id: object = request.get("id")
         try:
-            request = json.loads(line)
-            if not isinstance(request, dict) or request.get("schema_version") != 1:
-                raise NativeWorkerError("Unsupported worker request schema")
-            request_id = request.get("id")
             method = _required_string(request, "method")
             params = request.get("params") or {}
             if not isinstance(params, dict):
                 raise NativeWorkerError("params must be an object")
-            if method == "shutdown":
-                response = {"schema_version": 1, "id": request_id, "result": {"status": "bye"}}
-                output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
-                output_stream.flush()
-                return 0
 
             def send_progress(
                 event: dict[str, object], correlation_id: object = request_id
             ) -> None:
-                frame = {
-                    "schema_version": 1,
-                    "id": correlation_id,
-                    "event": event,
-                }
-                output_stream.write(json.dumps(frame, ensure_ascii=False) + "\n")
-                output_stream.flush()
+                emit({"schema_version": 1, "id": correlation_id, "event": event})
 
             result = worker.dispatch(method, params, progress=send_progress)
             response = {"schema_version": 1, "id": request_id, "result": result}
@@ -802,18 +1160,52 @@ def run_native_worker(
                 "id": request_id,
                 "error": {"type": type(error).__name__, "message": str(error)[-1000:]},
             }
-        output_stream.write(json.dumps(response, ensure_ascii=False) + "\n")
-        output_stream.flush()
+        emit(response)
+
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="native-worker") as executor:
+        for raw_line in input_stream:
+            line = raw_line.strip()
+            if not line:
+                continue
+            request_id: object = None
+            try:
+                request = json.loads(line)
+                if not isinstance(request, dict) or request.get("schema_version") != 1:
+                    raise NativeWorkerError("Unsupported worker request schema")
+                request_id = request.get("id")
+                method = _required_string(request, "method")
+                if method == "shutdown":
+                    emit(
+                        {
+                            "schema_version": 1,
+                            "id": request_id,
+                            "result": {"status": "bye"},
+                        }
+                    )
+                    break
+                executor.submit(execute, request)
+            except Exception as error:
+                emit(
+                    {
+                        "schema_version": 1,
+                        "id": request_id,
+                        "error": {
+                            "type": type(error).__name__,
+                            "message": str(error)[-1000:],
+                        },
+                    }
+                )
     return 0
 
 
 def _remove_project_cache(paths: ApplicationPaths, project_id: str) -> None:
-    cache_root = paths.cache_dir.resolve()
-    project_cache = (cache_root / project_id).resolve()
-    if project_cache.parent != cache_root:
-        raise NativeWorkerError("Некорректный путь кэша проекта")
-    if project_cache.exists():
-        shutil.rmtree(project_cache)
+    for root in (paths.cache_dir, paths.project_artifacts_dir):
+        resolved_root = root.resolve()
+        project_cache = (resolved_root / project_id).resolve()
+        if project_cache.parent != resolved_root:
+            raise NativeWorkerError("Некорректный путь кэша проекта")
+        if project_cache.exists():
+            shutil.rmtree(project_cache)
 
 
 def _clear_cache(paths: ApplicationPaths) -> None:
@@ -851,58 +1243,100 @@ def _required_string(values: dict[str, object], key: str) -> str:
     return value
 
 
-def _album_payload(album) -> dict[str, object]:
+def _boolean_param(values: dict[str, object], key: str, *, default: bool) -> bool:
+    value = values.get(key, default)
+    if not isinstance(value, bool):
+        raise NativeWorkerError(f"{key} must be a boolean")
+    return value
+
+
+def _quality_candidates(
+    project_id: str,
+    assets: list[dict[str, object]],
+    limit: int,
+) -> list[dict[str, object]]:
+    candidates = [
+        asset
+        for asset in assets
+        if not asset.get("no_longer_exists")
+        and asset.get("cache_state") == "ready"
+        and _existing_file(asset.get("review_path"))
+        and asset.get("final_disposition") in {"keep", "review", "reject"}
+    ]
+    candidates.sort(
+        key=lambda asset: hashlib.sha256(
+            f"quality-v1|{project_id}|{asset['asset_uuid']}".encode()
+        ).hexdigest()
+    )
+    return candidates[:limit]
+
+
+def _existing_file(path: object) -> bool:
+    return isinstance(path, str) and bool(path) and Path(path).is_file()
+
+
+def _unavailable_preview_files(assets: list[dict[str, object]]) -> int:
+    return sum(
+        not asset.get("no_longer_exists")
+        and (
+            not _existing_file(asset.get("review_path"))
+            or not _existing_file(asset.get("thumbnail_path"))
+        )
+        for asset in assets
+    )
+
+
+def _quality_asset_payload(asset: dict[str, object]) -> dict[str, object]:
+    """Blind quality-lab payload: never reveal engine scores, reasons or predictions."""
+    raw_codes = asset.get("quality_defect_codes")
+    if raw_codes is None:
+        try:
+            raw_codes = json.loads(str(asset.get("quality_defect_codes_json") or "[]"))
+        except json.JSONDecodeError:
+            raw_codes = []
     return {
-        "id": album.id,
-        "name": album.name,
-        "folder_path": album.folder_path,
-        "full_path": album.full_path,
-        "is_shared": album.is_shared,
-        "photo_count": album.photo_count,
-        "video_count": album.video_count,
-    }
-
-
-def _project_payload(project: dict[str, object]) -> dict[str, object]:
-    return {
-        "id": project["id"],
-        "name": project["name"],
-        "album_id": project["album_id"],
-        "album_name": project["album_name"],
-        "state": project["state"],
-        "settings": json.loads(str(project.get("settings_json") or "{}")),
-        "created_at": project["created_at"],
-        "updated_at": project["updated_at"],
-    }
-
-
-def _job_payload(job: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in job.items() if key not in {"error_text", "project_id"}}
-
-
-def _asset_payload(asset: dict[str, object]) -> dict[str, object]:
-    return {
+        "payload_schema_version": 1,
         "asset_uuid": asset["asset_uuid"],
         "filename": asset.get("current_filename"),
         "thumbnail_path": asset.get("thumbnail_path"),
         "review_path": asset.get("review_path"),
-        "width": asset.get("width"),
-        "height": asset.get("height"),
-        "favorite": bool(asset.get("favorite")),
-        "final_disposition": asset.get("final_disposition"),
+        "cache_state": asset.get("cache_state"),
         "manual_disposition": asset.get("manual_disposition"),
-        "swipe_score": asset.get("swipe_score"),
-        "generic_score": asset.get("swipe_generic_score"),
-        "personal_delta": asset.get("swipe_personal_delta"),
-        "confidence": asset.get("confidence"),
-        "components": asset.get("swipe_components") or {},
-        "reasons": asset.get("reasons") or [],
-        "duplicate_group": (asset.get("duplicate_context") or {}).get("group_id"),
-        "duplicate_is_leader": bool((asset.get("duplicate_context") or {}).get("is_leader")),
         "quality_top_k_rank": asset.get("quality_top_k_rank"),
         "quality_duplicate_group": asset.get("quality_duplicate_group"),
         "quality_expected_leader": bool(asset.get("quality_expected_leader")),
+        "quality_defect_codes": list(raw_codes or []),
+        "quality_defect_severity": asset.get("quality_defect_severity"),
+        "quality_defect_confidence": asset.get("quality_defect_confidence"),
+        "quality_note": asset.get("quality_note"),
+        "quality_lab_sampled": bool(asset.get("quality_lab_sampled")),
     }
+
+
+def _next_quality_pair(
+    project_id: str,
+    candidates: list[dict[str, object]],
+    examples: list[dict[str, object]],
+) -> tuple[tuple[dict[str, object], dict[str, object]] | None, int]:
+    seen = {
+        tuple(sorted((str(example["left_uuid"]), str(example["right_uuid"]))))
+        for example in examples
+    }
+    pairs: list[tuple[str, dict[str, object], dict[str, object]]] = []
+    for index, left in enumerate(candidates):
+        for right in candidates[index + 1 : index + 7]:
+            key = tuple(sorted((str(left["asset_uuid"]), str(right["asset_uuid"]))))
+            if key in seen:
+                continue
+            digest = hashlib.sha256(
+                f"quality-pair-v1|{project_id}|{key[0]}|{key[1]}".encode()
+            ).hexdigest()
+            pairs.append((digest, left, right))
+    if not pairs:
+        return None, 0
+    pairs.sort(key=lambda value: value[0])
+    _, left, right = pairs[0]
+    return (left, right), len(pairs)
 
 
 def _next_taste_pair(
@@ -1032,10 +1466,70 @@ def _next_preference_split(examples: list[dict[str, object]]) -> str:
     return "held_out" if post_warmup_count % 2 == 0 else "calibration"
 
 
-def _publish_payload(publish: dict[str, object]) -> dict[str, object]:
-    return {
-        key: value
-        for key, value in publish.items()
-        if key
-        not in {"uuid_file", "dry_run_stdout", "dry_run_stderr", "apply_stdout", "apply_stderr"}
+@contextmanager
+def _exclusive_worker_lock(paths: ApplicationPaths):
+    data_dir = paths.data_dir if isinstance(paths, ApplicationPaths) else Path(paths)
+    data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock_path = data_dir / ".native-worker.lock"
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError(
+                "Photo Curator уже запущен; второй процесс не получил доступ к каталогу"
+            ) from error
+        os.ftruncate(descriptor, 0)
+        os.write(descriptor, f"{os.getpid()}\n".encode())
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _append_destructive_audit(
+    paths: ApplicationPaths,
+    *,
+    action: str,
+    status: str,
+    project_id: str,
+    backup_path: str | None = None,
+) -> None:
+    paths.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    audit_path = paths.data_dir / "destructive-actions.jsonl"
+    record = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "pid": os.getpid(),
+        "action": action,
+        "status": status,
+        "project_id": project_id,
     }
+    if backup_path:
+        record["backup_path"] = backup_path
+    descriptor = os.open(audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(descriptor, (json.dumps(record, ensure_ascii=False) + "\n").encode())
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _append_photokit_acceptance_audit(
+    paths: ApplicationPaths,
+    result: dict[str, object],
+) -> None:
+    paths.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    audit_path = paths.data_dir / "photokit-acceptance.jsonl"
+    record = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "pid": os.getpid(),
+        **result,
+    }
+    descriptor = os.open(audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(descriptor, (json.dumps(record, ensure_ascii=False) + "\n").encode())
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

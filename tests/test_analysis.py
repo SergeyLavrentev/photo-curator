@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from photo_curator.analysis.hashes import dhash, hamming_distance, phash, render_equivalence_hash
 from photo_curator.analysis.normalization import percentile_ranks, robust_stats
-from photo_curator.analysis.technical import technical_metrics
+from photo_curator.analysis.technical import subject_quality_metrics, technical_metrics
 from photo_curator.analysis.vision import analyze_faces, vision_available
 from photo_curator.photos.osxphotos_provider import _score_dict
 
@@ -48,6 +48,41 @@ def test_exposure_and_entropy_metrics_are_bounded() -> None:
     assert dark["luma_mean"] < 0.05
     assert bright["luma_mean"] > 0.95
     assert dark["entropy"] >= 0
+
+
+def test_subject_quality_uses_vision_roi_instead_of_distracting_background() -> None:
+    image = Image.new("RGB", (200, 100), "#777777")
+    subject = patterned_image().resize((80, 80))
+    image.paste(subject, (110, 10))
+
+    result = subject_quality_metrics(
+        image,
+        [{"x": 0.55, "y": 0.1, "width": 0.4, "height": 0.8}],
+        source="attention_saliency",
+    )
+
+    assert result["roi_source"] == "attention_saliency"
+    assert result["region_count"] == 1
+    assert result["subject_laplacian_variance"] > 0
+    assert 0 <= result["subject_directional_coherence"] <= 1
+
+
+def test_horizon_and_face_boundary_evidence_are_explicit() -> None:
+    image = Image.new("RGB", (400, 240), "#777777")
+    draw = ImageDraw.Draw(image)
+    draw.line((0, 160, 400, 70), fill="white", width=10)
+
+    horizon = technical_metrics(image)
+    boundary = subject_quality_metrics(
+        image,
+        [{"x": 0.0, "y": 0.15, "width": 0.35, "height": 0.7}],
+        source="faces",
+    )
+
+    assert abs(horizon["dominant_horizon_degrees"]) >= 10
+    assert horizon["horizon_support"] >= 0.25
+    assert boundary["subject_boundary_contact_ratio"] >= 0.5
+    assert boundary["subject_boundary_source"] == "faces"
 
 
 def test_robust_normalization_handles_missing_values() -> None:

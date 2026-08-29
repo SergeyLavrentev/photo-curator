@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import uuid
 from collections.abc import Callable
@@ -95,7 +96,12 @@ class CoreMLBenchmarkEngine:
         if not self.swiftc or not SOURCE.is_file():
             raise CoreMLBenchmarkError("Swift/Core ML toolchain is unavailable")
         target = f"{platform.machine()}-apple-macosx13.0"
-        digest = hashlib.sha256(SOURCE.read_bytes() + target.encode()).hexdigest()
+        optimization = os.environ.get("PHOTO_CURATOR_COREML_SWIFTC_OPTIMIZATION", "-O")
+        if optimization not in {"-O", "-Onone"}:
+            raise CoreMLBenchmarkError("Unsupported Core ML Swift optimization mode")
+        digest = hashlib.sha256(
+            SOURCE.read_bytes() + target.encode() + optimization.encode()
+        ).hexdigest()
         if (
             self.executable.is_file()
             and self.digest_file.is_file()
@@ -108,7 +114,7 @@ class CoreMLBenchmarkEngine:
                 self.swiftc,
                 "-swift-version",
                 "5",
-                "-O",
+                optimization,
                 "-target",
                 target,
                 "-framework",

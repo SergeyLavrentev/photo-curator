@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "name": "nima-inception-v2-ava.mlpackage",
+      "source": "pyiqa:nima/inception_resnet_v2_ava",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "content_sha256": "b79248c37ab6beff1471519dd7c3afbbcec4e64b92730159ff0fc58a7afe432e"
+    },
+    {
+      "name": "mobileclip_s0_image.mlpackage",
+      "source": "huggingface:apple/coreml-mobileclip",
+      "license": "Apple-sample-research",
+      "content_sha256": "d1a188c4c7d97d5bf39d2490a6ee2b20fe53c83e4d670a64a8c0b849c08104dd"
+    },
+    {
+      "name": "mobileclip-prompts.json",
+      "source": "generated-with-mobileclip-s0-text-encoder",
+      "license": "Apple-sample-research",
+      "content_sha256": "8c38bc86fb91c185014ba70c0050751c4b9f77d6b4dd2304060d846d397db4d9"
+    },
+    {
+      "name": "musiq-koniq10k.mlpackage",
+      "source": "pyiqa:musiq/koniq10k",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "content_sha256": "3c83e62dea304a23e5aaf8c68f41eaee2860aa0d7215ab029e90d859d99ca39b"
+    }
+  ]
+}

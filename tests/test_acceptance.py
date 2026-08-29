@@ -145,6 +145,27 @@ def test_evaluator_reports_false_pair_wrong_leader_and_false_exclusions() -> Non
     ]
 
 
+def test_acceptance_scores_automatic_prediction_not_manual_override() -> None:
+    assets = _assets()
+    assets[0].update(
+        auto_disposition="reject",
+        final_disposition="keep",
+        confidence=0.9,
+    )
+
+    report = evaluate_acceptance(
+        _manifest(),
+        assets,
+        [_group("predicted-1", ["asset-00", "asset-01"], "asset-00")],
+        project_id="trip",
+    )
+
+    assert report["details"]["false_exclusion_uuids"] == ["asset-00"]
+    assert report["metrics"]["decision_brier"] == pytest.approx(0.81)
+    assert report["metrics"]["decision_ece"] == pytest.approx(0.9)
+    assert report["details"]["decision_calibration"]["count"] == 1
+
+
 def test_template_is_not_accepted_until_a_human_fills_every_label() -> None:
     with pytest.raises(AcceptanceManifestError, match="expected_disposition"):
         evaluate_acceptance(
@@ -260,6 +281,10 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
             "expected_disposition": "keep",
             "duplicate_group": None,
             "expected_leader": False,
+            "defect_codes": [],
+            "defect_severity": None,
+            "defect_confidence": None,
+            "quality_note": None,
         }
     ]
     assert len(evidence["manifest"]["preference_pairs"]) == 1

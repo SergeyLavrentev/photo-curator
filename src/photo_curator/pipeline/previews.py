@@ -10,6 +10,9 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+MIN_ANALYSIS_PREVIEW_SHORT_EDGE = 256
+MIN_ANALYSIS_PREVIEW_LONG_EDGE = 512
+
 
 @dataclass(frozen=True, slots=True)
 class PreviewResult:
@@ -22,6 +25,19 @@ def source_fingerprint(path: Path, source_kind: str, settings_version: int = 1) 
     stat = path.stat()
     payload = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{source_kind}|{settings_version}"
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def analysis_preview_dimensions(path: Path) -> tuple[int, int]:
+    with Image.open(path) as image:
+        return image.size
+
+
+def analysis_preview_is_eligible(path: Path) -> bool:
+    width, height = analysis_preview_dimensions(path)
+    return (
+        min(width, height) >= MIN_ANALYSIS_PREVIEW_SHORT_EDGE
+        and max(width, height) >= MIN_ANALYSIS_PREVIEW_LONG_EDGE
+    )
 
 
 def build_previews(

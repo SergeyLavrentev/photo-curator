@@ -18,8 +18,18 @@ class ApplicationPaths:
     def log_file(self) -> Path:
         return self.log_dir / "photo-curator.log"
 
+    @property
+    def project_artifacts_dir(self) -> Path:
+        """Durable, service-owned project previews used by the UI and analysis."""
+        return self.data_dir / "project-artifacts"
+
     def ensure(self) -> None:
-        for directory in (self.data_dir, self.cache_dir, self.log_dir):
+        for directory in (
+            self.data_dir,
+            self.cache_dir,
+            self.log_dir,
+            self.project_artifacts_dir,
+        ):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 

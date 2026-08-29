@@ -5,23 +5,34 @@ import platform
 import random
 import resource
 import sys
+import tempfile
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from statistics import median
 from time import perf_counter
+
+from PIL import Image
 
 from photo_curator.analysis.swipe_score import (
     apple_score_percentiles,
     calculate_swipe_score,
 )
+from photo_curator.db import repository
+from photo_curator.db.connection import database_connection
+from photo_curator.db.migrations import migrate
 from photo_curator.native_worker import _asset_payload, _next_taste_pair
 from photo_curator.pipeline.duplicates import _candidate_pairs
 
-RELEASE_BENCHMARK_SCHEMA_VERSION = 1
+RELEASE_BENCHMARK_SCHEMA_VERSION = 2
 DEFAULT_COUNTS = (100, 2_000, 5_000)
 TOTAL_BUDGET_SECONDS = {100: 0.25, 2_000: 2.0, 5_000: 5.0}
 
 
 def run_release_benchmark(
-    *, counts: tuple[int, ...] = DEFAULT_COUNTS, iterations: int = 3
+    *,
+    counts: tuple[int, ...] = DEFAULT_COUNTS,
+    iterations: int = 3,
+    gallery_count: int = 50_000,
 ) -> dict[str, object]:
     if not counts or any(count < 2 for count in counts):
         raise ValueError("Benchmark counts must be at least 2")
@@ -49,6 +60,7 @@ def run_release_benchmark(
                 "passed": total <= budget,
             }
         )
+    gallery = run_gallery_data_benchmark(gallery_count)
     return {
         "schema_version": RELEASE_BENCHMARK_SCHEMA_VERSION,
         "environment": {
@@ -62,8 +74,160 @@ def run_release_benchmark(
             },
         },
         "results": results,
-        "passed": all(bool(result["passed"]) for result in results),
+        "gallery": gallery,
+        "passed": all(bool(result["passed"]) for result in results) and bool(gallery["passed"]),
     }
+
+
+def run_gallery_data_benchmark(count: int = 50_000) -> dict[str, object]:
+    """Exercise the real SQLite card query, cursor, mutation and JPEG downsample path."""
+    if count < 100:
+        raise ValueError("Gallery benchmark requires at least 100 assets")
+    with tempfile.TemporaryDirectory(prefix="photo-curator-gallery-") as temporary:
+        root = Path(temporary)
+        database = root / "gallery.sqlite3"
+        thumbnail = root / "thumbnail.jpg"
+        Image.new("RGB", (1_600, 1_067), (71, 104, 138)).save(thumbnail, "JPEG", quality=88)
+        _seed_gallery_database(database, thumbnail, count)
+        cold_started = perf_counter()
+        with database_connection(database) as connection:
+            total = repository.count_assets(connection, "benchmark", selection="pick")
+            first_page = repository.list_assets_page(
+                connection, "benchmark", selection="pick", limit=48
+            )
+        cold_ms = (perf_counter() - cold_started) * 1_000
+        samples = []
+        cursor_score = float(first_page[-1]["swipe_score"])
+        cursor_uuid = str(first_page[-1]["asset_uuid"])
+        with database_connection(database) as connection:
+            for _ in range(30):
+                started = perf_counter()
+                page = repository.list_assets_page(
+                    connection,
+                    "benchmark",
+                    selection="pick",
+                    limit=48,
+                    cursor_score=cursor_score,
+                    cursor_asset_uuid=cursor_uuid,
+                )
+                samples.append((perf_counter() - started) * 1_000)
+                if not page:
+                    break
+                cursor_score = float(page[-1]["swipe_score"])
+                cursor_uuid = str(page[-1]["asset_uuid"])
+            mutation_started = perf_counter()
+            repository.set_manual_decision(
+                connection, "benchmark", str(first_page[0]["asset_uuid"]), "reject"
+            )
+            repository.list_assets_page(connection, "benchmark", selection="pick", limit=48)
+            mutation_ms = (perf_counter() - mutation_started) * 1_000
+        decode_samples = []
+        for _ in range(30):
+            started = perf_counter()
+            with Image.open(thumbnail) as image:
+                image.thumbnail((640, 640), Image.Resampling.LANCZOS)
+                image.load()
+            decode_samples.append((perf_counter() - started) * 1_000)
+        query_p95 = _percentile(samples, 0.95)
+        decode_p95 = _percentile(decode_samples, 0.95)
+        return {
+            "schema_version": 1,
+            "asset_count": count,
+            "pick_count": total,
+            "page_size": 48,
+            "cold_first_page_ms": round(cold_ms, 3),
+            "sql_page_p95_ms": round(query_p95, 3),
+            "mutation_refresh_ms": round(mutation_ms, 3),
+            "jpeg_downsample_p95_ms": round(decode_p95, 3),
+            "database_bytes": database.stat().st_size,
+            "thresholds_ms": {"cold_first_page": 700, "sql_page_p95": 100},
+            "passed": cold_ms < 700 and query_p95 < 100,
+        }
+
+
+def _seed_gallery_database(database: Path, thumbnail: Path, count: int) -> None:
+    now = "2026-01-01T00:00:00+00:00"
+    with database_connection(database) as connection:
+        migrate(connection)
+        connection.execute(
+            """
+            INSERT INTO projects (
+                id, name, library_path, library_fingerprint, album_id, album_name,
+                album_full_path, state, settings_json, created_at, updated_at
+            ) VALUES ('benchmark', 'Benchmark', 'photokit://benchmark', 'fixture',
+                'album', 'Album', 'Album', 'ready', '{}', ?, ?)
+            """,
+            (now, now),
+        )
+        assets = []
+        decisions = []
+        scores = []
+        for index in range(count):
+            uuid = f"asset-{index:06d}"
+            selection = ("pick", "alternative", "review")[index % 3]
+            disposition = "keep" if selection != "review" else "review"
+            assets.append(
+                (
+                    "benchmark",
+                    uuid,
+                    f"IMG_{index:06d}.HEIC",
+                    4_032,
+                    3_024,
+                    str(thumbnail),
+                    str(thumbnail),
+                    now,
+                    now,
+                )
+            )
+            decisions.append(
+                (
+                    "benchmark",
+                    uuid,
+                    disposition,
+                    disposition,
+                    selection,
+                    selection,
+                    0.5,
+                    now,
+                )
+            )
+            score = float(100 - index % 101)
+            scores.append(("benchmark", uuid, score, score, now))
+        connection.executemany(
+            """
+            INSERT INTO assets (
+                project_id, asset_uuid, current_filename, width, height,
+                review_path, thumbnail_path, cache_state, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', '{}', ?, ?)
+            """,
+            assets,
+        )
+        connection.executemany(
+            """
+            INSERT INTO decisions (
+                project_id, asset_uuid, auto_disposition, final_disposition,
+                auto_selection, final_selection, confidence, flags_json, reasons_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?)
+            """,
+            decisions,
+        )
+        connection.executemany(
+            """
+            INSERT INTO swipe_scores (
+                project_id, asset_uuid, schema_version, score, generic_score,
+                confidence, components_json, reasons_json, model_versions_json, calculated_at
+            ) VALUES (?, ?, 1, ?, ?, 0.8, '{}', '[]', '{}', ?)
+            """,
+            scores,
+        )
+        connection.execute("PRAGMA optimize")
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return float("inf")
+    ranked = sorted(values)
+    return ranked[min(len(ranked) - 1, int(len(ranked) * percentile))]
 
 
 def _benchmark_count(count: int) -> dict[str, object]:
@@ -111,8 +275,14 @@ def _synthetic_assets(
     randomizer = random.Random(42 + count)
     assets = []
     signals = {}
+    series_hash = 0
     for index in range(count):
         asset_uuid = f"benchmark-{index:05d}"
+        if index % 20 == 0:
+            series_hash = randomizer.getrandbits(64)
+        phash_value = (
+            series_hash ^ (1 << (index % 8)) if index % 20 < 3 else randomizer.getrandbits(64)
+        )
         asset = {
             "asset_uuid": asset_uuid,
             "current_filename": f"IMG_{index:05d}.jpg",
@@ -123,7 +293,10 @@ def _synthetic_assets(
             "favorite": False,
             "width": 4_032,
             "height": 3_024,
-            "phash": f"{randomizer.getrandbits(64):016x}",
+            "phash": f"{phash_value:016x}",
+            "taken_at": (
+                datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=index * 60)
+            ).isoformat(),
             "sharpness_percentile": randomizer.random(),
             "contrast_percentile": randomizer.random(),
             "luma_mean": 0.2 + randomizer.random() * 0.6,

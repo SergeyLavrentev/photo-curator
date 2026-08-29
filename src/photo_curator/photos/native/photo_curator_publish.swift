@@ -5,12 +5,14 @@ struct PublishRequest: Decodable {
     let album_name: String
     let files: [String]?
     let duplicate_asset_identifiers: [String]?
+    let existing_asset_identifiers: [String]?
 }
 
 struct PublishResponse: Encodable {
     let album_identifier: String
     let imported: Int
     let reused: Int
+    let added: Int
 }
 
 struct PublishProgressFrame: Encodable {
@@ -25,6 +27,11 @@ struct PublishResultFrame: Encodable {
     let result: PublishResponse
 }
 
+struct DeleteAlbumResponse: Encodable {
+    let album_identifier: String
+    let deleted: Bool
+}
+
 enum PublishError: LocalizedError {
     case invalidArguments
     case authorizationDenied
@@ -33,6 +40,8 @@ enum PublishError: LocalizedError {
     case incompleteImport
     case sourceResourceMissing
     case sourceExportFailed
+    case albumStillPresent
+    case photoLibraryChangeFailed
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +52,8 @@ enum PublishError: LocalizedError {
         case .incompleteImport: return "PhotoKit did not import every selected image"
         case .sourceResourceMissing: return "A selected photo has no exportable source resource"
         case .sourceExportFailed: return "PhotoKit could not export a selected source photo"
+        case .albumStillPresent: return "PhotoKit acceptance album still exists after cleanup"
+        case .photoLibraryChangeFailed: return "PhotoKit did not complete the requested change"
         }
     }
 }
@@ -77,6 +88,61 @@ func requestAuthorization() throws {
     }
 }
 
+func performPhotoLibraryChanges(_ changes: @escaping () -> Void) throws {
+    var finished = false
+    var succeeded = false
+    var failure: Error?
+    let lock = NSLock()
+    PHPhotoLibrary.shared().performChanges(changes) { success, error in
+        lock.lock()
+        succeeded = success
+        failure = error
+        finished = true
+        lock.unlock()
+    }
+    while true {
+        lock.lock()
+        let done = finished
+        let error = failure
+        let success = succeeded
+        lock.unlock()
+        if done {
+            if let error { throw error }
+            if !success { throw PublishError.photoLibraryChangeFailed }
+            return
+        }
+        _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
+    }
+}
+
+@MainActor
+public func deletePhotoCuratorAcceptanceAlbumInHostApplication(
+    identifier: String
+) async throws {
+    let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    guard status == .authorized || status == .limited else {
+        throw PublishError.authorizationDenied
+    }
+    guard let album = fetchAlbum(identifier: identifier) else { return }
+    try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Void, Error>) in
+        PHPhotoLibrary.shared().performChanges {
+            PHAssetCollectionChangeRequest.deleteAssetCollections([album] as NSArray)
+        } completionHandler: { success, error in
+            if let error {
+                continuation.resume(throwing: error)
+            } else if success {
+                continuation.resume()
+            } else {
+                continuation.resume(throwing: PublishError.photoLibraryChangeFailed)
+            }
+        }
+    }
+    guard fetchAlbum(identifier: identifier) == nil else {
+        throw PublishError.albumStillPresent
+    }
+}
+
 func fetchAlbum(identifier: String) -> PHAssetCollection? {
     PHAssetCollection.fetchAssetCollections(
         withLocalIdentifiers: [identifier], options: nil
@@ -95,7 +161,7 @@ func fetchAlbum(named name: String) throws -> PHAssetCollection? {
 
 func createAlbum(named name: String) throws -> PHAssetCollection {
     var identifier: String?
-    try PHPhotoLibrary.shared().performChangesAndWait {
+    try performPhotoLibraryChanges {
         let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name)
         identifier = request.placeholderForCreatedAssetCollection.localIdentifier
     }
@@ -103,6 +169,20 @@ func createAlbum(named name: String) throws -> PHAssetCollection {
         throw PublishError.albumMissing
     }
     return album
+}
+
+func deleteAlbum(identifier: String) throws -> DeleteAlbumResponse {
+    try requestAuthorization()
+    guard let album = fetchAlbum(identifier: identifier) else {
+        return DeleteAlbumResponse(album_identifier: identifier, deleted: true)
+    }
+    try performPhotoLibraryChanges {
+        PHAssetCollectionChangeRequest.deleteAssetCollections([album] as NSArray)
+    }
+    guard fetchAlbum(identifier: identifier) == nil else {
+        throw PublishError.albumStillPresent
+    }
+    return DeleteAlbumResponse(album_identifier: identifier, deleted: true)
 }
 
 func existingFilenames(in album: PHAssetCollection) -> Set<String> {
@@ -214,7 +294,7 @@ func publishDuplicates(
         let end = min(start + 25, prepared.count)
         let batch = Array(prepared[start..<end])
         var created = 0
-        try PHPhotoLibrary.shared().performChangesAndWait {
+        try performPhotoLibraryChanges {
             var placeholders: [PHObjectPlaceholder] = []
             for item in batch {
                 let creation = PHAssetCreationRequest.forAsset()
@@ -241,7 +321,48 @@ func publishDuplicates(
     return PublishResponse(
         album_identifier: album.localIdentifier,
         imported: imported,
-        reused: reused
+        reused: reused,
+        added: imported
+    )
+}
+
+func addExistingAssets(
+    identifiers: [String],
+    into album: PHAssetCollection,
+    progress: ((String, Int, Int) throws -> Void)?
+) throws -> PublishResponse {
+    let fetched = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+    var assetsByIdentifier: [String: PHAsset] = [:]
+    fetched.enumerateObjects { asset, _, _ in assetsByIdentifier[asset.localIdentifier] = asset }
+    guard assetsByIdentifier.count == Set(identifiers).count else {
+        throw PublishError.incompleteImport
+    }
+    let current = PHAsset.fetchAssets(in: album, options: nil)
+    var existingIdentifiers = Set<String>()
+    current.enumerateObjects { asset, _, _ in existingIdentifiers.insert(asset.localIdentifier) }
+    let pending = identifiers.filter { !existingIdentifiers.contains($0) }
+    let reused = identifiers.count - pending.count
+    for (index, _) in identifiers.enumerated() {
+        try progress?("prepare", index + 1, identifiers.count)
+    }
+    var added = 0
+    for start in stride(from: 0, to: pending.count, by: 100) {
+        let end = min(start + 100, pending.count)
+        let batch = pending[start..<end].compactMap { assetsByIdentifier[$0] }
+        try performPhotoLibraryChanges {
+            PHAssetCollectionChangeRequest(for: album)?.addAssets(batch as NSArray)
+        }
+        added += batch.count
+        try progress?("commit", reused + added, identifiers.count)
+    }
+    if pending.isEmpty {
+        try progress?("commit", identifiers.count, identifiers.count)
+    }
+    return PublishResponse(
+        album_identifier: album.localIdentifier,
+        imported: 0,
+        reused: reused,
+        added: added
     )
 }
 
@@ -251,6 +372,9 @@ func publish(
 ) throws -> PublishResponse {
     try requestAuthorization()
     let album = try fetchAlbum(named: request.album_name) ?? createAlbum(named: request.album_name)
+    if let identifiers = request.existing_asset_identifiers {
+        return try addExistingAssets(identifiers: identifiers, into: album, progress: progress)
+    }
     if let identifiers = request.duplicate_asset_identifiers {
         return try publishDuplicates(identifiers: identifiers, into: album, progress: progress)
     }
@@ -270,7 +394,7 @@ func publish(
         reused += batch.count - pending.count
         if pending.isEmpty { continue }
         var importedInBatch = 0
-        try PHPhotoLibrary.shared().performChangesAndWait {
+        try performPhotoLibraryChanges {
             let placeholders = pending.compactMap {
                 PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: $0)?
                     .placeholderForCreatedAsset
@@ -286,7 +410,8 @@ func publish(
     return PublishResponse(
         album_identifier: album.localIdentifier,
         imported: imported,
-        reused: reused
+        reused: reused,
+        added: imported
     )
 }
 
@@ -296,32 +421,39 @@ func printJSON<T: Encodable>(_ value: T) throws {
     FileHandle.standardOutput.write(Data([0x0A]))
 }
 
-do {
-    if CommandLine.arguments == [CommandLine.arguments[0], "--capability"] {
-        print("photokit-publish-duplicates-v2")
-        exit(0)
-    }
-    let jsonl = CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--jsonl"
-    guard CommandLine.arguments.count == (jsonl ? 3 : 2) else {
-        throw PublishError.invalidArguments
-    }
-    let requestPath = CommandLine.arguments[jsonl ? 2 : 1]
-    let data = try Data(contentsOf: URL(fileURLWithPath: requestPath))
-    let request = try JSONDecoder().decode(PublishRequest.self, from: data)
-    let progressHandler: ((String, Int, Int) throws -> Void)? = jsonl
-        ? { phase, processed, total in
-            try printJSON(PublishProgressFrame(
-                phase: phase, processed: processed, total: total
-            ))
+public func runPhotoCuratorPublishHelper(arguments: [String]) -> Int32 {
+    do {
+        if arguments == [arguments[0], "--capability"] {
+            print("photokit-publish-existing-assets-v6")
+            return 0
         }
-        : nil
-    let response = try publish(request, progress: progressHandler)
-    if jsonl {
-        try printJSON(PublishResultFrame(result: response))
-    } else {
-        try printJSON(response)
+        if arguments.count == 3 && arguments[1] == "--delete-album" {
+            try printJSON(deleteAlbum(identifier: arguments[2]))
+            return 0
+        }
+        let jsonl = arguments.count == 3 && arguments[1] == "--jsonl"
+        guard arguments.count == (jsonl ? 3 : 2) else {
+            throw PublishError.invalidArguments
+        }
+        let requestPath = arguments[jsonl ? 2 : 1]
+        let data = try Data(contentsOf: URL(fileURLWithPath: requestPath))
+        let request = try JSONDecoder().decode(PublishRequest.self, from: data)
+        let progressHandler: ((String, Int, Int) throws -> Void)? = jsonl
+            ? { phase, processed, total in
+                try printJSON(PublishProgressFrame(
+                    phase: phase, processed: processed, total: total
+                ))
+            }
+            : nil
+        let response = try publish(request, progress: progressHandler)
+        if jsonl {
+            try printJSON(PublishResultFrame(result: response))
+        } else {
+            try printJSON(response)
+        }
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+        return 1
     }
-} catch {
-    FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
-    exit(1)
 }

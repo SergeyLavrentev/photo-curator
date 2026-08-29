@@ -15,12 +15,16 @@ class SourceRender:
 
 def resolve_source_render(asset: PhotoAsset) -> SourceRender:
     if asset.has_adjustments and _valid(asset.edited_path):
-        return SourceRender(asset.edited_path, "edited")
+        return SourceRender(asset.edited_path, "edited", asset.provider_error)
     derivatives = [path for path in asset.derivative_paths if _valid(path)]
     if asset.has_adjustments and derivatives:
-        return SourceRender(max(derivatives, key=lambda path: path.stat().st_size), "derivative")
+        return SourceRender(
+            max(derivatives, key=lambda path: path.stat().st_size),
+            "derivative",
+            asset.provider_error,
+        )
     if not asset.has_adjustments and _valid(asset.source_path):
-        return SourceRender(asset.source_path, "original")
+        return SourceRender(asset.source_path, "original", asset.provider_error)
     if derivatives:
         warning = "edited_render_missing" if asset.has_adjustments else None
         return SourceRender(
@@ -30,7 +34,7 @@ def resolve_source_render(asset: PhotoAsset) -> SourceRender:
         )
     if _valid(asset.source_path):
         return SourceRender(asset.source_path, "original", "edited_render_missing")
-    return SourceRender(None, "missing", "missing_preview")
+    return SourceRender(None, "missing", asset.provider_error or "missing_preview")
 
 
 def _valid(path: Path | None) -> bool:

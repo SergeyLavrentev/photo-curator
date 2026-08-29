@@ -19,6 +19,10 @@ class CommandResult:
     stderr: str
 
 
+class CommandCancelled(RuntimeError):
+    """A cooperative cancellation request stopped a child process."""
+
+
 def find_executable(name: str) -> str | None:
     found = shutil.which(name)
     if found:
@@ -27,7 +31,14 @@ def find_executable(name: str) -> str | None:
     return str(sibling) if sibling.is_file() else None
 
 
-def run_command(args: list[str], *, timeout: int = 300) -> CommandResult:
+def run_command(
+    args: list[str],
+    *,
+    timeout: int = 300,
+    cancelled: Callable[[], bool] | None = None,
+) -> CommandResult:
+    if cancelled is not None:
+        return _run_cancellable_command(args, timeout=timeout, cancelled=cancelled)
     result = subprocess.run(
         args,
         shell=False,
@@ -37,6 +48,41 @@ def run_command(args: list[str], *, timeout: int = 300) -> CommandResult:
         timeout=timeout,
     )
     return CommandResult(list(result.args), result.returncode, result.stdout, result.stderr)
+
+
+def _run_cancellable_command(
+    args: list[str], *, timeout: int, cancelled: Callable[[], bool]
+) -> CommandResult:
+    process = subprocess.Popen(
+        args,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + timeout
+    try:
+        while process.poll() is None:
+            if cancelled():
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                raise CommandCancelled("Command cancellation requested")
+            if time.monotonic() >= deadline:
+                process.kill()
+                process.wait()
+                raise subprocess.TimeoutExpired(args, timeout)
+            time.sleep(0.1)
+        stdout, stderr = process.communicate()
+        return CommandResult(list(args), process.returncode, stdout, stderr)
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
 
 
 def run_streaming_command(

@@ -201,3 +201,10 @@ def test_photokit_provider_streams_per_asset_render_progress(tmp_path: Path) -> 
     assert all(asset.review_render for asset in assets)
     assert progress == [(1, 2), (2, 2)]
     assert streaming_commands == ["asset-metadata-jsonl", "assets-jsonl"]
+
+    for asset in assets:
+        assert asset.source_path
+        asset.source_path.unlink()
+    repaired = provider.list_assets_with_progress("album-1", lambda *_: None)
+    assert all(asset.source_path and asset.source_path.is_file() for asset in repaired)
+    assert streaming_commands == ["asset-metadata-jsonl", "assets-jsonl", "assets-jsonl"]

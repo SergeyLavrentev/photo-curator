@@ -10,10 +10,10 @@ from typing import Any
 
 ALLOWED_DISPOSITIONS = {"keep", "review", "reject"}
 DEFAULT_THRESHOLDS = {
-    "duplicate_precision": 0.90,
-    "duplicate_recall": 0.80,
-    "leader_accuracy": 0.80,
-    "false_exclusion_rate": 0.05,
+    "duplicate_precision": 0.999,
+    "duplicate_recall": 0.95,
+    "leader_accuracy": 0.85,
+    "false_exclusion_rate": 0.005,
     "pairwise_accuracy": 0.65,
     "top_k_overlap": 0.60,
 }
@@ -137,6 +137,7 @@ def build_native_quality_evidence(
     project_id: str,
     assets: list[dict[str, object]],
     preference_examples: list[dict[str, object]],
+    signals: dict[str, dict[str, dict[str, object]]] | None = None,
 ) -> dict[str, object]:
     """Build an honest, portable quality corpus from explicit native-app feedback."""
     active_assets = [asset for asset in assets if not asset.get("no_longer_exists")]
@@ -145,6 +146,7 @@ def build_native_quality_evidence(
         for asset in active_assets
         if bool(asset.get("manual_override"))
         and asset.get("manual_disposition") in ALLOWED_DISPOSITIONS
+        and bool(asset.get("quality_lab_sampled", True))
     ]
     manually_labelled_ids = {str(asset["asset_uuid"]) for asset in manually_labelled}
     annotated_groups: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -203,6 +205,10 @@ def build_native_quality_evidence(
                 "expected_leader": bool(asset.get("quality_expected_leader"))
                 if asset.get("quality_duplicate_group") in complete_groups
                 else False,
+                "defect_codes": _quality_defect_codes(asset),
+                "defect_severity": asset.get("quality_defect_severity"),
+                "defect_confidence": asset.get("quality_defect_confidence"),
+                "quality_note": asset.get("quality_note"),
             }
             for asset in manually_labelled
         ],
@@ -238,7 +244,36 @@ def build_native_quality_evidence(
         "provenance": provenance,
         "scores": score_rows,
     }
+    apple_scores: dict[str, float] = {}
+    generic_scores: dict[str, float] = {}
+    signals = signals or {}
+    for asset in active_assets:
+        asset_uuid = str(asset["asset_uuid"])
+        generic = asset.get("swipe_generic_score")
+        if isinstance(generic, (int, float)) and not isinstance(generic, bool):
+            generic_scores[asset_uuid] = float(generic)
+        aesthetic = signals.get(asset_uuid, {}).get("aesthetics")
+        value = aesthetic.get("value") if aesthetic and aesthetic.get("status") == "ready" else None
+        apple = value.get("overall_score") if isinstance(value, dict) else None
+        if isinstance(apple, (int, float)) and not isinstance(apple, bool):
+            apple_scores[asset_uuid] = (float(apple) + 1.0) * 50.0
+    baseline_snapshots = {
+        "current": snapshot,
+        "non_personalized": {
+            "schema_version": 1,
+            "project_id": project_id,
+            "engine": {"name": "swipe-score-generic", "version": f"native-{fingerprint}"},
+            "scores": generic_scores,
+        },
+        "apple_only": {
+            "schema_version": 1,
+            "project_id": project_id,
+            "engine": {"name": "apple-vision-aesthetics", "version": "persisted-native"},
+            "scores": apple_scores,
+        },
+    }
     held_out = sum(pair["split"] == "held_out" for pair in pairs)
+    defect_labels = sum(bool(_quality_defect_codes(asset)) for asset in manually_labelled)
     release_ready = (
         50 <= len(manually_labelled) <= 100
         and held_out >= MIN_HELD_OUT_PAIRS
@@ -250,12 +285,14 @@ def build_native_quality_evidence(
         "project_id": project_id,
         "manifest": manifest,
         "score_snapshot": snapshot,
+        "baseline_snapshots": baseline_snapshots,
         "summary": {
             "manual_labels": len(manually_labelled),
             "preference_pairs": len(pairs),
             "held_out_pairs": held_out,
             "expected_top_k": len(top_k),
             "human_duplicate_groups": len(complete_groups),
+            "defect_labels": defect_labels,
             "incomplete_human_duplicate_groups": len(annotated_groups) - len(complete_groups),
             "required_manual_labels_min": 50,
             "required_manual_labels_max": 100,
@@ -264,6 +301,21 @@ def build_native_quality_evidence(
             "release_ready": release_ready,
         },
     }
+
+
+def _quality_defect_codes(asset: dict[str, object]) -> list[str]:
+    raw = asset.get("quality_defect_codes")
+    if isinstance(raw, list):
+        return [str(value) for value in raw if isinstance(value, str)]
+    try:
+        decoded = json.loads(str(asset.get("quality_defect_codes_json") or "[]"))
+    except json.JSONDecodeError:
+        return []
+    return (
+        [str(value) for value in decoded if isinstance(value, str)]
+        if isinstance(decoded, list)
+        else []
+    )
 
 
 def load_manifest(path: Path) -> dict[str, object]:
@@ -300,7 +352,7 @@ def evaluate_acceptance(
     incomplete_results = sorted(
         asset_uuid
         for asset_uuid in labelled_ids
-        if asset_by_uuid[asset_uuid].get("final_disposition") not in ALLOWED_DISPOSITIONS
+        if _automatic_disposition(asset_by_uuid[asset_uuid]) not in ALLOWED_DISPOSITIONS
     )
     if incomplete_results:
         raise AcceptanceManifestError(
@@ -325,7 +377,7 @@ def evaluate_acceptance(
     false_exclusions = [
         asset_uuid
         for asset_uuid in protected
-        if asset_by_uuid[asset_uuid].get("final_disposition") == "reject"
+        if _automatic_disposition(asset_by_uuid[asset_uuid]) == "reject"
     ]
     false_exclusion_rate = _safe_ratio(len(false_exclusions), len(protected), empty_value=True)
 
@@ -341,11 +393,28 @@ def evaluate_acceptance(
             preferences, score_map
         )
 
+    calibration_metrics, calibration_details = _decision_calibration(labels, asset_by_uuid)
+    selection_states = [
+        asset.get("auto_selection") or asset.get("final_selection") for asset in assets
+    ]
+    selection_reduction = (
+        1.0 - sum(state == "pick" for state in selection_states) / len(selection_states)
+        if selection_states
+        and all(state in {"pick", "alternative", "review", "reject"} for state in selection_states)
+        else None
+    )
+
     metrics = {
         "duplicate_precision": precision,
         "duplicate_recall": recall,
         "leader_accuracy": leader_accuracy,
         "false_exclusion_rate": false_exclusion_rate,
+        **calibration_metrics,
+        **(
+            {"selection_reduction_ratio": selection_reduction}
+            if selection_reduction is not None
+            else {}
+        ),
         **preference_metrics,
     }
     checks = {
@@ -389,6 +458,7 @@ def evaluate_acceptance(
         "details": {
             "false_exclusion_uuids": sorted(false_exclusions),
             "leader_groups": leader_details,
+            **calibration_details,
             **preference_details,
         },
     }
@@ -413,6 +483,9 @@ def format_report(report: dict[str, object]) -> str:
         "false_exclusion_rate": "False exclusion rate",
         "pairwise_accuracy": "Held-out pairwise accuracy",
         "top_k_overlap": "Top-K agreement",
+        "decision_brier": "Decision Brier score",
+        "decision_ece": "Decision calibration ECE",
+        "selection_reduction_ratio": "Selection reduction",
     }
     scorer = report.get("scorer")
     if isinstance(scorer, dict):
@@ -421,7 +494,9 @@ def format_report(report: dict[str, object]) -> str:
         if key not in metrics:
             continue
         value = float(metrics[key])
-        lines.append(f"[{'PASS' if checks[key] else 'FAIL'}] {label}: {value:.1%}")
+        status = checks.get(key)
+        prefix = f"[{'PASS' if status else 'FAIL'}] " if status is not None else ""
+        lines.append(f"{prefix}{label}: {value:.1%}")
     lines.extend(
         [
             f"Пары: {counts['true_positive_pairs']} верно / "
@@ -739,6 +814,61 @@ def _leader_accuracy(
 def _group_members(group: dict[str, object]) -> list[dict[str, Any]]:
     members = group.get("members", [])
     return members if isinstance(members, list) else []
+
+
+def _automatic_disposition(asset: dict[str, object]) -> object:
+    automatic = asset.get("auto_disposition")
+    return automatic if automatic in ALLOWED_DISPOSITIONS else asset.get("final_disposition")
+
+
+def _decision_calibration(
+    labels: dict[str, dict[str, object]],
+    assets: dict[str, dict[str, object]],
+) -> tuple[dict[str, float], dict[str, object]]:
+    observations: list[tuple[float, int]] = []
+    for asset_uuid, label in labels.items():
+        confidence = assets[asset_uuid].get("confidence")
+        if (
+            not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+            or not math.isfinite(float(confidence))
+            or not 0 <= float(confidence) <= 1
+        ):
+            continue
+        correct = int(_automatic_disposition(assets[asset_uuid]) == label["expected_disposition"])
+        observations.append((float(confidence), correct))
+    if not observations:
+        return {}, {}
+    brier = sum((confidence - correct) ** 2 for confidence, correct in observations) / len(
+        observations
+    )
+    bins = []
+    weighted_gap = 0.0
+    for index in range(10):
+        lower, upper = index / 10.0, (index + 1) / 10.0
+        bucket = [
+            item
+            for item in observations
+            if lower <= item[0] < upper or (index == 9 and item[0] == 1.0)
+        ]
+        if not bucket:
+            continue
+        mean_confidence = sum(item[0] for item in bucket) / len(bucket)
+        accuracy = sum(item[1] for item in bucket) / len(bucket)
+        weighted_gap += len(bucket) / len(observations) * abs(mean_confidence - accuracy)
+        bins.append(
+            {
+                "lower": lower,
+                "upper": upper,
+                "count": len(bucket),
+                "mean_confidence": mean_confidence,
+                "accuracy": accuracy,
+            }
+        )
+    return (
+        {"decision_brier": brier, "decision_ece": weighted_gap},
+        {"decision_calibration": {"count": len(observations), "bins": bins}},
+    )
 
 
 def _safe_ratio(numerator: int, denominator: int, *, empty_value: bool) -> float:

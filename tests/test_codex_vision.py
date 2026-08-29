@@ -4,8 +4,12 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from photo_curator.analysis.codex_vision import (
+    CodexVisionError,
     CodexVisionRunner,
+    _validate_score_contract,
     build_batches,
     codex_status,
     discover_codex,
@@ -125,3 +129,19 @@ def test_runner_uses_ephemeral_read_only_cli_and_validates_all_assets(
     assert "read-only" in command
     assert "gpt-test" in command
     assert os.fspath(image) in command
+
+
+def test_scale_contract_rejects_unexplained_single_digit_scores() -> None:
+    with pytest.raises(CodexVisionError, match="зарезервированном диапазоне"):
+        _validate_score_contract(
+            {
+                "asset-1": {
+                    "aesthetic_score": 4,
+                    "composition_score": 6,
+                    "interestingness_score": 3,
+                    "moment_score": 5,
+                    "defects": [],
+                    "reject_recommended": False,
+                }
+            }
+        )

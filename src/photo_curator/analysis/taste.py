@@ -9,7 +9,7 @@ import numpy as np
 from photo_curator.db import repository
 
 TASTE_PROFILE_SCHEMA_VERSION = 1
-TASTE_MODEL_VERSION = "pairwise-linear-v2"
+TASTE_MODEL_VERSION = "pairwise-linear-v3-independent-holdout"
 MIN_CALIBRATION_PAIRS = 3
 
 
@@ -26,7 +26,10 @@ class TasteModel:
     reliability: float
 
     def personal_delta(self, feature_signal: dict[str, object]) -> float:
-        schema, vector, _ = feature_vector(feature_signal)
+        try:
+            schema, vector, _ = feature_vector(feature_signal)
+        except TasteProfileError:
+            return 0.0
         if schema != self.feature_schema or vector.size != self.weights.size:
             return 0.0
         raw = float(np.dot(self.weights, _unit(vector)))
@@ -149,6 +152,17 @@ def train_taste_profile(connection, profile_id: str = "default") -> dict[str, ob
         "calibration_accuracy": calibration_accuracy,
         "held_out_pairs": len(held_out_vectors),
         "held_out_accuracy": held_out_accuracy,
+        "calibration_unique_assets": len(
+            {str(value[key]) for value in calibration for key in ("left_uuid", "right_uuid")}
+        ),
+        "held_out_unique_assets": len(
+            {
+                str(value[key])
+                for value in examples
+                if value["split"] == "held_out"
+                for key in ("left_uuid", "right_uuid")
+            }
+        ),
         "weights_l2": round(float(np.linalg.norm(weights)), 6),
     }
     repository.save_taste_model(
@@ -177,6 +191,8 @@ def load_taste_model(connection, profile_id: str = "default") -> TasteModel | No
     version = profile.get("model_version")
     if not all((raw, dimension, schema, version)):
         return None
+    if str(version) != TASTE_MODEL_VERSION:
+        return None
     try:
         weights = np.frombuffer(base64.b64decode(str(raw), validate=True), dtype="<f4").copy()
     except (ValueError, TypeError) as error:
@@ -201,18 +217,18 @@ def _taste_reliability(profile: dict[str, object]) -> float:
     calibration_pairs = int(values.get("calibration_pairs") or 0)
     calibration_accuracy = values.get("calibration_accuracy")
     if held_out_pairs >= 3 and isinstance(held_out_accuracy, (int, float)):
-        pairs = held_out_pairs
         accuracy = float(held_out_accuracy)
-        evaluation_strength = min(1.0, pairs / 12.0)
+        independent_assets = int(values.get("held_out_unique_assets") or 0)
+        evaluation_strength = min(1.0, independent_assets / 24.0)
     elif isinstance(calibration_accuracy, (int, float)):
-        pairs = calibration_pairs
         accuracy = float(calibration_accuracy)
         # In-sample accuracy is optimistic and therefore gets at most half trust.
-        evaluation_strength = min(0.5, pairs / 60.0)
+        evaluation_strength = min(0.5, calibration_pairs / 60.0)
     else:
         return 0.0
     skill = max(0.0, min(1.0, (accuracy - 0.5) / 0.5))
-    sample_strength = min(1.0, int(profile.get("training_examples") or 0) / 30.0)
+    independent_training_assets = int(values.get("calibration_unique_assets") or 0)
+    sample_strength = min(1.0, independent_training_assets / 24.0)
     return round(min(sample_strength, evaluation_strength) * skill, 3)
 
 
@@ -228,6 +244,17 @@ def compatible_taste_model(
         return None
     if profile.get("status") == "paused":
         return None
+    if profile.get("model_version") not in {None, TASTE_MODEL_VERSION}:
+        try:
+            profile = train_taste_profile(connection, profile_id)
+        except TasteProfileError as error:
+            repository.mark_taste_profile_stale(
+                connection,
+                reason="model_version_mismatch",
+                detail=str(error),
+                profile_id=profile_id,
+            )
+            return None
     model = load_taste_model(connection, profile_id)
     if model is None:
         return None

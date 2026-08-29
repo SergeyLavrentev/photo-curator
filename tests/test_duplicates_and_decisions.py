@@ -1,11 +1,18 @@
+import base64
 import random
 from pathlib import Path
 
+import numpy as np
+import pytest
 from PIL import Image
 
 from photo_curator.analysis.decision_engine import decide_asset
 from photo_curator.pipeline.coordinator import _diversity_demotions
-from photo_curator.pipeline.duplicates import _candidate_pairs, find_duplicate_groups
+from photo_curator.pipeline.duplicates import (
+    _candidate_pairs,
+    find_duplicate_groups,
+    rerank_duplicate_groups,
+)
 
 
 def asset(uuid: str, *, pixels: int = 1000, favorite: bool = False) -> dict[str, object]:
@@ -37,6 +44,87 @@ def test_duplicate_group_prefers_favorite_and_higher_resolution() -> None:
     assert "leader_lower_resolution" in groups[0].flags
 
 
+def test_duplicate_leader_is_rebuilt_after_full_quality_signals() -> None:
+    initial_assets = [asset("large", pixels=3000), asset("clear-face", pixels=2000)]
+    initial = find_duplicate_groups(initial_assets)[0]
+    assert initial.leader_uuid == "large"
+    group = {
+        "group_id": initial.group_id,
+        "leader_uuid": initial.leader_uuid,
+        "flags": initial.flags,
+        "members": [{"asset_uuid": member.asset_uuid} for member in initial.members],
+    }
+    signals = {
+        "large": {
+            "aesthetics": {"status": "ready", "value": {"overall_score": -0.8}},
+            "faces": {
+                "status": "ready",
+                "value": {"face_count": 1, "eyes_detected": 0, "best_capture_quality": 0.1},
+            },
+        },
+        "clear-face": {
+            "aesthetics": {"status": "ready", "value": {"overall_score": 0.9}},
+            "nima_aesthetics": {
+                "status": "ready",
+                "value": {"aesthetic_score": 95.0},
+            },
+            "faces": {
+                "status": "ready",
+                "value": {"face_count": 1, "eyes_detected": 1, "best_capture_quality": 0.95},
+            },
+        },
+    }
+
+    rebuilt = rerank_duplicate_groups([group], initial_assets, signals)[0]
+
+    assert rebuilt.leader_uuid == "clear-face"
+    assert all(
+        member.is_leader == (member.asset_uuid == "clear-face") for member in rebuilt.members
+    )
+    loser = next(member for member in rebuilt.members if member.asset_uuid == "large")
+    assert loser.evidence["exact"] is True
+    assert loser.quality_score < next(
+        member.quality_score for member in rebuilt.members if member.is_leader
+    )
+
+
+def test_duplicate_rerank_checks_cancellation_before_expensive_work() -> None:
+    calls = 0
+
+    def cancelled() -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("cancelled")
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        rerank_duplicate_groups(
+            [],
+            [asset("left"), asset("right")],
+            {},
+            check_cancelled=cancelled,
+        )
+
+    assert calls == 1
+
+
+def test_temporal_candidate_window_does_not_drop_the_41st_neighbour() -> None:
+    random.seed(42)
+    photos = []
+    for index in range(50):
+        item = asset(f"dense-{index:02d}")
+        item["phash"] = f"{random.getrandbits(64):016x}"
+        item["dhash"] = f"{random.getrandbits(64):016x}"
+        item["normalized_pixel_hash"] = f"render-{index}"
+        photos.append(item)
+
+    pairs = {
+        frozenset((str(left["asset_uuid"]), str(right["asset_uuid"])))
+        for left, right in _candidate_pairs(photos)
+    }
+
+    assert frozenset(("dense-00", "dense-45")) in pairs
+
+
 def test_exact_duplicate_loser_is_excluded_and_leader_is_selected() -> None:
     normal = {"favorite": False, "has_adjustments": False, "cache_state": "ready"}
     loser = decide_asset(
@@ -51,6 +139,7 @@ def test_exact_duplicate_loser_is_excluded_and_leader_is_selected() -> None:
     assert loser.disposition == "reject"
     assert leader.disposition == "keep"
     assert "duplicate_leader" in leader.flags
+    assert "confidence_uncalibrated" in leader.flags
 
 
 def test_selection_score_ranks_photos_without_calling_a_low_score_bad() -> None:
@@ -122,6 +211,8 @@ def test_near_duplicate_requires_close_time_match_quality_gap_and_defect() -> No
         "has_adjustments": False,
         "cache_state": "ready",
         "sharpness_percentile": 0.05,
+        "laplacian_variance": 0.0001,
+        "gradient_energy": 0.0001,
     }
     close_pair = {
         "kind": "near",
@@ -143,17 +234,25 @@ def test_near_duplicate_requires_close_time_match_quality_gap_and_defect() -> No
     )
     too_late = decide_asset(normal, {**close_pair, "time_delta_seconds": 45.0})
     sharp_loser = decide_asset(
-        {**normal, "sharpness_percentile": 0.50},
+        {
+            **normal,
+            "sharpness_percentile": 0.50,
+            "laplacian_variance": 0.02,
+            "gradient_energy": 0.01,
+        },
         close_pair,
     )
     confirmed_blurred_loser = decide_asset(normal, close_pair)
+    validated_blurred_loser = decide_asset(normal, close_pair, validated_defect_auto_reject=True)
 
     assert without_margin.disposition == "keep"
     assert too_late.disposition == "keep"
     assert sharp_loser.disposition == "keep"
-    assert confirmed_blurred_loser.disposition == "reject"
-    assert confirmed_blurred_loser.reasons[0]["code"] == "weaker_duplicate"
+    assert confirmed_blurred_loser.disposition == "keep"
+    assert confirmed_blurred_loser.reasons[0]["code"] == "defect_review_required"
     assert any(reason["code"] == "possible_blur" for reason in confirmed_blurred_loser.reasons)
+    assert validated_blurred_loser.disposition == "reject"
+    assert validated_blurred_loser.reasons[0]["code"] == "weaker_duplicate"
 
 
 def test_low_quality_portrait_flag_needs_a_confirmed_near_duplicate() -> None:
@@ -170,6 +269,24 @@ def test_low_quality_portrait_flag_needs_a_confirmed_near_duplicate() -> None:
 
     assert decision.disposition == "keep"
     assert "poor_face_capture" in decision.flags
+
+
+def test_local_horizon_and_cropped_face_evidence_remain_review_only() -> None:
+    decision = decide_asset(
+        {
+            "favorite": False,
+            "has_adjustments": False,
+            "cache_state": "ready",
+            "dominant_horizon_degrees": 17.0,
+            "horizon_support": 0.5,
+            "subject_boundary_source": "faces",
+            "subject_boundary_contact_ratio": 0.8,
+        },
+        None,
+    )
+
+    assert decision.disposition == "keep"
+    assert {"extreme_horizon", "blocked_subject"} <= set(decision.flags)
 
 
 def test_favorite_edited_missing_and_ambiguous_assets_are_never_auto_rejected() -> None:
@@ -217,6 +334,61 @@ def test_pair_confirmation_records_dhash_and_normalized_pixel_mae(tmp_path: Path
     assert 0 < evidence["normalized_pixel_mae"] < 0.02
 
 
+def test_post_signal_series_discovers_exposure_variant_and_keeps_distinct_moment(
+    tmp_path: Path,
+) -> None:
+    left_path, right_path = tmp_path / "left.jpg", tmp_path / "right.jpg"
+    source = Image.new("RGB", (180, 120), (50, 80, 110))
+    for x in range(30, 150):
+        for y in range(25, 95):
+            source.putpixel((x, y), (180, 120, 70))
+    source.save(left_path)
+    source.point(lambda value: min(255, value + 30)).save(right_path)
+    left, right = asset("left"), asset("right")
+    left.update(
+        phash="0000000000000000",
+        dhash="0000000000000000",
+        normalized_pixel_hash="left",
+        review_path=str(left_path),
+    )
+    right.update(
+        phash="ffffffffffffffff",
+        dhash="ffffffffffffffff",
+        normalized_pixel_hash="right",
+        review_path=str(right_path),
+    )
+
+    def signal(values: list[float]) -> dict[str, object]:
+        encoded = base64.b64encode(np.asarray(values, dtype="<f4").tobytes()).decode()
+        return {
+            "feature_print": {
+                "status": "ready",
+                "engine_name": "vision",
+                "engine_version": "1",
+                "request_revision": 1,
+                "value": {
+                    "element_type": 1,
+                    "element_count": len(values),
+                    "data_base64": encoded,
+                    "revision": 1,
+                },
+            }
+        }
+
+    groups = rerank_duplicate_groups(
+        [],
+        [left, right],
+        {"left": signal([1.0, 0.0]), "right": signal([0.99, 0.141])},
+    )
+
+    assert len(groups) == 1
+    assert groups[0].kind == "scene"
+    loser = next(member for member in groups[0].members if not member.is_leader)
+    assert loser.evidence["feature_print_similarity"] >= 0.989
+    assert loser.evidence["exposure_invariant_crop_mae"] < 0.05
+    assert loser.evidence["recommended_pick"] is True
+
+
 def test_candidate_reduction_avoids_pairwise_scan_for_normal_album_size() -> None:
     randomizer = random.Random(42)
     assets = [
@@ -228,6 +400,20 @@ def test_candidate_reduction_avoids_pairwise_scan_for_normal_album_size() -> Non
 
     assert len(candidates) < 10_000
     assert len(candidates) < len(assets) * (len(assets) - 1) // 2
+
+
+def test_candidate_search_multi_probes_every_phash_pair_with_distance_ten() -> None:
+    flipped_positions = (63, 62, 50, 49, 37, 36, 24, 23, 11, 10)
+    right_hash = sum(1 << position for position in flipped_positions)
+    left = {"asset_uuid": "left", "phash": "0000000000000000"}
+    right = {"asset_uuid": "right", "phash": f"{right_hash:016x}"}
+
+    candidates = {
+        tuple(sorted((str(first["asset_uuid"]), str(second["asset_uuid"]))))
+        for first, second in _candidate_pairs([left, right])
+    }
+
+    assert candidates == {("left", "right")}
 
 
 def test_zero_burst_sentinel_does_not_force_unrelated_images_into_a_group() -> None:

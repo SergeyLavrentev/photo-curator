@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 18
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -372,6 +372,103 @@ MIGRATION_12 = """
 ALTER TABLE taste_rounds ADD COLUMN rejected_json TEXT;
 """
 
+MIGRATION_13 = """
+ALTER TABLE decisions
+ADD COLUMN auto_selection TEXT NOT NULL DEFAULT 'alternative'
+CHECK (auto_selection IN ('pick', 'alternative', 'review', 'reject'));
+ALTER TABLE decisions
+ADD COLUMN manual_selection TEXT
+CHECK (manual_selection IS NULL OR manual_selection IN ('pick', 'alternative', 'review', 'reject'));
+ALTER TABLE decisions
+ADD COLUMN final_selection TEXT NOT NULL DEFAULT 'alternative'
+CHECK (final_selection IN ('pick', 'alternative', 'review', 'reject'));
+
+UPDATE decisions
+SET auto_selection = CASE
+        WHEN auto_disposition='reject' THEN 'reject'
+        WHEN auto_disposition='review' THEN 'review'
+        WHEN flags_json LIKE '%"best_candidate"%' THEN 'pick'
+        ELSE 'alternative'
+    END,
+    manual_selection = CASE manual_disposition
+        WHEN 'keep' THEN 'pick'
+        WHEN 'reject' THEN 'reject'
+        WHEN 'review' THEN 'review'
+        ELSE NULL
+    END,
+    final_selection = CASE
+        WHEN manual_override=1 AND manual_disposition='keep' THEN 'pick'
+        WHEN manual_override=1 AND manual_disposition='reject' THEN 'reject'
+        WHEN manual_override=1 AND manual_disposition='review' THEN 'review'
+        WHEN final_disposition='reject' THEN 'reject'
+        WHEN final_disposition='review' THEN 'review'
+        WHEN flags_json LIKE '%"best_candidate"%' THEN 'pick'
+        ELSE 'alternative'
+    END;
+
+CREATE INDEX decisions_project_selection
+ON decisions(project_id, final_selection, asset_uuid);
+"""
+
+MIGRATION_14 = """
+CREATE TABLE stage_fingerprints (
+    project_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    input_fingerprint TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, stage),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+"""
+
+MIGRATION_15 = """
+ALTER TABLE decisions ADD COLUMN manual_rating INTEGER
+CHECK (manual_rating IS NULL OR manual_rating BETWEEN 1 AND 5);
+"""
+
+MIGRATION_16 = """
+CREATE INDEX IF NOT EXISTS swipe_scores_project_score_uuid
+ON swipe_scores(project_id, score DESC, asset_uuid);
+CREATE INDEX IF NOT EXISTS decisions_project_selection_disposition
+ON decisions(project_id, final_selection, final_disposition, asset_uuid);
+"""
+
+MIGRATION_17 = """
+ALTER TABLE metrics ADD COLUMN dominant_horizon_degrees REAL;
+ALTER TABLE metrics ADD COLUMN horizon_support REAL;
+"""
+
+MIGRATION_18 = """
+ALTER TABLE quality_asset_labels
+ADD COLUMN defect_codes_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE quality_asset_labels ADD COLUMN defect_severity INTEGER
+CHECK (defect_severity IS NULL OR defect_severity BETWEEN 1 AND 3);
+ALTER TABLE quality_asset_labels ADD COLUMN defect_confidence REAL
+CHECK (defect_confidence IS NULL OR defect_confidence BETWEEN 0 AND 1);
+ALTER TABLE quality_asset_labels ADD COLUMN quality_note TEXT;
+ALTER TABLE quality_asset_labels
+ADD COLUMN lab_sampled INTEGER NOT NULL DEFAULT 0 CHECK (lab_sampled IN (0, 1));
+
+CREATE TABLE quality_preference_examples (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    left_uuid TEXT NOT NULL,
+    right_uuid TEXT NOT NULL,
+    preferred_uuid TEXT NOT NULL,
+    split TEXT NOT NULL DEFAULT 'held_out',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id, left_uuid)
+      REFERENCES assets(project_id, asset_uuid) ON DELETE CASCADE,
+    FOREIGN KEY (project_id, right_uuid)
+      REFERENCES assets(project_id, asset_uuid) ON DELETE CASCADE,
+    CHECK (left_uuid <> right_uuid),
+    CHECK (preferred_uuid = left_uuid OR preferred_uuid = right_uuid),
+    UNIQUE(project_id, left_uuid, right_uuid)
+);
+CREATE INDEX quality_preference_examples_project
+ON quality_preference_examples(project_id, created_at);
+"""
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -426,4 +523,51 @@ def migrate(connection: sqlite3.Connection) -> None:
     if version < 12:
         connection.executescript(MIGRATION_12)
         connection.execute("PRAGMA user_version = 12")
+        version = 12
+    if version < 13:
+        decisions_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decisions'"
+        ).fetchone()
+        if decisions_exists:
+            connection.executescript(MIGRATION_13)
+        connection.execute("PRAGMA user_version = 13")
+        version = 13
+    if version < 14:
+        connection.executescript(MIGRATION_14)
+        connection.execute("PRAGMA user_version = 14")
+        version = 14
+    if version < 15:
+        decisions_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decisions'"
+        ).fetchone()
+        if decisions_exists:
+            connection.executescript(MIGRATION_15)
+        connection.execute("PRAGMA user_version = 15")
+        version = 15
+    if version < 16:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if {"swipe_scores", "decisions"} <= tables:
+            connection.executescript(MIGRATION_16)
+        connection.execute("PRAGMA user_version = 16")
+        version = 16
+    if version < 17:
+        metrics_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metrics'"
+        ).fetchone()
+        if metrics_exists:
+            connection.executescript(MIGRATION_17)
+        connection.execute("PRAGMA user_version = 17")
+        version = 17
+    if version < 18:
+        quality_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='quality_asset_labels'"
+        ).fetchone()
+        if quality_exists:
+            connection.executescript(MIGRATION_18)
+        connection.execute("PRAGMA user_version = 18")
     connection.commit()

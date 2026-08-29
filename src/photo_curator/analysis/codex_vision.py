@@ -9,7 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-CODEX_ENGINE_VERSION = "codex-vision-v1"
+CODEX_ENGINE_VERSION = "codex-vision-v2-anchored-scale"
+CODEX_SCORE_CONTRACT = "photo-curator-aesthetic-0-100-v2"
 DEFAULT_BULK_MODEL = "gpt-5.6-luna"
 DEFAULT_COMPARE_MODEL = "gpt-5.6-terra"
 MAX_IMAGES_PER_REQUEST = 12
@@ -246,6 +247,7 @@ class CodexVisionRunner:
         }
         if set(result) != expected:
             raise CodexVisionError("Codex вернул результаты не для всех фотографий пакета")
+        _validate_score_contract(result)
         return result
 
 
@@ -268,11 +270,51 @@ series_rank должен быть 0. Не называй фотографию п
 технического брака либо уверенного проигравшего почти одинаковой серии. Плохой личный
 вкус или скучный сюжет понизит оценки, но сам по себе не является достаточным reject.
 
+Все четыре score используют одну абсолютную шкалу 0–100 ({CODEX_SCORE_CONTRACT}):
+0–14 — практически непригодный кадр с очевидным тяжёлым браком; 15–34 — слабый кадр;
+35–54 — обычный, но пригодный; 55–69 — хороший; 70–84 — очень хороший;
+85–94 — выдающийся; 95–100 — исключительно редкий результат. Обычный технически
+пригодный кадр нельзя оценивать единицами 2–9. aesthetic_score должен согласовываться
+с composition_score, interestingness_score и moment_score, а не использовать другую
+скрытую шкалу.
+
 Верни только данные по заданной JSON Schema. asset_id скопируй без изменений.
 
 Соответствие изображений:
 {mapping}
 """.strip()
+
+
+def _validate_score_contract(result: dict[str, dict[str, object]]) -> None:
+    """Reject scale-collapse responses instead of poisoning persistent ranking data."""
+    rows = list(result.values())
+    suspicious_low = 0
+    for row in rows:
+        scores = [
+            int(row[key])
+            for key in (
+                "aesthetic_score",
+                "composition_score",
+                "interestingness_score",
+                "moment_score",
+            )
+        ]
+        component_mean = sum(scores[1:]) / 3.0
+        if abs(scores[0] - component_mean) > 35:
+            raise CodexVisionError("Codex нарушил единую шкалу aesthetic/components")
+        concrete_defect = bool(row.get("defects") or row.get("reject_recommended"))
+        if max(scores) <= 14 and not concrete_defect:
+            suspicious_low += 1
+    if suspicious_low:
+        raise CodexVisionError(
+            "Codex вернул пригодный кадр в зарезервированном диапазоне тяжёлого брака"
+        )
+    if len(rows) >= 4:
+        aesthetics = sorted(int(row["aesthetic_score"]) for row in rows)
+        median = aesthetics[len(aesthetics) // 2]
+        rejected = sum(bool(row.get("defects") or row.get("reject_recommended")) for row in rows)
+        if median < 25 and rejected < max(1, len(rows) // 2):
+            raise CodexVisionError("Codex вернул пакет со схлопнувшейся шкалой score")
 
 
 _SCORE = {"type": "integer", "minimum": 0, "maximum": 100}

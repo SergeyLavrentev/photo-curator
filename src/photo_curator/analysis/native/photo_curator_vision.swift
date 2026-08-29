@@ -110,6 +110,7 @@ private struct FacesSignal: Codable {
     let faceCount: Int
     let eyesDetected: Int
     let bestCaptureQuality: Float?
+    let faceRectangles: [NormalizedRect]
     let landmarkRevision: Int
     let qualityRevision: Int
 
@@ -117,6 +118,7 @@ private struct FacesSignal: Codable {
         case faceCount = "face_count"
         case eyesDetected = "eyes_detected"
         case bestCaptureQuality = "best_capture_quality"
+        case faceRectangles = "face_rectangles"
         case landmarkRevision = "landmark_revision"
         case qualityRevision = "quality_revision"
     }
@@ -274,6 +276,12 @@ private func analyzeFaces(_ url: URL) throws -> FacesSignal {
     return FacesSignal(faceCount: faces.count,
                        eyesDetected: eyes,
                        bestCaptureQuality: qualities.max(),
+                       faceRectangles: faces.map {
+                           NormalizedRect(x: $0.boundingBox.origin.x,
+                                          y: $0.boundingBox.origin.y,
+                                          width: $0.boundingBox.width,
+                                          height: $0.boundingBox.height)
+                       },
                        landmarkRevision: landmarksRequest.revision,
                        qualityRevision: qualityRequest.revision)
 }

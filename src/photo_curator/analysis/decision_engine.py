@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil
 
+from photo_curator.analysis.calibration import (
+    apply_decision_calibration,
+    validated_calibration_model,
+)
 from photo_curator.analysis.swipe_score import SwipeScoreResult
 
 
@@ -16,13 +20,15 @@ class DecisionResult:
     reasons: list[dict[str, object]]
 
 
-DECISION_MODEL_VERSION = 3
+DECISION_MODEL_VERSION = 6
 NEAR_DUPLICATE_MAX_SECONDS = 15.0
 NEAR_DUPLICATE_MIN_CONFIDENCE = 0.92
 NEAR_DUPLICATE_MIN_QUALITY_MARGIN = 0.12
 NEAR_DUPLICATE_MAX_PIXEL_MAE = 0.12
 CONFIRMED_DEFECT_FLAGS = {
     "possible_blur",
+    "motion_blur",
+    "defocus_blur",
     "underexposed",
     "overexposed",
     "low_contrast",
@@ -50,7 +56,7 @@ def album_selection_threshold(scores: list[int], selection_density: str) -> int:
     ranked = sorted((max(0, min(100, int(score))) for score in scores), reverse=True)
     target = max(1, ceil(len(ranked) * SELECTION_RATIOS.get(selection_density, 0.45)))
     relative_cutoff = ranked[min(target - 1, len(ranked) - 1)]
-    return max(SELECTED_THRESHOLDS.get(selection_density, 74), relative_cutoff)
+    return relative_cutoff
 
 
 def binary_disposition(
@@ -75,6 +81,7 @@ def decide_asset(
     swipe_score: SwipeScoreResult | None = None,
     *,
     selected_threshold: int | None = None,
+    validated_defect_auto_reject: bool = False,
 ) -> DecisionResult:
     flags: set[str] = set()
     if bool(asset.get("favorite")):
@@ -111,6 +118,7 @@ def decide_asset(
     threshold = selected_threshold or SELECTED_THRESHOLDS.get(selection_density, 74)
     if flags & {"missing_preview", "analysis_error", "ambiguous_duplicate"}:
         return _result(
+            asset,
             "keep",
             0.5,
             score,
@@ -124,6 +132,7 @@ def decide_asset(
     if bool(asset.get("favorite")) or bool(asset.get("has_adjustments")):
         leading = "favorite_protected" if asset.get("favorite") else "edited_protected"
         return _result(
+            asset,
             "keep",
             0.9,
             score,
@@ -136,10 +145,13 @@ def decide_asset(
         )
     if duplicate and not duplicate.get("is_leader"):
         confidence = float(duplicate.get("confidence") or 0.0)
-        if duplicate.get("kind") == "exact" or _confirmed_bad_near_duplicate(
+        exact = duplicate.get("kind") == "exact"
+        validated_near_reject = validated_defect_auto_reject and _confirmed_bad_near_duplicate(
             duplicate, metric_flags | (flags & CONFIRMED_DEFECT_FLAGS)
-        ):
+        )
+        if exact or validated_near_reject:
             return _result(
+                asset,
                 "reject",
                 confidence,
                 score,
@@ -150,7 +162,11 @@ def decide_asset(
                 threshold,
                 leading_reason="weaker_duplicate",
             )
+        requires_review = _confirmed_bad_near_duplicate(
+            duplicate, metric_flags | (flags & CONFIRMED_DEFECT_FLAGS)
+        )
         return _result(
+            asset,
             "keep",
             min(0.9, max(0.55, confidence)),
             score,
@@ -159,10 +175,11 @@ def decide_asset(
             duplicate,
             swipe_score,
             threshold,
-            leading_reason="no_confirmed_defect",
+            leading_reason="defect_review_required" if requires_review else "no_confirmed_defect",
         )
     if duplicate and duplicate.get("is_leader"):
         return _result(
+            asset,
             "keep",
             0.9,
             score,
@@ -174,11 +191,13 @@ def decide_asset(
             leading_reason="best_in_series",
         )
     if (
-        asset.get("codex_reject_recommended")
+        validated_defect_auto_reject
+        and asset.get("codex_reject_recommended")
         and float(asset.get("codex_confidence") or 0.0) >= 0.9
         and flags & CONFIRMED_DEFECT_FLAGS
     ):
         return _result(
+            asset,
             "reject",
             float(asset.get("codex_confidence") or 0.0),
             score,
@@ -189,22 +208,14 @@ def decide_asset(
             threshold,
             leading_reason="codex_confirmed_defect",
         )
-    if swipe_score and _confirmed_low_appeal(swipe_score, metric_flags):
-        return _result(
-            "reject",
-            swipe_score.confidence,
-            score,
-            components,
-            flags,
-            duplicate,
-            swipe_score,
-            threshold,
-        )
+    # Aesthetics and personal taste select the Best album. They cannot independently make
+    # a unique image safe to reject before the labelled defect/calibration gate passes.
     # Swipe Score ranks the album and helps choose Best candidates. A low relative
     # rank is not evidence that the photo itself is bad.
     disposition = "keep"
     confidence = _threshold_confidence(score, threshold, decision_confidence)
     return _result(
+        asset,
         disposition,
         confidence,
         score,
@@ -219,7 +230,7 @@ def decide_asset(
 
 def _confirmed_bad_near_duplicate(duplicate: dict[str, object], metric_flags: set[str]) -> bool:
     """Require a close burst, strong visual match and an objective loser defect."""
-    if duplicate.get("kind") != "near":
+    if duplicate.get("kind") not in {"near", "burst", "scene"}:
         return False
     confidence = float(duplicate.get("confidence") or 0.0)
     quality_margin = float(duplicate.get("quality_margin") or 0.0)
@@ -284,6 +295,7 @@ def _threshold_confidence(score: int, threshold: int, signal_confidence: float) 
 
 
 def _result(
+    asset: dict[str, object],
     disposition: str,
     confidence: float,
     score: int,
@@ -295,7 +307,12 @@ def _result(
     *,
     leading_reason: str | None = None,
 ) -> DecisionResult:
+    calibration = validated_calibration_model(asset.get("decision_calibration"))
+    confidence = apply_decision_calibration(confidence, calibration)
+    if calibration is None:
+        flags.add("confidence_uncalibrated")
     reasons = _decision_reasons(
+        asset,
         disposition,
         score,
         components,
@@ -330,6 +347,7 @@ def _result(
 
 
 def _decision_reasons(
+    asset: dict[str, object],
     disposition: str,
     score: int,
     components: dict[str, int],
@@ -349,6 +367,19 @@ def _decision_reasons(
     if leading_reason:
         add(leading_reason)
     if disposition == "keep":
+        if leading_reason == "defect_review_required":
+            for code in (
+                "possible_blur",
+                "motion_blur",
+                "defocus_blur",
+                "underexposed",
+                "overexposed",
+                "low_contrast",
+                "poor_face_capture",
+            ):
+                if code in flags:
+                    add(code)
+            return reasons[:3]
         if duplicate and duplicate.get("is_leader"):
             add("best_in_series")
         positive_codes = {
@@ -395,10 +426,19 @@ def _decision_reasons(
             add("weak_moment")
         if swipe_score.personal_delta <= -2:
             add("personal_taste_mismatch")
-        if float(values.get("technical_penalty") or 0) > 0:
-            add("technical_penalty", value=values["technical_penalty"])
+        technical_defects = _technical_defect_codes(asset)
+        if technical_defects:
+            add(
+                "technical_penalty",
+                value=values["technical_penalty"],
+                technical_defect_codes=technical_defects,
+            )
     add("below_album_cutoff", score=score, threshold=threshold)
     return reasons[:3]
+
+
+def _technical_defect_codes(asset: dict[str, object]) -> list[str]:
+    return sorted(_metric_flags(asset) & CONFIRMED_DEFECT_FLAGS)
 
 
 def _selection_score(
@@ -472,14 +512,60 @@ def _metric_flags(asset: dict[str, object]) -> set[str]:
     flags = set()
     sharpness = asset.get("sharpness_percentile")
     if sharpness is not None and float(sharpness) <= 0.10:
+        flags.add("relative_low_sharpness")
+    subject_laplacian = asset.get("subject_laplacian_variance")
+    subject_gradient = asset.get("subject_gradient_energy")
+    laplacian = (
+        subject_laplacian if subject_laplacian is not None else asset.get("laplacian_variance")
+    )
+    gradient = subject_gradient if subject_gradient is not None else asset.get("gradient_energy")
+    if (
+        laplacian is not None
+        and gradient is not None
+        and float(laplacian) < 0.0004
+        and float(gradient) < 0.00025
+    ):
         flags.add("possible_blur")
-    luma = asset.get("luma_mean")
-    if luma is not None and float(luma) < 0.12:
+        coherence = asset.get("subject_directional_coherence")
+        if coherence is not None and float(coherence) >= 0.45:
+            flags.add("motion_blur")
+        elif subject_laplacian is not None:
+            flags.add("defocus_blur")
+    black_clipped = asset.get("subject_black_clipped_ratio")
+    luma_p95 = asset.get("subject_luma_p95")
+    if black_clipped is None or luma_p95 is None:
+        black_clipped = asset.get("black_clipped_ratio")
+        luma_p95 = asset.get("luma_p95")
+    if (
+        black_clipped is not None
+        and luma_p95 is not None
+        and float(black_clipped) >= 0.35
+        and float(luma_p95) <= 0.35
+    ):
         flags.add("underexposed")
-    if luma is not None and float(luma) > 0.90:
+    white_clipped = asset.get("subject_white_clipped_ratio")
+    luma_p05 = asset.get("subject_luma_p05")
+    if white_clipped is None or luma_p05 is None:
+        white_clipped = asset.get("white_clipped_ratio")
+        luma_p05 = asset.get("luma_p05")
+    if (
+        white_clipped is not None
+        and luma_p05 is not None
+        and float(white_clipped) >= 0.35
+        and float(luma_p05) >= 0.65
+    ):
         flags.add("overexposed")
     contrast = asset.get("contrast_percentile")
     if contrast is not None and float(contrast) <= 0.08:
+        flags.add("relative_low_contrast")
+    contrast_std = asset.get("contrast_std")
+    dynamic_range = asset.get("dynamic_range")
+    if (
+        contrast_std is not None
+        and dynamic_range is not None
+        and float(contrast_std) < 0.06
+        and float(dynamic_range) < 0.25
+    ):
         flags.add("low_contrast")
     apple = asset.get("apple_overall_percentile")
     if apple is not None and float(apple) <= 0.05:
@@ -492,4 +578,20 @@ def _metric_flags(asset: dict[str, object]) -> set[str]:
         and float(face_quality) <= 0.20
     ):
         flags.add("poor_face_capture")
+    horizon = asset.get("dominant_horizon_degrees")
+    horizon_support = asset.get("horizon_support")
+    if (
+        isinstance(horizon, (int, float))
+        and isinstance(horizon_support, (int, float))
+        and abs(float(horizon)) >= 12.0
+        and float(horizon_support) >= 0.25
+    ):
+        flags.add("extreme_horizon")
+    boundary = asset.get("subject_boundary_contact_ratio")
+    if (
+        asset.get("subject_boundary_source") == "faces"
+        and isinstance(boundary, (int, float))
+        and float(boundary) >= 0.6
+    ):
+        flags.add("blocked_subject")
     return flags

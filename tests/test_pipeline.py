@@ -41,7 +41,7 @@ class FakeNativeVisionEngine:
                         "revision": 2,
                         "heatmap_width": 68,
                         "heatmap_height": 68,
-                        "salient_objects": [],
+                        "salient_objects": [{"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}],
                     },
                     "faces": {
                         "face_count": 0,
@@ -56,6 +56,36 @@ class FakeNativeVisionEngine:
                         "attention_saliency": 20.0,
                         "faces": 8.0,
                     },
+                    "errors": {},
+                }
+                for index, (asset_uuid, _) in enumerate(assets)
+            ],
+        }
+
+
+class FakeLocalModelEngine:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def analyze(self, assets, *, engines, cancelled=None):
+        if cancelled and cancelled():
+            raise RuntimeError("unexpected cancellation")
+        self.calls.append([asset_uuid for asset_uuid, _ in assets])
+        return {
+            "schema_version": 1,
+            "engine": {"name": "photo-curator-local-models", "version": "test-v1"},
+            "enabled_engines": sorted(engines),
+            "assets": [
+                {
+                    "asset_uuid": asset_uuid,
+                    "nima": {"aesthetic_score": 40.0 + index, "raw_score": 5.0},
+                    "mobileclip": {
+                        "aesthetic_score": 45.0 + index,
+                        "genre": "portrait" if index % 2 else "landscape",
+                        "genre_confidence": 0.75,
+                    },
+                    "musiq": {"quality_score": 55.0 + index, "raw_score": 55.0 + index},
+                    "durations_ms": {"nima": 12.0, "mobileclip": 5.0, "musiq": 25.0},
                     "errors": {},
                 }
                 for index, (asset_uuid, _) in enumerate(assets)
@@ -80,6 +110,7 @@ def build_pipeline(tmp_path: Path):
         paths=paths,
         provider=provider,
         vision_engine=FakeNativeVisionEngine(),
+        model_engine=FakeLocalModelEngine(),
     )
     return paths, provider, coordinator, project_id
 
@@ -87,6 +118,18 @@ def build_pipeline(tmp_path: Path):
 def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Path) -> None:
     paths, _, coordinator, project_id = build_pipeline(tmp_path)
     coordinator.run(project_id)
+
+    with database_connection(paths.database) as connection:
+        materialized = repository.list_assets(connection, project_id)
+    assert all(
+        paths.project_artifacts_dir in Path(str(asset["review_path"])).parents
+        for asset in materialized
+    )
+    assert all(
+        Path(str(asset["review_path"])).parent
+        == paths.project_artifacts_dir / project_id / "review"
+        for asset in materialized
+    )
 
     with database_connection(paths.database) as connection:
         summary = repository.project_summary(connection, project_id)
@@ -101,18 +144,32 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     assert summary["ready"] == 12
     assert summary["duplicate_groups"] >= 1
     assert summary["reject"] >= 1
+    assert 0 < summary["pick"] < summary["keep"]
+    assert (
+        summary["pick"]
+        + summary["alternative"]
+        + summary["selection_review"]
+        + summary["selection_reject"]
+        == 12
+    )
     assert all(asset["phash"] and asset["final_disposition"] for asset in assets)
-    assert len(signals) == 48
+    assert all(asset["final_selection"] for asset in assets)
+    assert len(signals) == 96
     assert {signal["signal_kind"] for signal in signals} == {
         "aesthetics",
         "feature_print",
         "attention_saliency",
         "faces",
+        "subject_quality",
+        "nima_aesthetics",
+        "mobileclip",
+        "musiq_quality",
     }
     assert all(signal["status"] == "ready" for signal in signals)
     assert all(signal["source_fingerprint"] for signal in signals)
     assert len(swipe_scores) == 12
-    assert all(score["schema_version"] == 1 for score in swipe_scores)
+    assert all(score["schema_version"] == 2 for score in swipe_scores)
+    assert all("model_disagreement" in score["components"] for score in swipe_scores)
     assert all("generic_aesthetics" in score["components"] for score in swipe_scores)
     assert any(score["components"]["diversity_value"] != 50 for score in swipe_scores)
     assert all(asset["swipe_score"] is not None for asset in assets)
@@ -123,9 +180,135 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         "metrics",
         "duplicates",
         "vision",
+        "models",
         "decisions",
     }
     assert all(job["status"] in {"done", "warning"} for job in jobs)
+
+
+def test_degraded_photokit_previews_remain_visible_but_never_reach_models_or_codex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class DegradedReviewProvider(FakePhotosProvider):
+        def __init__(self, fixture_root: Path) -> None:
+            super().__init__(fixture_root)
+            tiny = fixture_root / "photokit-degraded-48x64.jpg"
+            Image.new("RGB", (48, 64), (72, 94, 118)).save(tiny, "JPEG", quality=70)
+            self._assets = [
+                replace(
+                    asset,
+                    source_path=tiny,
+                    width=48,
+                    height=64,
+                    review_render=True,
+                    provider_error="CloudPhotoLibraryErrorDomain error 1005",
+                )
+                for asset in self._assets
+            ]
+
+    def unexpected_codex_status():
+        raise AssertionError("Codex status must not be checked without eligible previews")
+
+    monkeypatch.setattr("photo_curator.pipeline.coordinator.codex_status", unexpected_codex_status)
+    paths = default_application_paths(tmp_path)
+    paths.ensure()
+    provider = DegradedReviewProvider(paths.cache_dir / "sources")
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        project_id = repository.create_project(
+            connection,
+            name="Degraded PhotoKit previews",
+            library=provider.get_current_library(),
+            album=provider.list_regular_albums()[0],
+            analysis_mode="codex",
+        )
+    model_engine = FakeLocalModelEngine()
+    coordinator = PipelineCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        vision_engine=FakeNativeVisionEngine(),
+        model_engine=model_engine,
+    )
+
+    coordinator.run(project_id)
+
+    with database_connection(paths.database) as connection:
+        project = repository.get_project(connection, project_id)
+        assets = repository.list_assets(connection, project_id)
+        jobs = repository.latest_jobs(connection, project_id)
+        signals = repository.list_analysis_signals(connection, project_id)
+
+    assert project["state"] == "ready"
+    assert len(assets) == 12
+    assert all(asset["cache_state"] == "degraded" for asset in assets)
+    assert all(Path(str(asset["review_path"])).is_file() for asset in assets)
+    assert all(Path(str(asset["thumbnail_path"])).is_file() for asset in assets)
+    assert all(
+        "preview_too_small:48x64" in str(asset["metadata"].get("render_warning"))
+        for asset in assets
+    )
+    assert all(asset["phash"] is None for asset in assets)
+    assert all(asset["final_selection"] == "review" for asset in assets)
+    assert signals == []
+    assert model_engine.calls == []
+    preview_job = next(job for job in jobs if job["stage"] == "previews")
+    codex_job = next(job for job in jobs if job["stage"] == "codex")
+    assert preview_job["status"] == "warning"
+    assert preview_job["warning_count"] == 12
+    assert codex_job["status"] == "done"
+    assert codex_job["processed_items"] == 0
+    assert "нет preview достаточного разрешения" in codex_job["current_message"]
+
+
+def test_stage_fingerprints_skip_unchanged_expensive_analysis(tmp_path: Path) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        first_jobs = int(connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+        first_signals = {
+            (row["asset_uuid"], row["signal_kind"]): row["calculated_at"]
+            for row in repository.list_analysis_signals(connection, project_id)
+        }
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM stage_fingerprints WHERE project_id=?",
+                (project_id,),
+            ).fetchone()[0]
+            == 8
+        )
+
+    coordinator.run(project_id)
+
+    with database_connection(paths.database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == first_jobs + 2
+        second_signals = {
+            (row["asset_uuid"], row["signal_kind"]): row["calculated_at"]
+            for row in repository.list_analysis_signals(connection, project_id)
+        }
+    assert second_signals == first_signals
+
+
+def test_core_ml_stage_reuses_per_asset_inference_after_stage_cache_reset(
+    tmp_path: Path,
+) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    model_engine = coordinator.model_engine
+    assert isinstance(model_engine, FakeLocalModelEngine)
+    assert len(model_engine.calls) == 1
+    assert len(model_engine.calls[0]) == 12
+    with database_connection(paths.database) as connection:
+        repository.clear_stage_fingerprints_from(connection, project_id, ("models", "decisions"))
+
+    coordinator.run(project_id, from_stage="models")
+
+    assert len(model_engine.calls) == 1
+    with database_connection(paths.database) as connection:
+        job = repository.latest_jobs(connection, project_id)[-2]
+    assert job["stage"] == "models"
+    assert job["processed_items"] == 0
+    assert job["current_message"] == "Core ML inference cache актуален"
 
 
 def test_pipeline_inventory_does_not_render_until_preview_stage(tmp_path: Path) -> None:
@@ -289,9 +472,18 @@ def test_native_vision_failure_is_persisted_without_breaking_review_pipeline(
         signals = repository.list_analysis_signals(connection, project_id)
         jobs = repository.latest_jobs(connection, project_id)
         assets = repository.list_assets(connection, project_id)
-    assert len(signals) == 48
+    apple_signals = [
+        signal
+        for signal in signals
+        if signal["signal_kind"]
+        in {"aesthetics", "feature_print", "attention_saliency", "faces", "subject_quality"}
+    ]
+    model_signals = [signal for signal in signals if signal not in apple_signals]
+    assert len(apple_signals) == 60
+    assert len(model_signals) == 36
     assert all(signal["status"] == "unavailable" for signal in signals)
-    assert all("synthetic Vision" in str(signal["error_text"]) for signal in signals)
+    assert all("synthetic Vision" in str(signal["error_text"]) for signal in apple_signals)
+    assert all("Core ML model helper" in str(signal["error_text"]) for signal in model_signals)
     assert next(job for job in jobs if job["stage"] == "vision")["status"] == "warning"
     assert all(asset["final_disposition"] for asset in assets)
 

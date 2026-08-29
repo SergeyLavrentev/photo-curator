@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import statistics
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
@@ -19,6 +21,7 @@ from photo_curator.analysis.codex_vision import (
     build_batches,
     codex_status,
 )
+from photo_curator.analysis.curation import automatic_selection_state
 from photo_curator.analysis.decision_engine import (
     DECISION_MODEL_VERSION,
     DecisionResult,
@@ -28,18 +31,39 @@ from photo_curator.analysis.decision_engine import (
 from photo_curator.analysis.diversity import diversity_evidence
 from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_equivalence_hash
 from photo_curator.analysis.image_loader import load_normalized
+from photo_curator.analysis.local_models import (
+    MODEL_ENGINE_NAMES,
+    MODEL_ENGINE_VERSIONS,
+    LocalModelCancelled,
+    LocalModelEngine,
+    LocalModelError,
+)
 from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
 from photo_curator.analysis.normalization import percentile_ranks
-from photo_curator.analysis.swipe_score import apple_score_percentiles, calculate_swipe_score
+from photo_curator.analysis.swipe_score import (
+    apple_score_percentiles,
+    calculate_swipe_score,
+    engine_score_percentiles,
+)
 from photo_curator.analysis.taste import TasteProfileError, compatible_taste_model
-from photo_curator.analysis.technical import technical_metrics
+from photo_curator.analysis.technical import (
+    TECHNICAL_ENGINE_VERSION,
+    subject_quality_metrics,
+    technical_metrics,
+)
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.provider import PhotosProvider
 from photo_curator.photos.render_resolver import resolve_source_render
-from photo_curator.pipeline.duplicates import find_duplicate_groups
+from photo_curator.pipeline.duplicates import (
+    DUPLICATE_ENGINE_VERSION,
+    find_duplicate_groups,
+    rerank_duplicate_groups,
+)
 from photo_curator.pipeline.previews import (
+    analysis_preview_dimensions,
+    analysis_preview_is_eligible,
     build_previews,
     shared_thumbnail_cache_path,
     source_fingerprint,
@@ -47,7 +71,16 @@ from photo_curator.pipeline.previews import (
 
 LOGGER = logging.getLogger(__name__)
 
-STAGES = ("inventory", "previews", "metrics", "duplicates", "vision", "codex", "decisions")
+STAGES = (
+    "inventory",
+    "previews",
+    "metrics",
+    "duplicates",
+    "vision",
+    "models",
+    "codex",
+    "decisions",
+)
 PREVIEW_LIMIT = Semaphore(2)
 
 
@@ -63,11 +96,13 @@ class PipelineCoordinator:
         paths: ApplicationPaths,
         provider: PhotosProvider,
         vision_engine: NativeVisionEngine | None = None,
+        model_engine: LocalModelEngine | None = None,
     ) -> None:
         self.database_path = database_path
         self.paths = paths
         self.provider = provider
         self.vision_engine = vision_engine
+        self.model_engine = model_engine
         self._executor = ThreadPoolExecutor(
             max_workers=min(4, os.cpu_count() or 2), thread_name_prefix="photo-curator"
         )
@@ -109,8 +144,26 @@ class PipelineCoordinator:
                 repository.set_project_state(connection, project_id, "running")
             for stage in STAGES[start_index:]:
                 self._check_cancelled(project_id)
+                input_fingerprint = self._stage_input_fingerprint(project_id, stage)
+                with database_connection(self.database_path) as connection:
+                    previous_fingerprint = repository.stage_fingerprint(
+                        connection, project_id, stage
+                    )
+                if (
+                    stage not in {"inventory", "previews"}
+                    and previous_fingerprint == input_fingerprint
+                ):
+                    LOGGER.info("Stage cache hit project=%s stage=%s", project_id, stage)
+                    continue
+                if previous_fingerprint and previous_fingerprint != input_fingerprint:
+                    self._invalidate_stage(project_id, stage)
                 LOGGER.info("Stage started project=%s stage=%s", project_id, stage)
                 getattr(self, f"_stage_{stage}")(project_id)
+                completed_fingerprint = self._stage_input_fingerprint(project_id, stage)
+                with database_connection(self.database_path) as connection:
+                    repository.record_stage_fingerprint(
+                        connection, project_id, stage, completed_fingerprint
+                    )
                 LOGGER.info("Stage completed project=%s stage=%s", project_id, stage)
             with database_connection(self.database_path) as connection:
                 repository.set_project_state(connection, project_id, "ready")
@@ -136,6 +189,175 @@ class PipelineCoordinator:
         if event is not None and event.is_set():
             raise PipelineCancelled("Pipeline cancellation requested")
 
+    def _stage_input_fingerprint(self, project_id: str, stage: str) -> str:
+        with database_connection(self.database_path) as connection:
+            project = repository.get_project(connection, project_id)
+            settings = json.loads(str(project.get("settings_json") or "{}"))
+            assets = [
+                tuple(row)
+                for row in connection.execute(
+                    """
+                    SELECT asset_uuid, current_filename, width, height, favorite,
+                        has_adjustments, burst_key, burst_default_pick, no_longer_exists,
+                        source_fingerprint, cache_state
+                    FROM assets WHERE project_id=? ORDER BY asset_uuid
+                    """,
+                    (project_id,),
+                ).fetchall()
+            ]
+            payload: object
+            if stage == "inventory":
+                payload = (project["library_fingerprint"], project["album_id"])
+            elif stage == "previews":
+                payload = ("preview-v3", assets)
+            elif stage == "metrics":
+                payload = (TECHNICAL_ENGINE_VERSION, assets)
+            elif stage == "duplicates":
+                metrics = [
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT asset_uuid, phash, dhash, normalized_pixel_hash,
+                            histogram_json, sharpness_percentile, contrast_percentile,
+                            technical_quality
+                        FROM metrics WHERE project_id=? ORDER BY asset_uuid
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ]
+                payload = (DUPLICATE_ENGINE_VERSION, assets, metrics)
+            elif stage == "vision":
+                payload = (
+                    "apple-vision-subject-v2",
+                    _file_digest(
+                        Path(__file__).parents[1]
+                        / "analysis"
+                        / "native"
+                        / "photo_curator_vision.swift"
+                    ),
+                    bool((settings.get("local_engines") or {}).get("apple", True)),
+                    [(row[0], row[9]) for row in assets],
+                )
+            elif stage == "models":
+                manifest = Path(__file__).parents[3] / "packaging" / "models" / "models.json"
+                manifest_digest = (
+                    hashlib.sha256(manifest.read_bytes()).hexdigest()
+                    if manifest.is_file()
+                    else "missing"
+                )
+                payload = (
+                    MODEL_ENGINE_VERSIONS,
+                    settings.get("local_engines"),
+                    manifest_digest,
+                    _file_digest(
+                        Path(__file__).parents[1]
+                        / "analysis"
+                        / "native"
+                        / "photo_curator_local_models.swift"
+                    ),
+                    [(row[0], row[9]) for row in assets],
+                )
+            elif stage == "codex":
+                payload = (
+                    CODEX_ENGINE_VERSION,
+                    DEFAULT_BULK_MODEL,
+                    DEFAULT_COMPARE_MODEL,
+                    _file_digest(Path(__file__).parents[1] / "analysis" / "codex_vision.py"),
+                    settings.get("analysis_mode"),
+                    [(row[0], row[9]) for row in assets],
+                )
+            else:
+                signals = [
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT asset_uuid, signal_kind, status, engine_version,
+                            source_fingerprint, value_json, error_text
+                        FROM analysis_signals
+                        WHERE project_id=? ORDER BY asset_uuid, signal_kind
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ]
+                groups = [
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT group_id, kind, confidence, leader_uuid, flags_json
+                        FROM duplicate_groups WHERE project_id=? ORDER BY group_id
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ]
+                taste = connection.execute(
+                    """
+                    SELECT status, model_version, feature_schema, updated_at
+                    FROM taste_profiles WHERE id='default'
+                    """
+                ).fetchone()
+                payload = (
+                    DECISION_MODEL_VERSION,
+                    settings.get("selection_density"),
+                    settings.get("validated_defect_auto_reject", False),
+                    settings.get("validated_codex_ranking", False),
+                    settings.get("ensemble_model"),
+                    assets,
+                    signals,
+                    groups,
+                    tuple(taste) if taste else None,
+                )
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(encoded.encode()).hexdigest()
+
+    def _invalidate_stage(self, project_id: str, stage: str) -> None:
+        affected = {
+            "inventory": STAGES,
+            "previews": STAGES[1:],
+            "metrics": ("metrics", "duplicates", "decisions"),
+            "duplicates": ("duplicates", "codex", "decisions"),
+            "vision": ("vision", "decisions"),
+            "models": ("models", "decisions"),
+            "codex": ("codex", "decisions"),
+            "decisions": ("decisions",),
+        }[stage]
+        with database_connection(self.database_path) as connection:
+            repository.clear_stage_fingerprints_from(connection, project_id, affected)
+            if stage == "metrics":
+                connection.execute("DELETE FROM metrics WHERE project_id=?", (project_id,))
+            if stage in {"metrics", "duplicates"}:
+                connection.execute("DELETE FROM duplicate_groups WHERE project_id=?", (project_id,))
+            signal_kinds = {
+                "vision": (
+                    "aesthetics",
+                    "feature_print",
+                    "attention_saliency",
+                    "faces",
+                    "subject_quality",
+                ),
+                "codex": ("codex_vision",),
+            }.get(stage)
+            if signal_kinds:
+                placeholders = ",".join("?" for _ in signal_kinds)
+                connection.execute(
+                    "DELETE FROM analysis_signals "
+                    f"WHERE project_id=? AND signal_kind IN ({placeholders})",
+                    (project_id, *signal_kinds),
+                )
+            if "decisions" in affected:
+                connection.execute("DELETE FROM swipe_scores WHERE project_id=?", (project_id,))
+                connection.execute(
+                    "DELETE FROM decisions WHERE project_id=? AND manual_override=0",
+                    (project_id,),
+                )
+
+    def _source_album_is_shared(self, project: dict[str, object]) -> bool:
+        settings = json.loads(str(project.get("settings_json") or "{}"))
+        stored = settings.get("source_album_shared")
+        if isinstance(stored, bool):
+            return stored
+        album_id = str(project["album_id"])
+        return any(album.id == album_id for album in self.provider.list_shared_albums())
+
     def _stage_inventory(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)
@@ -160,11 +382,14 @@ class PipelineCoordinator:
                 )
 
         streaming = getattr(self.provider, "list_asset_metadata_with_progress", None)
-        source_assets = (
-            streaming(str(project["album_id"]), report_progress)
-            if streaming
-            else self.provider.list_assets(str(project["album_id"]))
-        )
+        album_id = str(project["album_id"])
+        source_album_shared = self._source_album_is_shared(project)
+        if streaming:
+            source_assets = streaming(album_id, report_progress)
+        elif source_album_shared:
+            source_assets = self.provider.list_shared_assets(album_id)
+        else:
+            source_assets = self.provider.list_assets(album_id)
         assets = [asset for asset in source_assets if asset.is_photo]
         self._check_cancelled(project_id)
         with database_connection(self.database_path) as connection:
@@ -203,11 +428,13 @@ class PipelineCoordinator:
                 )
 
         streaming = getattr(self.provider, "list_assets_with_progress", None)
-        source_assets = (
-            streaming(str(project["album_id"]), report_render_progress)
-            if streaming
-            else self.provider.list_assets(str(project["album_id"]))
-        )
+        album_id = str(project["album_id"])
+        if streaming:
+            source_assets = streaming(album_id, report_render_progress)
+        elif self._source_album_is_shared(project):
+            source_assets = self.provider.list_shared_assets(album_id)
+        else:
+            source_assets = self.provider.list_assets(album_id)
         current_assets = {asset.uuid: asset for asset in source_assets if asset.is_photo}
         renders_reported = bool(current_assets) and all(
             asset.review_render for asset in current_assets.values()
@@ -221,7 +448,7 @@ class PipelineCoordinator:
                 (len(stored), len(stored), job_id),
             )
         errors = warnings = 0
-        cache = self.paths.cache_dir / project_id
+        cache = self.paths.project_artifacts_dir / project_id
         for index, row in enumerate(stored, start=1):
             self._check_cancelled(project_id)
             asset_uuid = str(row["asset_uuid"])
@@ -245,14 +472,16 @@ class PipelineCoordinator:
                             render_warning=render.warning if render else "missing_preview",
                         )
                 else:
-                    review_path = cache / "review" / f"{asset_uuid}.jpg"
-                    thumbnail_path = cache / "thumbnails" / f"{asset_uuid}.jpg"
+                    asset_key = _asset_artifact_key(asset_uuid)
+                    review_path = cache / "review" / f"{asset_key}.jpg"
+                    thumbnail_path = cache / "thumbnails" / f"{asset_key}.jpg"
                     expected_fingerprint = source_fingerprint(render.path, render.kind)
                     if (
                         row.get("cache_state") == "ready"
                         and row.get("source_fingerprint") == expected_fingerprint
                         and review_path.is_file()
                         and thumbnail_path.is_file()
+                        and analysis_preview_is_eligible(review_path)
                     ):
                         with database_connection(self.database_path) as connection:
                             repository.update_job(
@@ -280,8 +509,22 @@ class PipelineCoordinator:
                             ),
                         )
                     stat = render.path.stat()
+                    preview_width, preview_height = analysis_preview_dimensions(result.review_path)
+                    analysis_eligible = analysis_preview_is_eligible(result.review_path)
+                    render_warning = render.warning
+                    if not analysis_eligible:
+                        warnings += 1
+                        size_warning = (
+                            f"preview_too_small:{preview_width}x{preview_height};analysis_skipped"
+                        )
+                        render_warning = (
+                            f"{render_warning} · {size_warning}" if render_warning else size_warning
+                        )
                     with database_connection(self.database_path) as connection:
-                        if row.get("source_fingerprint") != result.source_fingerprint:
+                        if (
+                            row.get("source_fingerprint") != result.source_fingerprint
+                            or not analysis_eligible
+                        ):
                             repository.invalidate_asset_analysis(connection, project_id, asset_uuid)
                         repository.update_asset_preview(
                             connection,
@@ -293,8 +536,8 @@ class PipelineCoordinator:
                             source_fingerprint=result.source_fingerprint,
                             review_path=str(result.review_path),
                             thumbnail_path=str(result.thumbnail_path),
-                            cache_state="ready",
-                            render_warning=render.warning,
+                            cache_state="ready" if analysis_eligible else "degraded",
+                            render_warning=render_warning,
                         )
             except Exception:
                 errors += 1
@@ -444,12 +687,26 @@ class PipelineCoordinator:
 
     def _stage_vision(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
+            project = repository.get_project(connection, project_id)
+            settings = json.loads(str(project.get("settings_json") or "{}"))
+            engines = settings.get("local_engines")
+            apple_enabled = not isinstance(engines, dict) or engines.get("apple", True) is True
             assets = [
                 asset
                 for asset in repository.list_assets(connection, project_id)
                 if asset.get("cache_state") == "ready" and asset.get("phash")
             ]
             job_id = repository.create_job(connection, project_id, "vision", len(assets))
+        if not apple_enabled:
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="done",
+                    processed=len(assets),
+                    message="Apple Vision отключён в настройках проекта",
+                )
+            return
         if self.vision_engine is not None:
             self._stage_native_vision(project_id, job_id, assets)
             return
@@ -481,6 +738,7 @@ class PipelineCoordinator:
                         "feature_print",
                         "attention_saliency",
                         "faces",
+                        "subject_quality",
                     ):
                         repository.upsert_analysis_signal(
                             connection,
@@ -530,6 +788,32 @@ class PipelineCoordinator:
             durations = row.get("durations_ms")
             signal_durations = durations if isinstance(durations, dict) else {}
             asset_has_error = False
+            faces = row.get("faces")
+            saliency = row.get("attention_saliency")
+            face_rectangles = faces.get("face_rectangles") if isinstance(faces, dict) else None
+            salient_objects = (
+                saliency.get("salient_objects") if isinstance(saliency, dict) else None
+            )
+            raw_rectangles = (
+                face_rectangles
+                if isinstance(face_rectangles, list) and face_rectangles
+                else salient_objects
+                if isinstance(salient_objects, list)
+                else []
+            )
+            roi_source = "faces" if raw_rectangles is face_rectangles else "attention_saliency"
+            subject_value: dict[str, object] = {}
+            subject_error: str | None = None
+            if raw_rectangles:
+                try:
+                    image = load_normalized(Path(str(asset["review_path"])), max_dimension=1024)
+                    subject_value = subject_quality_metrics(
+                        image,
+                        [value for value in raw_rectangles if isinstance(value, dict)],
+                        source=roi_source,
+                    )
+                except (OSError, ValueError) as error:
+                    subject_error = str(error)[-1000:]
             with database_connection(self.database_path) as connection:
                 for signal_kind in (
                     "aesthetics",
@@ -569,7 +853,21 @@ class PipelineCoordinator:
                             else None
                         ),
                     )
-                faces = row.get("faces")
+                repository.upsert_analysis_signal(
+                    connection,
+                    project_id,
+                    asset_uuid,
+                    signal_kind="subject_quality",
+                    schema_version=1,
+                    engine_name="photo-curator-subject-roi",
+                    engine_version="1",
+                    request_revision=1,
+                    source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                    status="ready" if subject_value else "unavailable",
+                    value=subject_value or None,
+                    duration_ms=None,
+                    error_text=subject_error or (None if subject_value else "No subject ROI"),
+                )
                 if isinstance(faces, dict):
                     repository.update_vision_metrics(
                         connection,
@@ -596,6 +894,234 @@ class PipelineCoordinator:
                 errors=errors,
             )
 
+    def _stage_models(self, project_id: str) -> None:
+        with database_connection(self.database_path) as connection:
+            project = repository.get_project(connection, project_id)
+            settings = json.loads(str(project.get("settings_json") or "{}"))
+            configured = settings.get("local_engines")
+            configured = configured if isinstance(configured, dict) else {}
+            enabled = {
+                name
+                for name in ("nima", "mobileclip", "musiq")
+                if configured.get(name, True) is True
+            }
+            assets = [
+                asset
+                for asset in repository.list_assets(connection, project_id)
+                if asset.get("cache_state") == "ready" and asset.get("review_path")
+            ]
+            existing = repository.analysis_signals_by_asset(connection, project_id)
+            signal_specs = {
+                "nima": ("nima_aesthetics", "nima"),
+                "mobileclip": ("mobileclip", "mobileclip"),
+                "musiq": ("musiq_quality", "musiq"),
+            }
+            disabled_kinds = [
+                signal_kind
+                for engine, (signal_kind, _) in signal_specs.items()
+                if engine not in enabled
+            ]
+            if disabled_kinds:
+                placeholders = ",".join("?" for _ in disabled_kinds)
+                connection.execute(
+                    "DELETE FROM analysis_signals "
+                    f"WHERE project_id=? AND signal_kind IN ({placeholders})",
+                    (project_id, *disabled_kinds),
+                )
+            job_id = repository.create_job(connection, project_id, "models", len(assets))
+        if not enabled:
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="done",
+                    processed=len(assets),
+                    message="Дополнительные локальные модели отключены",
+                )
+            return
+        if self.model_engine is None:
+            self._record_model_stack_failure(
+                project_id,
+                job_id,
+                assets,
+                enabled,
+                "Core ML model helper не настроен",
+            )
+            return
+        try:
+            digest_loader = getattr(self.model_engine, "verified_digests", None)
+            verified_digests = digest_loader(enabled) if digest_loader else {}
+        except (LocalModelError, OSError, ValueError) as error:
+            self._record_model_stack_failure(
+                project_id, job_id, assets, enabled, str(error)[-1000:]
+            )
+            return
+        expected_versions = {
+            engine: (
+                f"{MODEL_ENGINE_VERSIONS[engine]}+sha256.{verified_digests[engine][:16]}"
+                if verified_digests.get(engine)
+                else MODEL_ENGINE_VERSIONS[engine]
+            )
+            for engine in enabled
+        }
+        pending = [
+            asset
+            for asset in assets
+            if any(
+                (
+                    (
+                        signal := existing.get(str(asset["asset_uuid"]), {}).get(
+                            signal_specs[engine][0]
+                        )
+                    )
+                    is None
+                    or signal.get("status") != "ready"
+                    or signal.get("source_fingerprint") != asset.get("source_fingerprint")
+                    or signal.get("engine_version") != expected_versions[engine]
+                )
+                for engine in enabled
+            )
+        ]
+        with database_connection(self.database_path) as connection:
+            connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (len(pending), job_id))
+        if not pending:
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="done",
+                    processed=0,
+                    message="Core ML inference cache актуален",
+                )
+            return
+        try:
+            self._check_cancelled(project_id)
+            report = self.model_engine.analyze(
+                [(str(asset["asset_uuid"]), Path(str(asset["review_path"]))) for asset in pending],
+                engines=enabled,
+                cancelled=lambda: self._cancel_requested(project_id),
+            )
+            self._check_cancelled(project_id)
+        except LocalModelCancelled as error:
+            raise PipelineCancelled(str(error)) from error
+        except (LocalModelError, OSError, ValueError) as error:
+            LOGGER.exception("Local model stack failed for %s", project_id)
+            self._record_model_stack_failure(
+                project_id, job_id, pending, enabled, str(error)[-1000:]
+            )
+            return
+        rows = report.get("assets")
+        if not isinstance(rows, list):
+            raise LocalModelError("Local model report has no assets")
+        by_uuid = {
+            str(row["asset_uuid"]): row
+            for row in rows
+            if isinstance(row, dict) and row.get("asset_uuid")
+        }
+        errors = 0
+        report_digests = (
+            report.get("model_digests") if isinstance(report.get("model_digests"), dict) else {}
+        )
+        for index, asset in enumerate(pending, start=1):
+            self._check_cancelled(project_id)
+            asset_uuid = str(asset["asset_uuid"])
+            row = by_uuid.get(asset_uuid, {})
+            row_errors = row.get("errors") if isinstance(row.get("errors"), dict) else {}
+            durations = row.get("durations_ms") if isinstance(row.get("durations_ms"), dict) else {}
+            with database_connection(self.database_path) as connection:
+                for engine in sorted(enabled):
+                    signal_kind, value_key = signal_specs[engine]
+                    value = row.get(value_key)
+                    error_text = row_errors.get(engine)
+                    ready = isinstance(value, dict)
+                    errors += int(not ready)
+                    repository.upsert_analysis_signal(
+                        connection,
+                        project_id,
+                        asset_uuid,
+                        signal_kind=signal_kind,
+                        schema_version=1,
+                        engine_name=MODEL_ENGINE_NAMES[engine],
+                        engine_version=(
+                            f"{MODEL_ENGINE_VERSIONS[engine]}+sha256."
+                            f"{str(report_digests[engine])[:16]}"
+                            if report_digests.get(engine)
+                            else MODEL_ENGINE_VERSIONS[engine]
+                        ),
+                        request_revision=1,
+                        source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                        status="ready" if ready else "error",
+                        value=value if ready else None,
+                        duration_ms=_optional_float(durations.get(engine)),
+                        error_text=(
+                            str(error_text) if error_text else "Local model returned no result"
+                        )
+                        if not ready
+                        else None,
+                    )
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=index,
+                    errors=errors,
+                    message=f"Core ML модели {index} из {len(pending)}",
+                )
+        with database_connection(self.database_path) as connection:
+            repository.update_job(
+                connection,
+                job_id,
+                status="warning" if errors else "done",
+                processed=len(pending),
+                errors=errors,
+                warnings=errors,
+                message=(
+                    f"Локальные модели завершены; ошибок сигналов: {errors}"
+                    if errors
+                    else "NIMA, MobileCLIP и MUSIQ завершены"
+                ),
+            )
+
+    def _record_model_stack_failure(
+        self,
+        project_id: str,
+        job_id: str,
+        assets: list[dict[str, object]],
+        enabled: set[str],
+        detail: str,
+    ) -> None:
+        signal_kinds = {
+            "nima": "nima_aesthetics",
+            "mobileclip": "mobileclip",
+            "musiq": "musiq_quality",
+        }
+        with database_connection(self.database_path) as connection:
+            for asset in assets:
+                for engine in sorted(enabled):
+                    repository.upsert_analysis_signal(
+                        connection,
+                        project_id,
+                        str(asset["asset_uuid"]),
+                        signal_kind=signal_kinds[engine],
+                        schema_version=1,
+                        engine_name=MODEL_ENGINE_NAMES[engine],
+                        engine_version=MODEL_ENGINE_VERSIONS[engine],
+                        request_revision=1,
+                        source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                        status="unavailable",
+                        value=None,
+                        duration_ms=None,
+                        error_text=detail,
+                    )
+            repository.update_job(
+                connection,
+                job_id,
+                status="warning",
+                processed=0,
+                warnings=1,
+                errors=len(assets) * len(enabled),
+                message="Дополнительные Core ML модели недоступны; Apple-сигналы сохранены",
+            )
+
     def _stage_codex(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)
@@ -609,6 +1135,17 @@ class PipelineCoordinator:
             ]
             groups = repository.list_duplicate_groups(connection, project_id)
             existing = repository.analysis_signals_by_asset(connection, project_id)
+        if not assets:
+            with database_connection(self.database_path) as connection:
+                job_id = repository.create_job(connection, project_id, "codex", 0)
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="done",
+                    processed=0,
+                    message="Codex Vision пропущен: нет preview достаточного разрешения",
+                )
+            return
         status = codex_status()
         if not status.ready:
             raise CodexVisionError(status.detail or "Codex больше не авторизован через ChatGPT")
@@ -712,7 +1249,6 @@ class PipelineCoordinator:
     def _stage_decisions(self, project_id: str) -> None:
         with database_connection(self.database_path) as connection:
             assets = repository.list_assets(connection, project_id)
-            duplicate_by_asset = repository.duplicate_context(connection, project_id)
             signal_by_asset = repository.analysis_signals_by_asset(connection, project_id)
             try:
                 taste_model = compatible_taste_model(connection, signal_by_asset)
@@ -724,40 +1260,89 @@ class PipelineCoordinator:
             density = str(settings.get("selection_density") or "balanced")
             job_id = repository.create_job(connection, project_id, "decisions", len(assets))
             apple_percentiles = apple_score_percentiles(assets)
+            ensemble_percentiles = engine_score_percentiles(assets, signal_by_asset)
+            raw_taste_deltas = [
+                (
+                    taste_model.personal_delta(
+                        signal_by_asset.get(str(asset["asset_uuid"]), {}).get("feature_print", {})
+                    )
+                    if taste_model
+                    else 0.0
+                )
+                for asset in assets
+            ]
+            taste_ready = [
+                bool(
+                    signal_by_asset.get(str(asset["asset_uuid"]), {})
+                    .get("feature_print", {})
+                    .get("status")
+                    == "ready"
+                )
+                for asset in assets
+            ]
+            active_deltas = [
+                delta for delta, ready in zip(raw_taste_deltas, taste_ready, strict=True) if ready
+            ]
+            taste_center = statistics.median(active_deltas) if active_deltas else 0.0
+            taste_deltas = [
+                max(-12.0, min(12.0, delta - taste_center)) if ready else 0.0
+                for delta, ready in zip(raw_taste_deltas, taste_ready, strict=True)
+            ]
+            groups = repository.list_duplicate_groups(connection, project_id)
+            reranked_groups = rerank_duplicate_groups(
+                groups,
+                assets,
+                signal_by_asset,
+                personal_deltas={
+                    str(asset["asset_uuid"]): delta
+                    for asset, delta in zip(assets, taste_deltas, strict=True)
+                },
+                check_cancelled=lambda: self._check_cancelled(project_id),
+            )
+            repository.replace_duplicate_groups(connection, project_id, reranked_groups)
+            duplicate_by_asset = repository.duplicate_context(connection, project_id)
+            scored_assets = [
+                _asset_with_analysis_flags(asset, signal_by_asset.get(str(asset["asset_uuid"]), {}))
+                for asset in assets
+            ]
+            calibration = settings.get("decision_calibration")
+            if isinstance(calibration, dict):
+                for asset in scored_assets:
+                    asset["decision_calibration"] = calibration
             swipe_scores = [
                 calculate_swipe_score(
                     asset,
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     signal_by_asset.get(str(asset["asset_uuid"]), {}),
                     apple_percentiles=apple_percentiles.get(str(asset["asset_uuid"]), {}),
-                    personal_delta=(
-                        taste_model.personal_delta(
-                            signal_by_asset.get(str(asset["asset_uuid"]), {}).get(
-                                "feature_print", {}
-                            )
-                        )
-                        if taste_model
-                        else 0.0
-                    ),
+                    personal_delta=personal_delta,
                     taste_model_version=taste_model.model_version if taste_model else None,
                     taste_reliability=taste_model.reliability if taste_model else 0.0,
+                    ensemble_model=(
+                        settings.get("ensemble_model")
+                        if isinstance(settings.get("ensemble_model"), dict)
+                        else None
+                    ),
+                    ensemble_percentiles=ensemble_percentiles.get(str(asset["asset_uuid"]), {}),
+                    codex_ranking_validated=(settings.get("validated_codex_ranking") is True),
                 )
-                for asset in assets
+                for asset, personal_delta in zip(scored_assets, taste_deltas, strict=True)
             ]
             selected_threshold = album_selection_threshold(
                 [score.score for score in swipe_scores], density
             )
             decisions = [
                 decide_asset(
-                    _asset_with_codex_flags(
-                        asset, signal_by_asset.get(str(asset["asset_uuid"]), {})
-                    ),
+                    asset,
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
                     swipe_score,
                     selected_threshold=selected_threshold,
+                    validated_defect_auto_reject=(
+                        settings.get("validated_defect_auto_reject") is True
+                    ),
                 )
-                for asset, swipe_score in zip(assets, swipe_scores, strict=True)
+                for asset, swipe_score in zip(scored_assets, swipe_scores, strict=True)
             ]
             diversity = diversity_evidence(assets, decisions, signal_by_asset)
             swipe_scores = [
@@ -769,18 +1354,31 @@ class PipelineCoordinator:
             )
             decisions = [
                 decide_asset(
-                    _asset_with_codex_flags(
-                        asset, signal_by_asset.get(str(asset["asset_uuid"]), {})
-                    ),
+                    asset,
                     duplicate_by_asset.get(str(asset["asset_uuid"])),
                     density,
                     swipe_score,
                     selected_threshold=selected_threshold,
+                    validated_defect_auto_reject=(
+                        settings.get("validated_defect_auto_reject") is True
+                    ),
                 )
-                for asset, swipe_score in zip(assets, swipe_scores, strict=True)
+                for asset, swipe_score in zip(scored_assets, swipe_scores, strict=True)
             ]
-            for index, (asset, swipe_score, decision) in enumerate(
-                zip(assets, swipe_scores, decisions, strict=True), start=1
+            selections = [
+                automatic_selection_state(
+                    asset,
+                    decision,
+                    duplicate_by_asset.get(str(asset["asset_uuid"])),
+                    swipe_score,
+                    selected_threshold=selected_threshold,
+                )
+                for asset, swipe_score, decision in zip(
+                    scored_assets, swipe_scores, decisions, strict=True
+                )
+            ]
+            for index, (asset, swipe_score, decision, selection) in enumerate(
+                zip(assets, swipe_scores, decisions, selections, strict=True), start=1
             ):
                 repository.upsert_swipe_score(
                     connection,
@@ -801,6 +1399,7 @@ class PipelineCoordinator:
                     project_id,
                     str(asset["asset_uuid"]),
                     disposition=decision.disposition,
+                    selection=selection,
                     confidence=decision.confidence,
                     flags=decision.flags,
                     reasons=decision.reasons,
@@ -811,20 +1410,10 @@ class PipelineCoordinator:
                     processed=index,
                     message=f"Решения {index} из {len(assets)}",
                 )
-            eligible = [
-                asset
-                for asset in repository.list_assets(connection, project_id)
-                if asset.get("final_disposition") == "keep"
-                and asset.get("technical_quality") is not None
-            ]
-            best_count = max(1, round(len(eligible) * 0.1)) if eligible else 0
             best = {
                 str(asset["asset_uuid"])
-                for asset in sorted(
-                    eligible,
-                    key=lambda value: float(value.get("swipe_score") or 0),
-                    reverse=True,
-                )[:best_count]
+                for asset in repository.list_assets(connection, project_id)
+                if asset.get("final_selection") == "pick"
             }
             repository.mark_best_candidates(connection, project_id, best)
             repository.update_project_settings(
@@ -865,13 +1454,22 @@ def _apply_codex_leaders(
             repository.update_duplicate_group_leader(connection, project_id, group_id, leaders[0])
 
 
-def _asset_with_codex_flags(
+def _asset_with_analysis_flags(
     asset: dict[str, object], signals: dict[str, dict[str, object]]
 ) -> dict[str, object]:
+    copy = dict(asset)
+    subject_signal = signals.get("subject_quality")
+    subject_value = (
+        subject_signal.get("value")
+        if subject_signal and subject_signal.get("status") == "ready"
+        else None
+    )
+    if isinstance(subject_value, dict):
+        copy.update(subject_value)
     signal = signals.get("codex_vision")
     value = signal.get("value") if signal and signal.get("status") == "ready" else None
     if not isinstance(value, dict):
-        return asset
+        return copy
     mapping = {
         "blur": "possible_blur",
         "underexposed": "underexposed",
@@ -883,7 +1481,6 @@ def _asset_with_codex_flags(
     flags = {mapping[str(defect)] for defect in value.get("defects", []) if str(defect) in mapping}
     if value.get("face_visibility") == "unrecognizable":
         flags.add("poor_face_capture")
-    copy = dict(asset)
     copy["codex_flags"] = sorted(flags)
     copy["codex_reject_recommended"] = bool(value.get("reject_recommended"))
     copy["codex_confidence"] = float(value.get("confidence") or 0.0)
@@ -901,6 +1498,15 @@ def _optional_float(value: object) -> float | None:
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
+
+
+def _asset_artifact_key(asset_uuid: str) -> str:
+    """Map opaque PhotoKit identifiers to a flat, path-safe artifact key."""
+    return hashlib.sha256(asset_uuid.encode("utf-8")).hexdigest()
 
 
 def _signal_revision(signal_kind: str, value: object) -> int | None:
@@ -931,7 +1537,19 @@ def _apply_diversity_to_score(score, evidence):
     models = dict(score.model_versions)
     if evidence.model_version:
         models["diversity"] = evidence.model_version
-    return replace(score, components=components, reasons=reasons[:4], model_versions=models)
+    adjusted_score = score.score
+    adjusted_generic = score.generic_score
+    if evidence.demoted:
+        adjusted_score = max(0, adjusted_score - 25)
+        adjusted_generic = max(0.0, adjusted_generic - 25.0)
+    return replace(
+        score,
+        score=adjusted_score,
+        generic_score=round(adjusted_generic, 2),
+        components=components,
+        reasons=reasons[:4],
+        model_versions=models,
+    )
 
 
 def _diversity_reason(evidence, *, demoted: bool) -> dict[str, object]:

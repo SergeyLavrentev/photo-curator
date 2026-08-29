@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 
 from photo_curator.analysis.decision_engine import binary_disposition
+from photo_curator.db import gallery_repository
 from photo_curator.photos.provider import PhotoAlbum, PhotoAsset, PhotoLibrary
 from photo_curator.utils.identifiers import new_id
 from photo_curator.utils.timestamps import utc_now
@@ -194,9 +195,16 @@ def create_project(
     selection_density: str = "balanced",
     source_provenance: str = "regular_album",
     analysis_mode: str = "local",
+    local_engines: dict[str, bool] | None = None,
 ) -> str:
     project_id = project_id or new_id()
     now = utc_now()
+    local_engines = local_engines or {
+        "apple": True,
+        "nima": True,
+        "mobileclip": True,
+        "musiq": True,
+    }
     connection.execute(
         """
         INSERT INTO projects (
@@ -222,9 +230,11 @@ def create_project(
                 {
                     "photo_count": album.photo_count,
                     "video_count": album.video_count,
+                    "source_album_shared": album.is_shared,
                     "selection_density": selection_density,
                     "source_provenance": source_provenance,
                     "analysis_mode": analysis_mode,
+                    "local_engines": local_engines,
                 },
                 sort_keys=True,
             ),
@@ -265,6 +275,47 @@ def update_project_settings(
     connection.execute(
         "UPDATE projects SET settings_json=?, updated_at=? WHERE id=?",
         (json.dumps(settings, sort_keys=True), utc_now(), project_id),
+    )
+
+
+def stage_fingerprint(connection: sqlite3.Connection, project_id: str, stage: str) -> str | None:
+    row = connection.execute(
+        "SELECT input_fingerprint FROM stage_fingerprints WHERE project_id=? AND stage=?",
+        (project_id, stage),
+    ).fetchone()
+    return str(row[0]) if row else None
+
+
+def record_stage_fingerprint(
+    connection: sqlite3.Connection,
+    project_id: str,
+    stage: str,
+    input_fingerprint: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO stage_fingerprints (project_id, stage, input_fingerprint, completed_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(project_id, stage) DO UPDATE SET
+            input_fingerprint=excluded.input_fingerprint,
+            completed_at=excluded.completed_at
+        """,
+        (project_id, stage, input_fingerprint, utc_now()),
+    )
+
+
+def clear_stage_fingerprints_from(
+    connection: sqlite3.Connection,
+    project_id: str,
+    stages: tuple[str, ...],
+) -> None:
+    if not stages:
+        return
+    connection.execute(
+        "DELETE FROM stage_fingerprints WHERE project_id=? AND stage IN ({})".format(
+            ",".join("?" for _ in stages)
+        ),
+        (project_id, *stages),
     )
 
 
@@ -450,6 +501,8 @@ METRIC_COLUMNS = [
     "contrast_std",
     "dynamic_range",
     "entropy",
+    "dominant_horizon_degrees",
+    "horizon_support",
     "sharpness_percentile",
     "gradient_percentile",
     "contrast_percentile",
@@ -792,6 +845,61 @@ def list_preference_examples(
     return [dict(row) for row in rows]
 
 
+def add_quality_preference_example(
+    connection: sqlite3.Connection,
+    *,
+    project_id: str,
+    left_uuid: str,
+    right_uuid: str,
+    preferred_uuid: str,
+) -> str:
+    if left_uuid == right_uuid or preferred_uuid not in {left_uuid, right_uuid}:
+        raise ValueError("Некорректная проверочная пара")
+    known = assets_by_uuid(connection, project_id, {left_uuid, right_uuid})
+    if set(known) != {left_uuid, right_uuid}:
+        raise ValueError("Пара содержит фото из другого или удалённого проекта")
+    ordered_left, ordered_right = sorted((left_uuid, right_uuid))
+    existing = connection.execute(
+        """
+        SELECT id FROM quality_preference_examples
+        WHERE project_id=? AND left_uuid=? AND right_uuid=?
+        """,
+        (project_id, ordered_left, ordered_right),
+    ).fetchone()
+    if existing:
+        raise ValueError("Эта пара уже была оценена")
+    example_id = new_id()
+    connection.execute(
+        """
+        INSERT INTO quality_preference_examples (
+            id, project_id, left_uuid, right_uuid, preferred_uuid, split, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'held_out', ?)
+        """,
+        (
+            example_id,
+            project_id,
+            ordered_left,
+            ordered_right,
+            preferred_uuid,
+            utc_now(),
+        ),
+    )
+    return example_id
+
+
+def list_quality_preference_examples(
+    connection: sqlite3.Connection, project_id: str
+) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT * FROM quality_preference_examples
+        WHERE project_id=? ORDER BY created_at, id
+        """,
+        (project_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def delete_incompatible_preference_examples(
     connection: sqlite3.Connection,
     feature_schema: str,
@@ -1087,19 +1195,46 @@ def set_taste_profile_compatibility(
     return get_taste_profile(connection, profile_id)
 
 
+def mark_taste_profile_stale(
+    connection: sqlite3.Connection,
+    *,
+    reason: str,
+    detail: str,
+    profile_id: str = "default",
+) -> dict[str, object]:
+    profile = get_taste_profile(connection, profile_id)
+    evidence = dict(profile.get("evidence") or {})
+    evidence["migration"] = {
+        "required": True,
+        "reason": reason,
+        "detail": detail[:500],
+    }
+    connection.execute(
+        "UPDATE taste_profiles SET status='stale', evidence_json=?, updated_at=? WHERE id=?",
+        (json.dumps(evidence, sort_keys=True), utc_now(), profile_id),
+    )
+    return get_taste_profile(connection, profile_id)
+
+
 def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
     rows = connection.execute(
         """
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
+            d.auto_selection, d.manual_selection, d.final_selection,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
-            d.manual_note, d.reviewed, s.score AS swipe_score,
+            d.manual_note, d.manual_rating, d.reviewed, s.score AS swipe_score,
             s.generic_score AS swipe_generic_score, s.personal_delta AS swipe_personal_delta,
             s.confidence AS swipe_confidence, s.components_json AS swipe_components_json,
             s.reasons_json AS swipe_reasons_json, s.model_versions_json AS swipe_models_json,
             s.schema_version AS swipe_schema_version,
             q.top_k_rank AS quality_top_k_rank,
             q.duplicate_group AS quality_duplicate_group,
-            q.expected_leader AS quality_expected_leader
+            q.expected_leader AS quality_expected_leader,
+            q.defect_codes_json AS quality_defect_codes_json,
+            q.defect_severity AS quality_defect_severity,
+            q.defect_confidence AS quality_defect_confidence,
+            q.quality_note AS quality_note
+            , q.lab_sampled AS quality_lab_sampled
         FROM assets a
         LEFT JOIN metrics m USING (project_id, asset_uuid)
         LEFT JOIN decisions d USING (project_id, asset_uuid)
@@ -1111,6 +1246,82 @@ def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[st
         (project_id,),
     ).fetchall()
     return [_decode_asset_row(dict(row)) for row in rows]
+
+
+def list_assets_page(
+    connection: sqlite3.Connection,
+    project_id: str,
+    *,
+    limit: int,
+    offset: int = 0,
+    disposition: str | None = None,
+    selection: str | None = None,
+    cursor_score: float | None = None,
+    cursor_asset_uuid: str | None = None,
+) -> list[dict[str, object]]:
+    return gallery_repository.list_assets_page(
+        connection,
+        project_id,
+        limit=limit,
+        decode=_decode_asset_row,
+        offset=offset,
+        disposition=disposition,
+        selection=selection,
+        cursor_score=cursor_score,
+        cursor_asset_uuid=cursor_asset_uuid,
+    )
+
+
+def count_assets(
+    connection: sqlite3.Connection,
+    project_id: str,
+    *,
+    disposition: str | None = None,
+    selection: str | None = None,
+) -> int:
+    return gallery_repository.count_assets(
+        connection,
+        project_id,
+        disposition=disposition,
+        selection=selection,
+    )
+
+
+def assets_by_uuid(
+    connection: sqlite3.Connection, project_id: str, asset_uuids: set[str]
+) -> dict[str, dict[str, object]]:
+    if not asset_uuids:
+        return {}
+    placeholders = ",".join("?" for _ in asset_uuids)
+    rows = connection.execute(
+        f"""
+        SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
+            d.auto_selection, d.manual_selection, d.final_selection,
+            d.confidence, d.flags_json, d.reasons_json, d.manual_override,
+            d.manual_note, d.manual_rating, d.reviewed, s.score AS swipe_score,
+            s.generic_score AS swipe_generic_score, s.personal_delta AS swipe_personal_delta,
+            s.confidence AS swipe_confidence, s.components_json AS swipe_components_json,
+            s.reasons_json AS swipe_reasons_json, s.model_versions_json AS swipe_models_json,
+            s.schema_version AS swipe_schema_version,
+            q.top_k_rank AS quality_top_k_rank,
+            q.duplicate_group AS quality_duplicate_group,
+            q.expected_leader AS quality_expected_leader,
+            q.defect_codes_json AS quality_defect_codes_json,
+            q.defect_severity AS quality_defect_severity,
+            q.defect_confidence AS quality_defect_confidence,
+            q.quality_note AS quality_note
+            , q.lab_sampled AS quality_lab_sampled
+        FROM assets a
+        LEFT JOIN metrics m USING (project_id, asset_uuid)
+        LEFT JOIN decisions d USING (project_id, asset_uuid)
+        LEFT JOIN swipe_scores s USING (project_id, asset_uuid)
+        LEFT JOIN quality_asset_labels q USING (project_id, asset_uuid)
+        WHERE a.project_id=? AND a.asset_uuid IN ({placeholders})
+        """,
+        (project_id, *sorted(asset_uuids)),
+    ).fetchall()
+    decoded = [_decode_asset_row(dict(row)) for row in rows]
+    return {str(row["asset_uuid"]): row for row in decoded}
 
 
 def set_quality_top_k(
@@ -1162,6 +1373,75 @@ def set_quality_top_k(
             (rank, now, project_id, current_uuid),
         )
     return ordered
+
+
+QUALITY_DEFECT_CODES = {
+    "motion_blur",
+    "defocus_blur",
+    "underexposed",
+    "overexposed",
+    "low_contrast",
+    "poor_face_capture",
+    "extreme_horizon",
+    "bad_angle",
+    "blocked_subject",
+    "exact_duplicate",
+    "near_duplicate",
+    "other",
+}
+
+
+def set_quality_label(
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuid: str,
+    *,
+    disposition: str,
+    defect_codes: list[str],
+    defect_severity: int | None,
+    defect_confidence: float | None,
+    note: str | None,
+) -> None:
+    if disposition not in {"keep", "review", "reject"}:
+        raise ValueError("Некорректное ручное решение")
+    codes = sorted(set(defect_codes))
+    if any(code not in QUALITY_DEFECT_CODES for code in codes):
+        raise ValueError("Неизвестный тип дефекта")
+    if disposition == "reject" and not codes:
+        raise ValueError("Для отклонённого фото укажите хотя бы один дефект")
+    if disposition != "reject":
+        codes = []
+        defect_severity = None
+        defect_confidence = None
+    if defect_severity is not None and defect_severity not in {1, 2, 3}:
+        raise ValueError("Тяжесть дефекта должна быть от 1 до 3")
+    if defect_confidence is not None and not 0 <= defect_confidence <= 1:
+        raise ValueError("Уверенность должна быть от 0 до 1")
+    set_manual_decision(connection, project_id, asset_uuid, disposition, note)
+    connection.execute(
+        """
+        INSERT INTO quality_asset_labels (
+            project_id, asset_uuid, defect_codes_json, defect_severity,
+            defect_confidence, quality_note, lab_sampled, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
+            defect_codes_json=excluded.defect_codes_json,
+            defect_severity=excluded.defect_severity,
+            defect_confidence=excluded.defect_confidence,
+            quality_note=excluded.quality_note,
+            lab_sampled=1,
+            updated_at=excluded.updated_at
+        """,
+        (
+            project_id,
+            asset_uuid,
+            json.dumps(codes, sort_keys=True),
+            defect_severity,
+            defect_confidence,
+            note.strip() if note and note.strip() else None,
+            utc_now(),
+        ),
+    )
 
 
 def label_quality_duplicate_group(
@@ -1256,12 +1536,10 @@ def label_quality_custom_group(
 def get_asset(
     connection: sqlite3.Connection, project_id: str, asset_uuid: str
 ) -> dict[str, object]:
-    assets = [
-        asset for asset in list_assets(connection, project_id) if asset["asset_uuid"] == asset_uuid
-    ]
-    if not assets:
+    assets = assets_by_uuid(connection, project_id, {asset_uuid})
+    if asset_uuid not in assets:
         raise KeyError(asset_uuid)
-    return assets[0]
+    return assets[asset_uuid]
 
 
 def replace_duplicate_groups(connection: sqlite3.Connection, project_id: str, groups: list) -> None:
@@ -1333,20 +1611,37 @@ def update_duplicate_group_leader(
 
 
 def duplicate_context(
-    connection: sqlite3.Connection, project_id: str
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuids: set[str] | None = None,
 ) -> dict[str, dict[str, object]]:
+    clauses = ["g.project_id = ?"]
+    parameters: list[object] = [project_id]
+    if asset_uuids is not None:
+        if not asset_uuids:
+            return {}
+        clauses.append("m.asset_uuid IN ({})".format(",".join("?" for _ in asset_uuids)))
+        parameters.extend(sorted(asset_uuids))
     rows = connection.execute(
-        """
+        f"""
         SELECT g.group_id, g.kind, g.confidence, g.flags_json,
             m.asset_uuid, m.is_leader, m.resolution_ratio, m.similarity, m.evidence_json,
             m.quality_score,
-            MAX(CASE WHEN m.is_leader=1 THEN m.quality_score END)
-                OVER (PARTITION BY m.project_id, m.group_id) leader_quality
+            g.leader_uuid,
+            leader.quality_score AS leader_quality,
+            (
+                SELECT COUNT(*) FROM duplicate_members counted
+                WHERE counted.project_id=g.project_id AND counted.group_id=g.group_id
+            ) AS member_count
         FROM duplicate_groups g
         JOIN duplicate_members m USING (project_id, group_id)
-        WHERE g.project_id = ?
+        LEFT JOIN duplicate_members leader
+            ON leader.project_id=g.project_id
+            AND leader.group_id=g.group_id
+            AND leader.asset_uuid=g.leader_uuid
+        WHERE {" AND ".join(clauses)}
         """,
-        (project_id,),
+        parameters,
     ).fetchall()
     result = {}
     for row in rows:
@@ -1362,10 +1657,13 @@ def duplicate_context(
             "confidence": row["similarity"] if not row["is_leader"] else row["confidence"],
             "flags": sorted(set(flags)),
             "is_leader": bool(row["is_leader"]),
+            "leader_uuid": row["leader_uuid"],
             "resolution_ratio": row["resolution_ratio"],
             "quality_margin": float(row["leader_quality"] or 0) - float(row["quality_score"] or 0),
             "time_delta_seconds": evidence.get("time_delta"),
             "pair_evidence": evidence,
+            "recommended_pick": bool(evidence.get("recommended_pick")),
+            "member_count": int(row["member_count"] or 0),
         }
     return result
 
@@ -1404,21 +1702,30 @@ def upsert_decision(
     asset_uuid: str,
     *,
     disposition: str,
+    selection: str,
     confidence: float,
     flags: list[str],
     reasons: list[dict[str, object]],
 ) -> None:
+    if disposition not in {"keep", "review", "reject"}:
+        raise ValueError("Invalid disposition")
+    if selection not in {"pick", "alternative", "review", "reject"}:
+        raise ValueError("Invalid selection")
     connection.execute(
         """
         INSERT INTO decisions (
-            project_id, asset_uuid, auto_disposition, final_disposition, confidence,
-            flags_json, reasons_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            project_id, asset_uuid, auto_disposition, final_disposition,
+            auto_selection, final_selection, confidence, flags_json, reasons_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
             auto_disposition=excluded.auto_disposition,
             final_disposition=CASE
                 WHEN decisions.manual_override=1 THEN decisions.manual_disposition
                 ELSE excluded.auto_disposition END,
+            auto_selection=excluded.auto_selection,
+            final_selection=CASE
+                WHEN decisions.manual_override=1 THEN decisions.manual_selection
+                ELSE excluded.auto_selection END,
             confidence=excluded.confidence,
             flags_json=excluded.flags_json,
             reasons_json=excluded.reasons_json,
@@ -1429,6 +1736,8 @@ def upsert_decision(
             asset_uuid,
             disposition,
             disposition,
+            selection,
+            selection,
             confidence,
             json.dumps(flags),
             json.dumps(reasons),
@@ -1446,22 +1755,45 @@ def set_manual_decision(
 ) -> None:
     if disposition not in {None, "keep", "review", "reject"}:
         raise ValueError("Invalid disposition")
+    selection = {"keep": "pick", "review": "review", "reject": "reject"}.get(disposition)
     cursor = connection.execute(
         """
         UPDATE decisions SET manual_disposition=?,
             final_disposition=COALESCE(?, auto_disposition),
+            manual_selection=?, final_selection=COALESCE(?, auto_selection),
             manual_override=?, manual_note=?, reviewed=1, updated_at=?
         WHERE project_id=? AND asset_uuid=?
         """,
         (
             disposition,
             disposition,
+            selection,
+            selection,
             int(disposition is not None),
             note,
             utc_now(),
             project_id,
             asset_uuid,
         ),
+    )
+    if not cursor.rowcount:
+        raise KeyError(asset_uuid)
+
+
+def set_manual_rating(
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuid: str,
+    rating: int | None,
+) -> None:
+    if rating is not None and (isinstance(rating, bool) or not 1 <= rating <= 5):
+        raise ValueError("Rating must be between 1 and 5")
+    cursor = connection.execute(
+        """
+        UPDATE decisions SET manual_rating=?, reviewed=1, updated_at=?
+        WHERE project_id=? AND asset_uuid=?
+        """,
+        (rating, utc_now(), project_id, asset_uuid),
     )
     if not cursor.rowcount:
         raise KeyError(asset_uuid)
@@ -1634,6 +1966,10 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         "review": 0,
         "reject": 0,
         "reviewed": 0,
+        "pick": 0,
+        "alternative": 0,
+        "selection_review": 0,
+        "selection_reject": 0,
     }
     row = connection.execute(
         """
@@ -1654,6 +1990,15 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         (project_id,),
     ).fetchall():
         result[str(row["disposition"])] = int(row["count"])
+    for row in connection.execute(
+        """
+        SELECT final_selection selection, COUNT(*) count
+        FROM decisions WHERE project_id=? GROUP BY final_selection
+        """,
+        (project_id,),
+    ).fetchall():
+        key = str(row["selection"])
+        result[key if key in {"pick", "alternative"} else f"selection_{key}"] = int(row["count"])
     result["reviewed"] = int(
         connection.execute(
             "SELECT COUNT(*) FROM decisions WHERE project_id=? AND reviewed=1", (project_id,)

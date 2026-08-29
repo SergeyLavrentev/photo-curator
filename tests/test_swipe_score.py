@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from photo_curator.analysis.decision_engine import album_selection_threshold, decide_asset
+from photo_curator.analysis.ensemble import ENSEMBLE_MODEL_VERSION, ENSEMBLE_NORMALIZATION
 from photo_curator.analysis.swipe_score import (
     POSITIVE_APPLE_SCORE_KEYS,
     apple_score_percentiles,
     calculate_swipe_score,
+    engine_score_percentiles,
 )
 
 
@@ -59,7 +61,8 @@ def test_native_aesthetics_outranks_technical_perfection() -> None:
     )
 
     assert visually_strong.score > technically_clean_but_weak.score
-    assert visually_strong.components["technical_penalty"] == 12
+    # Album-relative sharpness is ranking evidence, not an absolute defect penalty.
+    assert visually_strong.components["technical_penalty"] == 0
     assert visually_strong.components["generic_aesthetics"] == 92.5
     assert visually_strong.model_versions["aesthetics"].endswith("revision-1")
 
@@ -107,7 +110,147 @@ def test_missing_detailed_apple_scores_are_neutral_not_repeated_aesthetic_votes(
     assert score.components["moment_and_subject"] == 50
 
 
-def test_aesthetic_consensus_can_reject_an_absolute_low_outlier() -> None:
+def test_unvalidated_local_models_are_advisory_and_do_not_change_ranking() -> None:
+    signals = _signals(0.6)
+    signals.update(
+        {
+            "nima_aesthetics": {
+                "status": "ready",
+                "engine_name": "nima-inception-v2-ava-coreml",
+                "engine_version": "test",
+                "request_revision": 1,
+                "value": {"aesthetic_score": 40.0},
+            },
+            "mobileclip": {
+                "status": "ready",
+                "engine_name": "mobileclip-s0-coreml",
+                "engine_version": "test",
+                "request_revision": 1,
+                "value": {"aesthetic_score": 70.0, "genre": "portrait"},
+            },
+            "musiq_quality": {
+                "status": "ready",
+                "engine_name": "musiq-koniq10k-coreml",
+                "engine_version": "test",
+                "request_revision": 1,
+                "value": {"quality_score": 60.0},
+            },
+        }
+    )
+
+    consensus = calculate_swipe_score(_asset("consensus"), None, signals)
+    apple_only = calculate_swipe_score(_asset("apple"), None, _signals(0.6))
+
+    assert consensus.components["generic_aesthetics"] == 80.0
+    assert consensus.components["nima_aesthetics"] == 40.0
+    assert consensus.components["mobileclip_aesthetics"] == 70.0
+    assert consensus.components["musiq_quality"] == 60.0
+    assert consensus.confidence > apple_only.confidence
+    assert set(consensus.model_versions) >= {
+        "aesthetics",
+        "nima_aesthetics",
+        "mobileclip",
+        "musiq_quality",
+    }
+
+
+def test_cross_model_disagreement_reduces_reliability_on_common_album_scale() -> None:
+    signals = _signals(0.6)
+    signals.update(
+        {
+            "nima_aesthetics": {
+                "status": "ready",
+                "value": {"aesthetic_score": 40.0},
+            },
+            "mobileclip": {
+                "status": "ready",
+                "value": {"aesthetic_score": 70.0},
+            },
+        }
+    )
+
+    agreeing = calculate_swipe_score(
+        _asset("agreeing"),
+        None,
+        signals,
+        ensemble_percentiles={"apple": 60, "nima": 62, "mobileclip": 58},
+    )
+    disagreeing = calculate_swipe_score(
+        _asset("disagreeing"),
+        None,
+        signals,
+        ensemble_percentiles={"apple": 95, "nima": 5, "mobileclip": 50},
+    )
+
+    assert agreeing.components["model_count"] == 3
+    assert agreeing.components["model_disagreement"] == 2.67
+    assert disagreeing.components["model_disagreement"] == 60.0
+    assert disagreeing.components["evidence_coverage"] == agreeing.components["evidence_coverage"]
+    assert disagreeing.confidence < agreeing.confidence
+
+
+def test_codex_disagreement_uses_album_percentiles_when_ranking_is_validated() -> None:
+    assets = [_asset("high"), _asset("low")]
+    signals = {
+        "high": {
+            "codex_vision": {
+                "status": "ready",
+                "value": {"aesthetic_score": 90.0},
+            }
+        },
+        "low": {
+            "codex_vision": {
+                "status": "ready",
+                "value": {"aesthetic_score": 20.0},
+            }
+        },
+    }
+
+    percentiles = engine_score_percentiles(assets, signals)
+
+    assert percentiles["high"]["codex"] == 100.0
+    assert percentiles["low"]["codex"] == 0.0
+
+
+def test_validated_ensemble_uses_common_album_percentile_scale() -> None:
+    signals = _signals(0.6)
+    signals.update(
+        {
+            "nima_aesthetics": {
+                "status": "ready",
+                "value": {"aesthetic_score": 40.0},
+            },
+            "mobileclip": {
+                "status": "ready",
+                "value": {"aesthetic_score": 70.0},
+            },
+        }
+    )
+    model = {
+        "status": "validated",
+        "model_version": ENSEMBLE_MODEL_VERSION,
+        "normalization": ENSEMBLE_NORMALIZATION,
+        "weights": {"apple": 0.2, "nima": 0.3, "mobileclip": 0.5},
+        "calibration_pairs": 50,
+        "held_out_pairs": 20,
+        "calibration_album_count": 2,
+        "held_out_album_count": 1,
+        "held_out_uplift": 0.05,
+    }
+
+    score = calculate_swipe_score(
+        _asset("validated"),
+        None,
+        signals,
+        ensemble_model=model,
+        ensemble_percentiles={"apple": 90, "nima": 20, "mobileclip": 60},
+    )
+
+    assert score.components["generic_aesthetics"] == 54.0
+    assert score.model_versions["generic_ensemble"] == ENSEMBLE_MODEL_VERSION
+
+
+def test_aesthetic_consensus_does_not_reject_a_unique_low_outlier() -> None:
     apple = {key: 0.10 for keys in POSITIVE_APPLE_SCORE_KEYS.values() for key in keys}
     photo = _asset("consensus-low")
     score = calculate_swipe_score(
@@ -120,12 +263,11 @@ def test_aesthetic_consensus_can_reject_an_absolute_low_outlier() -> None:
     decision = decide_asset(photo, None, "balanced", score)
 
     assert score.score <= 25
-    assert score.confidence >= 0.82
-    assert decision.disposition == "reject"
-    assert decision.reasons[0]["code"] == "weak_aesthetics"
+    assert decision.disposition == "keep"
+    assert any(reason["code"] == "no_confirmed_defect" for reason in decision.reasons)
 
 
-def test_reliable_personal_mismatch_can_corroborate_low_generic_aesthetics() -> None:
+def test_reliable_personal_mismatch_cannot_make_a_unique_photo_safe_to_reject() -> None:
     photo = _asset("personally-low")
     score = calculate_swipe_score(
         photo,
@@ -138,8 +280,8 @@ def test_reliable_personal_mismatch_can_corroborate_low_generic_aesthetics() -> 
 
     decision = decide_asset(photo, None, "balanced", score)
 
-    assert decision.disposition == "reject"
-    assert any(reason["code"] == "personal_taste_mismatch" for reason in decision.reasons)
+    assert decision.disposition == "keep"
+    assert score.personal_delta == -10
 
 
 def test_rich_apple_scores_are_relative_and_zero_means_missing_positive_signal() -> None:

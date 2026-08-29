@@ -19,82 +19,177 @@ enum NativeWorkerClientError: LocalizedError {
 }
 
 final class NativeWorkerClient: @unchecked Sendable {
-    private let lock = NSLock()
+    private let stateLock = NSLock()
+    private let writeLock = NSLock()
+    private let readLock = NSLock()
+    private let responseCondition = NSCondition()
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
     private var responseBuffer = Data()
     private var nextRequestID = 0
     private var workerPID: pid_t = 0
+    private var completedResponses: [String: NativeWorkerResponseEnvelope] = [:]
+    private var progressHandlers: [String: ([String: JSONValue]) -> Void] = [:]
+    private var terminalError: NativeWorkerClientError?
 
     func start() throws {
-        lock.lock()
-        defer { lock.unlock() }
+        stateLock.lock()
+        defer { stateLock.unlock() }
         try startLocked()
     }
 
-    func request(
+    private func requestValue(
         method: String,
-        params: [String: Any] = [:],
-        progress: (([String: Any]) -> Void)? = nil
-    ) throws -> Any {
-        lock.lock()
-        defer { lock.unlock() }
-        try startLocked()
-        guard let input else { throw NativeWorkerClientError.invalidResponse }
+        params: JSONValue,
+        progress: (([String: JSONValue]) -> Void)? = nil
+    ) throws -> JSONValue {
+        stateLock.lock()
+        do {
+            try startLocked()
+            stateLock.unlock()
+        } catch {
+            stateLock.unlock()
+            throw error
+        }
 
+        writeLock.lock()
+        guard let input else {
+            writeLock.unlock()
+            throw NativeWorkerClientError.invalidResponse
+        }
         nextRequestID += 1
         let requestID = "native-\(nextRequestID)"
-        let request: [String: Any] = [
-            "schema_version": 1,
-            "id": requestID,
-            "method": method,
-            "params": params,
-        ]
-        var data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
-        data.append(0x0A)
-        try writeAll(data, to: input)
+        let request = NativeWorkerRequestEnvelope(
+            schemaVersion: 1,
+            id: requestID,
+            method: method,
+            params: params
+        )
+        var data: Data
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            data = try encoder.encode(request)
+            data.append(0x0A)
+        } catch {
+            writeLock.unlock()
+            throw error
+        }
+        responseCondition.lock()
+        if let progress { progressHandlers[requestID] = progress }
+        responseCondition.unlock()
+        do {
+            try writeAll(data, to: input)
+            writeLock.unlock()
+        } catch {
+            writeLock.unlock()
+            responseCondition.lock()
+            progressHandlers.removeValue(forKey: requestID)
+            responseCondition.unlock()
+            throw error
+        }
+        defer {
+            responseCondition.lock()
+            progressHandlers.removeValue(forKey: requestID)
+            responseCondition.unlock()
+        }
 
         while true {
-            let response = try readResponseLocked()
-            guard response["schema_version"] as? Int == 1,
-                  response["id"] as? String == requestID
-            else { throw NativeWorkerClientError.invalidResponse }
-            if let event = response["event"] as? [String: Any] {
-                progress?(event)
-                continue
+            responseCondition.lock()
+            if let response = completedResponses.removeValue(forKey: requestID) {
+                responseCondition.unlock()
+                return try result(from: response, requestID: requestID)
             }
-            if let error = response["error"] as? [String: Any] {
-                throw NativeWorkerClientError.worker(
-                    error["message"] as? String ?? "Ошибка движка"
-                )
+            if let terminalError {
+                responseCondition.unlock()
+                throw terminalError
             }
-            guard let result = response["result"] else {
-                throw NativeWorkerClientError.invalidResponse
+            responseCondition.unlock()
+
+            if readLock.try() {
+                let response: NativeWorkerResponseEnvelope
+                do {
+                    response = try readResponse()
+                } catch {
+                    readLock.unlock()
+                    let failure = recordTerminal(error)
+                    throw failure
+                }
+                readLock.unlock()
+                do {
+                    try route(response)
+                } catch {
+                    throw recordTerminal(error)
+                }
+            } else {
+                responseCondition.lock()
+                _ = responseCondition.wait(until: Date(timeIntervalSinceNow: 0.2))
+                responseCondition.unlock()
             }
-            return result
+        }
+    }
+
+    func request<Params: Encodable, Response: Decodable>(
+        method: String,
+        params: Params,
+        as responseType: Response.Type
+    ) throws -> Response {
+        do {
+            let paramsValue = try jsonValue(from: params)
+            let result = try requestValue(method: method, params: paramsValue)
+            return try decode(responseType, from: result)
+        } catch let error as NativeWorkerClientError {
+            throw error
+        } catch {
+            throw NativeWorkerClientError.invalidResponse
+        }
+    }
+
+    func request<Params: Encodable, Response: Decodable, Event: Decodable>(
+        method: String,
+        params: Params,
+        as responseType: Response.Type,
+        progressAs eventType: Event.Type,
+        progress: @escaping (Event) -> Void
+    ) throws -> Response {
+        do {
+            let paramsValue = try jsonValue(from: params)
+            let result = try requestValue(method: method, params: paramsValue) { event in
+                guard let decoded = try? self.decode(eventType, from: .object(event)) else {
+                    return
+                }
+                progress(decoded)
+            }
+            return try decode(responseType, from: result)
+        } catch let error as NativeWorkerClientError {
+            throw error
+        } catch {
+            throw NativeWorkerClientError.invalidResponse
         }
     }
 
     func stop() {
-        guard lock.try() else {
+        guard stateLock.try() else {
             if workerPID > 0 { Darwin.kill(workerPID, SIGTERM) }
             return
         }
-        defer { lock.unlock() }
+        defer { stateLock.unlock() }
         guard let process else { return }
         if process.isRunning, let input {
+            writeLock.lock()
             nextRequestID += 1
-            let request: [String: Any] = [
-                "schema_version": 1,
-                "id": "shutdown-\(nextRequestID)",
-                "method": "shutdown",
-                "params": [:],
-            ]
-            if var data = try? JSONSerialization.data(withJSONObject: request) {
+            let request = NativeWorkerRequestEnvelope(
+                schemaVersion: 1,
+                id: "shutdown-\(nextRequestID)",
+                method: "shutdown",
+                params: .object([:])
+            )
+            if var data = try? JSONEncoder().encode(request) {
                 data.append(0x0A)
                 try? writeAll(data, to: input)
             }
+            writeLock.unlock()
             for _ in 0..<20 where process.isRunning {
                 Thread.sleep(forTimeInterval: 0.1)
             }
@@ -157,19 +252,20 @@ final class NativeWorkerClient: @unchecked Sendable {
         input = parentInput
         output = parentOutput
         responseBuffer.removeAll(keepingCapacity: true)
+        responseCondition.lock()
+        terminalError = nil
+        completedResponses.removeAll()
+        progressHandlers.removeAll()
+        responseCondition.unlock()
     }
 
-    private func readResponseLocked() throws -> [String: Any] {
+    private func readResponse() throws -> NativeWorkerResponseEnvelope {
         guard let output else { throw NativeWorkerClientError.invalidResponse }
         while true {
             if let newline = responseBuffer.firstIndex(of: 0x0A) {
                 let line = responseBuffer[..<newline]
                 responseBuffer.removeSubrange(...newline)
-                let value = try JSONSerialization.jsonObject(with: Data(line))
-                guard let response = value as? [String: Any] else {
-                    throw NativeWorkerClientError.invalidResponse
-                }
-                return response
+                return try JSONDecoder().decode(NativeWorkerResponseEnvelope.self, from: Data(line))
             }
             var chunk = [UInt8](repeating: 0, count: 64 * 1024)
             let count = Darwin.read(output.fileDescriptor, &chunk, chunk.count)
@@ -177,6 +273,60 @@ final class NativeWorkerClient: @unchecked Sendable {
             guard count > 0 else { throw NativeWorkerClientError.invalidResponse }
             responseBuffer.append(contentsOf: chunk.prefix(count))
         }
+    }
+
+    private func route(_ response: NativeWorkerResponseEnvelope) throws {
+        guard response.schemaVersion == 1, !response.id.isEmpty else {
+            throw NativeWorkerClientError.invalidResponse
+        }
+        let requestID = response.id
+        responseCondition.lock()
+        let handler = progressHandlers[requestID]
+        if response.event == nil {
+            completedResponses[requestID] = response
+            responseCondition.broadcast()
+        }
+        responseCondition.unlock()
+        if let event = response.event {
+            handler?(event)
+        }
+    }
+
+    private func result(
+        from response: NativeWorkerResponseEnvelope, requestID: String
+    ) throws -> JSONValue {
+        guard response.schemaVersion == 1, response.id == requestID else {
+            throw NativeWorkerClientError.invalidResponse
+        }
+        if let error = response.error {
+            throw NativeWorkerClientError.worker(error.message)
+        }
+        guard let result = response.result else {
+            throw NativeWorkerClientError.invalidResponse
+        }
+        return result
+    }
+
+    private func jsonValue<Params: Encodable>(from params: Params) throws -> JSONValue {
+        let encoded = try JSONEncoder().encode(params)
+        return try JSONDecoder().decode(JSONValue.self, from: encoded)
+    }
+
+    private func decode<Response: Decodable>(
+        _ responseType: Response.Type,
+        from value: JSONValue
+    ) throws -> Response {
+        let encoded = try JSONEncoder().encode(value)
+        return try JSONDecoder().decode(responseType, from: encoded)
+    }
+
+    private func recordTerminal(_ error: Error) -> NativeWorkerClientError {
+        let failure = error as? NativeWorkerClientError ?? .invalidResponse
+        responseCondition.lock()
+        terminalError = failure
+        responseCondition.broadcast()
+        responseCondition.unlock()
+        return failure
     }
 
     private func writeAll(_ data: Data, to handle: FileHandle) throws {
@@ -220,5 +370,9 @@ final class NativeWorkerClient: @unchecked Sendable {
         process = nil
         workerPID = 0
         responseBuffer.removeAll()
+        responseCondition.lock()
+        terminalError = .invalidResponse
+        responseCondition.broadcast()
+        responseCondition.unlock()
     }
 }

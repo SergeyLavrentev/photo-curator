@@ -170,9 +170,17 @@ class PhotoKitProvider:
     ) -> list[PhotoAsset]:
         if album_id in self._assets_by_album:
             cached = self._assets_by_album[album_id]
-            if progress:
-                progress(len(cached), len(cached))
-            return cached
+            # ~/Library/Caches is purgeable. Never return an in-memory PhotoKit
+            # payload whose advertised review render has disappeared on disk:
+            # preview repair must ask PhotoKit to materialize it again.
+            if all(
+                not asset.review_render or bool(asset.source_path and asset.source_path.is_file())
+                for asset in cached
+            ):
+                if progress:
+                    progress(len(cached), len(cached))
+                return cached
+            self._assets_by_album.pop(album_id, None)
         self._load_albums()
         if album_id not in self._albums:
             raise KeyError(album_id)

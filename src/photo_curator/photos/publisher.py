@@ -77,7 +77,11 @@ class PhotosPublisher:
         candidates = [
             asset
             for asset in assets
-            if asset.get("final_disposition") == ("keep" if kind == "best" else "reject")
+            if (
+                asset.get("final_selection") == "pick"
+                if kind == "best"
+                else asset.get("final_disposition") == "reject"
+            )
         ]
         try:
             refreshed = {
@@ -295,7 +299,7 @@ class PhotosPublisher:
         elif self._is_photokit_project(project):
             try:
                 progress_args = {"progress": progress} if progress else {}
-                native_result = self.local_importer.duplicate_assets(
+                native_result = self.local_importer.add_assets(
                     str(publish["album_name"]), prepared, **progress_args
                 )
                 destination_album_id = str(native_result["album_identifier"])
@@ -342,7 +346,7 @@ class PhotosPublisher:
             return PublishValidation(
                 [], blockers=["Для дискового проекта в Photos публикуется только финальный Best"]
             )
-        candidates = [asset for asset in assets if asset.get("final_disposition") == "keep"]
+        candidates = [asset for asset in assets if asset.get("final_selection") == "pick"]
         accepted: list[str] = []
         blockers: list[str] = []
         root = self.paths.data_dir / "local_albums"

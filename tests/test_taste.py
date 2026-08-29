@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from photo_curator.analysis.taste import (
+    TASTE_MODEL_VERSION,
     TasteProfileError,
     capture_preference,
     compatible_taste_model,
@@ -58,6 +59,8 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
     assert model.personal_delta(signals["demo-012"]["feature_print"]) > model.personal_delta(
         signals["demo-001"]["feature_print"]
     )
+    assert model.personal_delta({}) == 0.0
+    assert model.personal_delta({"status": "unavailable"}) == 0.0
 
     coordinator.run(project_id, from_stage="decisions")
     with database_connection(paths.database) as connection:
@@ -65,6 +68,21 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
     assert any(abs(float(score["personal_delta"])) > 0.05 for score in scores)
     assert all(float(score["components"]["personal_taste_reliability"]) < 10 for score in scores)
     assert all("personal_taste" in score["model_versions"] for score in scores)
+
+    with database_connection(paths.database) as connection:
+        connection.execute(
+            "DELETE FROM analysis_signals "
+            "WHERE project_id=? AND asset_uuid='demo-006' AND signal_kind='feature_print'",
+            (project_id,),
+        )
+    coordinator.run(project_id, from_stage="decisions")
+    with database_connection(paths.database) as connection:
+        missing_feature_score = next(
+            score
+            for score in repository.list_swipe_scores(connection, project_id)
+            if score["asset_uuid"] == "demo-006"
+        )
+    assert missing_feature_score["personal_delta"] == 0.0
 
 
 def test_taste_model_is_explicitly_invalidated_when_vision_schema_changes(
@@ -109,6 +127,25 @@ def test_taste_model_is_explicitly_invalidated_when_vision_schema_changes(
         restored_scores = repository.list_swipe_scores(connection, project_id)
     assert restored["status"] == "ready"
     assert any(abs(float(score["personal_delta"])) > 0.05 for score in restored_scores)
+
+
+def test_legacy_taste_model_is_retrained_instead_of_silently_ignored(tmp_path: Path) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        _capture_training_pairs(connection, project_id)
+        train_taste_profile(connection)
+        connection.execute(
+            "UPDATE taste_profiles SET model_version='pairwise-linear-v1' WHERE id='default'"
+        )
+        signals = repository.analysis_signals_by_asset(connection, project_id)
+        migrated = compatible_taste_model(connection, signals)
+        profile = repository.get_taste_profile(connection)
+
+    assert migrated is not None
+    assert migrated.model_version == TASTE_MODEL_VERSION
+    assert profile["status"] == "ready"
+    assert profile["model_version"] == TASTE_MODEL_VERSION
 
 
 def test_preference_vectors_survive_project_deletion_and_reset_is_complete(tmp_path: Path) -> None:

@@ -16,7 +16,21 @@ mkdir -p "$mount_point"
 mounted=0
 cleanup() {
   if [[ "$mounted" == "1" ]]; then
-    /usr/bin/hdiutil detach "$mount_point" -quiet || true
+    for _ in 1 2 3; do
+      if /usr/bin/hdiutil detach "$mount_point" -quiet; then
+        mounted=0
+        break
+      fi
+      /bin/sleep 1
+    done
+  fi
+  if [[ "$mounted" == "1" ]]; then
+    if /usr/bin/hdiutil detach "$mount_point" -force -quiet; then
+      mounted=0
+    else
+      echo "DMG verification cleanup failed: volume is still mounted at $mount_point" >&2
+      return 1
+    fi
   fi
   /bin/rm -rf "$work_root"
 }

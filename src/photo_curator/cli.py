@@ -9,6 +9,7 @@ from photo_curator import __version__
 from photo_curator.acceptance import (
     AcceptanceManifestError,
     build_manifest_template,
+    build_native_quality_evidence,
     build_score_snapshot,
     compare_acceptance_scores,
     evaluate_acceptance,
@@ -17,6 +18,7 @@ from photo_curator.acceptance import (
     load_score_snapshot,
 )
 from photo_curator.analysis.coreml_benchmark import CoreMLBenchmarkEngine, CoreMLBenchmarkError
+from photo_curator.analysis.local_models import VALID_ENGINES, LocalModelEngine, LocalModelError
 from photo_curator.analysis.model_registry import (
     ModelRegistryError,
     approve_model,
@@ -30,6 +32,11 @@ from photo_curator.analysis.native_vision import (
     NativeVisionError,
     aesthetics_score_snapshot,
 )
+from photo_curator.analysis.performance_benchmark import (
+    DEFAULT_MODES,
+    run_local_model_performance_benchmark,
+)
+from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
 from photo_curator.db.repository import get_project, list_assets, list_duplicate_groups
@@ -55,10 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
             "version",
             "acceptance-template",
             "acceptance-score-export",
+            "acceptance-evidence-export",
             "acceptance-evaluate",
             "acceptance-compare",
             "vision-benchmark",
             "coreml-benchmark",
+            "local-model-performance-benchmark",
             "model-register",
             "model-list",
             "model-approve",
@@ -134,6 +143,44 @@ def build_parser() -> argparse.ArgumentParser:
         default=(100, 2_000, 5_000),
         help="Размеры synthetic inventories через запятую",
     )
+    parser.add_argument(
+        "--gallery-count",
+        type=positive_int,
+        default=50_000,
+        help="Размер реальной SQLite gallery-выборки",
+    )
+    parser.add_argument(
+        "--benchmark-modes",
+        type=benchmark_modes,
+        default=DEFAULT_MODES,
+        help="Режимы work-batch x concurrency, например 1x1,16x1,16x2",
+    )
+    parser.add_argument(
+        "--engines",
+        type=local_model_engines,
+        default=tuple(sorted(VALID_ENGINES)),
+        help="Локальные движки через запятую: nima,mobileclip,musiq",
+    )
+    parser.add_argument(
+        "--max-assets",
+        type=positive_int,
+        default=48,
+        help="Максимум готовых preview для performance benchmark",
+    )
+    parser.add_argument(
+        "--asset-dir",
+        type=Path,
+        help="Локальный каталог preview вместо project-id (не обращается к Photos)",
+    )
+    parser.add_argument(
+        "--max-peak-rss-mib",
+        type=positive_float,
+        default=1024.0,
+        help="Fail-closed бюджет peak RSS в MiB",
+    )
+    parser.add_argument("--energy-trace", type=Path, help="Сохранённый Instruments .trace")
+    parser.add_argument("--energy-joules", type=positive_float)
+    parser.add_argument("--max-energy-joules", type=positive_float)
     parser.add_argument("--json", action="store_true", help="Вывести acceptance-отчёт как JSON")
     return parser
 
@@ -150,6 +197,39 @@ def positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("значение должно быть положительным")
     return parsed
+
+
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("значение должно быть положительным")
+    return parsed
+
+
+def benchmark_modes(value: str) -> tuple[tuple[int, int], ...]:
+    try:
+        modes = tuple(
+            tuple(int(part) for part in item.lower().split("x", maxsplit=1))
+            for item in value.split(",")
+            if item.strip()
+        )
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("режимы должны иметь вид 1x1,16x1,16x2") from error
+    if not modes or any(len(mode) != 2 for mode in modes):
+        raise argparse.ArgumentTypeError("режимы должны иметь вид 1x1,16x1,16x2")
+    return modes
+
+
+def local_model_engines(value: str) -> tuple[str, ...]:
+    engines = tuple(
+        dict.fromkeys(item.strip().lower() for item in value.split(",") if item.strip())
+    )
+    unknown = set(engines) - VALID_ENGINES
+    if not engines or unknown:
+        raise argparse.ArgumentTypeError(
+            "engines должны быть из: " + ", ".join(sorted(VALID_ENGINES))
+        )
+    return engines
 
 
 def positive_int_list(value: str) -> tuple[int, ...]:
@@ -256,6 +336,33 @@ def run_acceptance_command(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def run_acceptance_evidence_export_command(args: argparse.Namespace) -> int:
+    """Export the current, generic and Apple-only snapshots with proven provenance."""
+    if not args.project_id:
+        raise AcceptanceManifestError("Укажите --project-id")
+    paths = default_application_paths()
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        try:
+            get_project(connection, args.project_id)
+        except KeyError as error:
+            raise AcceptanceManifestError(f"Проект не найден: {args.project_id}") from error
+        evidence = build_native_quality_evidence(
+            args.project_id,
+            repository.list_assets(connection, args.project_id),
+            repository.list_preference_examples(connection),
+            repository.analysis_signals_by_asset(connection, args.project_id),
+        )
+    rendered = json.dumps(evidence, ensure_ascii=False, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+        print(f"Acceptance evidence: {args.output}")
+    else:
+        print(rendered, end="")
+    return 0
+
+
 def run_vision_benchmark_command(args: argparse.Namespace) -> int:
     if not args.project_id:
         raise NativeVisionError("Укажите --project-id")
@@ -294,7 +401,11 @@ def run_vision_benchmark_command(args: argparse.Namespace) -> int:
 
 
 def run_release_benchmark_command(args: argparse.Namespace) -> int:
-    report = run_release_benchmark(counts=tuple(args.counts), iterations=args.iterations)
+    report = run_release_benchmark(
+        counts=tuple(args.counts),
+        iterations=args.iterations,
+        gallery_count=getattr(args, "gallery_count", 50_000),
+    )
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -354,6 +465,58 @@ def run_coreml_benchmark_command(args: argparse.Namespace) -> int:
         print(rendered, end="")
     failed = [row for row in report["assets"] if row.get("error")]
     return 1 if failed else 0
+
+
+def run_local_model_performance_benchmark_command(args: argparse.Namespace) -> int:
+    paths = default_application_paths()
+    if args.asset_dir:
+        if args.project_id:
+            raise LocalModelError("Укажите только один источник: --project-id или --asset-dir")
+        if not args.asset_dir.is_dir():
+            raise LocalModelError(f"Каталог preview не найден: {args.asset_dir}")
+        supported = {".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff"}
+        assets = [
+            (path.stem, path)
+            for path in sorted(args.asset_dir.iterdir())
+            if path.is_file() and path.suffix.lower() in supported
+        ][: args.max_assets]
+    else:
+        if not args.project_id:
+            raise LocalModelError("Укажите --project-id или --asset-dir")
+        with database_connection(paths.database) as connection:
+            migrate(connection)
+            try:
+                get_project(connection, args.project_id)
+            except KeyError as error:
+                raise LocalModelError(f"Проект не найден: {args.project_id}") from error
+            assets = [
+                (str(asset["asset_uuid"]), Path(str(asset["review_path"])))
+                for asset in list_assets(connection, args.project_id)
+                if asset.get("cache_state") == "ready"
+                and asset.get("review_path")
+                and Path(str(asset["review_path"])).is_file()
+            ][: args.max_assets]
+    if not assets:
+        raise LocalModelError("В проекте нет готовых preview для performance benchmark")
+    report = run_local_model_performance_benchmark(
+        LocalModelEngine(paths),
+        assets,
+        engines=set(args.engines),
+        modes=args.benchmark_modes,
+        repetitions=args.iterations,
+        max_peak_rss_bytes=int(args.max_peak_rss_mib * 1024 * 1024),
+        energy_trace=args.energy_trace,
+        energy_joules=args.energy_joules,
+        max_energy_joules=args.max_energy_joules,
+    )
+    rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+        print(f"Local model performance benchmark: {args.output}")
+    else:
+        print(rendered, end="")
+    return 0 if report["passed"] else 1
 
 
 def run_model_register_command(args: argparse.Namespace) -> int:
@@ -443,6 +606,13 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Core ML benchmark error: {error}", file=sys.stderr)
             result = 2
         raise SystemExit(result)
+    if args.command == "local-model-performance-benchmark":
+        try:
+            result = run_local_model_performance_benchmark_command(args)
+        except (LocalModelError, OSError, ValueError) as error:
+            print(f"Local model performance benchmark error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
     if args.command == "model-register":
         try:
             result = run_model_register_command(args)
@@ -489,6 +659,13 @@ def main(argv: list[str] | None = None) -> None:
         paths.ensure()
         configure_logging(paths.log_file)
         raise SystemExit(run_native_worker(paths, demo=args.demo))
+    if args.command == "acceptance-evidence-export":
+        try:
+            result = run_acceptance_evidence_export_command(args)
+        except AcceptanceManifestError as error:
+            print(f"Acceptance error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
     if args.command in {
         "acceptance-template",
         "acceptance-score-export",

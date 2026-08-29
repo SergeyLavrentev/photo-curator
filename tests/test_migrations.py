@@ -19,6 +19,13 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         publish_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(publishes)").fetchall()
         }
+        decision_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(decisions)").fetchall()
+        }
+        quality_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(quality_asset_labels)").fetchall()
+        }
 
     assert version == SCHEMA_VERSION
     assert {
@@ -39,8 +46,22 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "taste_assets",
         "model_registry",
         "quality_asset_labels",
+        "quality_preference_examples",
     } <= tables
     assert "destination_album_id" in publish_columns
+    assert {
+        "auto_selection",
+        "manual_selection",
+        "final_selection",
+        "manual_rating",
+    } <= decision_columns
+    assert {
+        "defect_codes_json",
+        "defect_severity",
+        "defect_confidence",
+        "quality_note",
+        "lab_sampled",
+    } <= quality_columns
 
 
 def test_migration_is_idempotent(tmp_path: Path) -> None:

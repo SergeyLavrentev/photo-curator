@@ -3,10 +3,21 @@ from pathlib import Path
 from PIL import Image
 
 from photo_curator.pipeline.previews import (
+    analysis_preview_is_eligible,
     build_previews,
     shared_thumbnail_cache_path,
     source_fingerprint,
 )
+
+
+def test_analysis_preview_resolution_gate_is_fail_closed(tmp_path: Path) -> None:
+    tiny = tmp_path / "tiny.jpg"
+    valid = tmp_path / "valid.jpg"
+    Image.new("RGB", (48, 64), "gray").save(tiny)
+    Image.new("RGB", (768, 1024), "gray").save(valid)
+
+    assert analysis_preview_is_eligible(tiny) is False
+    assert analysis_preview_is_eligible(valid) is True
 
 
 def test_preview_builder_normalizes_orientation_and_dimensions(tmp_path: Path) -> None:

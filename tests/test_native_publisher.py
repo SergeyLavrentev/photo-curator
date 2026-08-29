@@ -18,7 +18,15 @@ class RecordingRunner:
     def __call__(self, args: list[str], *, timeout: int) -> CommandResult:
         self.calls.append((args, timeout))
         if args[-1] == "--capability":
-            return CommandResult(args, 0, "photokit-publish-duplicates-v2\n", "")
+            return CommandResult(args, 0, "photokit-publish-existing-assets-v6\n", "")
+        if "--delete-album" in args:
+            album_identifier = args[-1]
+            return CommandResult(
+                args,
+                0,
+                json.dumps({"album_identifier": album_identifier, "deleted": True}) + "\n",
+                "",
+            )
         self.request_path = Path(args[-1])
         self.payload = json.loads(self.request_path.read_text(encoding="utf-8"))
         if self.publish_error:
@@ -60,6 +68,35 @@ def test_native_duplicate_assets_uses_ephemeral_request(
     assert not runner.request_path.exists()
 
 
+def test_native_add_assets_uses_existing_identifiers_without_export_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = RecordingRunner()
+    importer = make_importer(tmp_path, monkeypatch, runner)
+
+    importer.add_assets("Best", ["asset-1", "asset-2"])
+
+    assert runner.payload == {
+        "album_name": "Best",
+        "existing_asset_identifiers": ["asset-1", "asset-2"],
+    }
+
+
+def test_native_acceptance_album_cleanup_uses_exact_identifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = RecordingRunner()
+    importer = make_importer(tmp_path, monkeypatch, runner)
+
+    result = importer.delete_album("album-created-by-acceptance")
+
+    assert result == {"album_identifier": "album-created-by-acceptance", "deleted": True}
+    assert runner.calls[-1] == (
+        [str(importer.executable), "--delete-album", "album-created-by-acceptance"],
+        120,
+    )
+
+
 def test_native_publish_failure_is_reported_and_request_is_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -85,7 +122,7 @@ def test_native_publish_rejects_invalid_helper_output(
 
     def invalid_runner(args: list[str], *, timeout: int) -> CommandResult:
         if args[-1] == "--capability":
-            return CommandResult(args, 0, "photokit-publish-duplicates-v2", "")
+            return CommandResult(args, 0, "photokit-publish-existing-assets-v6", "")
         return CommandResult(args, 0, "not-json", "")
 
     importer.runner = invalid_runner

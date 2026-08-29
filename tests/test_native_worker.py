@@ -8,9 +8,15 @@ from threading import Event
 
 import pytest
 
+import photo_curator.native_worker as native_worker_module
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
-from photo_curator.native_worker import NativeWorker, run_native_worker
+from photo_curator.native_worker import (
+    NativeWorker,
+    NativeWorkerError,
+    _asset_payload,
+    run_native_worker,
+)
 from tests.test_pipeline import build_pipeline
 
 
@@ -32,20 +38,73 @@ def test_native_worker_exposes_projects_ranked_assets_and_decisions_without_http
             "project_id": project_id,
             "asset_uuid": assets["items"][0]["asset_uuid"],
             "disposition": "keep",
+            "mutation_generation": 7,
         },
     )
 
     assert project["project"]["state"] == "ready"
     assert assets["total"] == 12
+    assert assets["schema_version"] == 1
+    assert all(item["payload_kind"] == "asset_card" for item in assets["items"])
+    assert all(len(item["reasons"]) <= 2 for item in assets["items"])
     assert assets["items"][0]["swipe_score"] >= assets["items"][-1]["swipe_score"]
     assert changed["final_disposition"] == "keep"
     assert changed["manual_disposition"] == "keep"
+    assert changed["mutation_generation"] == 7
     assert "source_path" not in changed
+    details = worker.dispatch(
+        "asset_details",
+        {"project_id": project_id, "asset_uuid": changed["asset_uuid"]},
+    )
+    assert details["payload_kind"] == "asset_details"
+    assert details["payload_schema_version"] == 1
+    rated = worker.dispatch(
+        "rating",
+        {
+            "project_id": project_id,
+            "asset_uuid": changed["asset_uuid"],
+            "rating": 4,
+        },
+    )
+    assert rated["manual_rating"] == 4
+    assert (
+        worker.dispatch(
+            "rating",
+            {
+                "project_id": project_id,
+                "asset_uuid": changed["asset_uuid"],
+                "rating": None,
+            },
+        )["manual_rating"]
+        is None
+    )
+    with pytest.raises(ValueError, match="between 1 and 5"):
+        worker.dispatch(
+            "rating",
+            {
+                "project_id": project_id,
+                "asset_uuid": changed["asset_uuid"],
+                "rating": 6,
+            },
+        )
 
     second_page = worker.dispatch("assets", {"project_id": project_id, "offset": 5, "limit": 3})
     assert second_page["offset"] == 5
     assert len(second_page["items"]) == 3
     assert second_page["items"][0]["asset_uuid"] == assets["items"][5]["asset_uuid"]
+    first_cursor_page = worker.dispatch("assets", {"project_id": project_id, "limit": 5})
+    assert first_cursor_page["next_cursor"]
+    next_cursor_page = worker.dispatch(
+        "assets",
+        {
+            "project_id": project_id,
+            "limit": 3,
+            "cursor": first_cursor_page["next_cursor"],
+        },
+    )
+    assert [item["asset_uuid"] for item in next_cursor_page["items"]] == [
+        item["asset_uuid"] for item in assets["items"][5:8]
+    ]
     kept = worker.dispatch(
         "assets",
         {"project_id": project_id, "disposition": "keep", "limit": 5000},
@@ -92,10 +151,87 @@ def test_native_worker_exposes_final_decision_reasons_not_score_highlights(
         )["items"]
         if item["asset_uuid"] == decision_asset["asset_uuid"]
     )
+    visible = worker.dispatch(
+        "asset_details",
+        {"project_id": project_id, "asset_uuid": visible["asset_uuid"]},
+    )
 
-    assert visible["reasons"] == decision_asset["reasons"]
+    assert [reason["code"] for reason in visible["reasons"]] == [
+        reason["code"] for reason in decision_asset["reasons"]
+    ]
+    weaker_duplicate = next(
+        reason for reason in visible["reasons"] if reason["code"] == "weaker_duplicate"
+    )
+    assert weaker_duplicate["duplicate_kind"] in {"exact", "burst", "scene"}
     assert visible["confidence"] == decision_asset["confidence"]
     assert visible["reasons"] != decision_asset["swipe_reasons"]
+
+
+def test_native_worker_exposes_duplicate_leader_and_technical_reason_details(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    rejected = worker.dispatch(
+        "assets", {"project_id": project_id, "disposition": "reject", "limit": 5000}
+    )["items"]
+    duplicate = next(item for item in rejected if item["duplicate_leader_uuid"])
+    duplicate = worker.dispatch(
+        "asset_details",
+        {"project_id": project_id, "asset_uuid": duplicate["asset_uuid"]},
+    )
+
+    assert duplicate["duplicate_leader_uuid"] != duplicate["asset_uuid"]
+    assert duplicate["duplicate_leader"]["asset_uuid"] == duplicate["duplicate_leader_uuid"]
+    duplicate_reason = next(
+        reason for reason in duplicate["reasons"] if reason["code"] == "weaker_duplicate"
+    )
+    assert duplicate_reason["duplicate_kind"] in {"exact", "burst", "scene"}
+    detailed_rejected = [
+        worker.dispatch(
+            "asset_details",
+            {"project_id": project_id, "asset_uuid": item["asset_uuid"]},
+        )
+        for item in rejected
+    ]
+    below_cutoff = next(
+        item
+        for item in detailed_rejected
+        if any(reason["code"] == "below_album_cutoff" for reason in item["reasons"])
+    )
+    assert len(below_cutoff["album_references"]) == 3
+    payload = _asset_payload(
+        {
+            "asset_uuid": "technical",
+            "flags": ["possible_blur", "underexposed"],
+            "reasons": [{"code": "technical_penalty", "value": 26.0}],
+        }
+    )
+    technical = payload["reasons"][0]
+    assert technical["technical_defect_codes"] == ["possible_blur", "underexposed"]
+    uncertainty = _asset_payload(
+        {
+            "asset_uuid": "uncertainty",
+            "swipe_confidence": 0.41,
+            "swipe_components": {
+                "evidence_coverage": 74.0,
+                "model_count": 3.0,
+                "model_disagreement": 28.0,
+            },
+        }
+    )
+    assert uncertainty["evidence_coverage"] == 0.74
+    assert uncertainty["model_count"] == 3
+    assert uncertainty["model_disagreement"] == 0.28
+    duplicate_only = _asset_payload(
+        {
+            "asset_uuid": "duplicate-only",
+            "reasons": [{"code": "technical_penalty", "value": 45.0}],
+        }
+    )
+    assert duplicate_only["reasons"] == []
 
 
 def test_native_worker_migrates_legacy_review_decisions_to_binary_buckets(
@@ -144,10 +280,11 @@ def test_jsonl_worker_protocol_is_versioned_correlated_and_stops_cleanly(tmp_pat
     responses = [json.loads(line) for line in output_stream.getvalue().splitlines()]
 
     assert result == 0
-    assert [response["id"] for response in responses] == ["one", "two", "three"]
-    assert responses[0]["result"]["worker_schema_version"] == 2
-    assert responses[1]["error"]["type"] == "NativeWorkerError"
-    assert responses[2]["result"] == {"status": "bye"}
+    by_id = {response["id"]: response for response in responses}
+    assert set(by_id) == {"one", "two", "three"}
+    assert by_id["one"]["result"]["worker_schema_version"] == 3
+    assert by_id["two"]["error"]["type"] == "NativeWorkerError"
+    assert by_id["three"]["result"] == {"status": "bye"}
 
 
 def test_jsonl_worker_can_boot_with_packaged_demo_provider(tmp_path: Path) -> None:
@@ -163,8 +300,49 @@ def test_jsonl_worker_can_boot_with_packaged_demo_provider(tmp_path: Path) -> No
         run_native_worker(paths, input_stream=input_stream, output_stream=output_stream, demo=True)
         == 0
     )
-    response = json.loads(output_stream.getvalue().splitlines()[0])
+    response = next(
+        json.loads(line)
+        for line in output_stream.getvalue().splitlines()
+        if json.loads(line)["id"] == "albums"
+    )
     assert response["result"]["regular"][0]["photo_count"] == 12
+
+
+def test_jsonl_worker_multiplexes_a_read_while_another_request_is_waiting(
+    tmp_path: Path,
+) -> None:
+    fast_seen = Event()
+
+    class ConcurrentWorker:
+        def dispatch(self, method, params, *, progress=None):
+            del params, progress
+            if method == "slow":
+                return {"fast_completed": fast_seen.wait(timeout=1)}
+            if method == "fast":
+                fast_seen.set()
+                return {"status": "fast"}
+            raise ValueError(method)
+
+    requests = [
+        {"schema_version": 1, "id": "slow", "method": "slow", "params": {}},
+        {"schema_version": 1, "id": "fast", "method": "fast", "params": {}},
+        {"schema_version": 1, "id": "bye", "method": "shutdown", "params": {}},
+    ]
+    output = io.StringIO()
+
+    assert (
+        run_native_worker(
+            tmp_path,
+            input_stream=io.StringIO("".join(json.dumps(row) + "\n" for row in requests)),
+            output_stream=output,
+            worker=ConcurrentWorker(),
+        )
+        == 0
+    )
+    responses = {row["id"]: row for row in map(json.loads, output.getvalue().splitlines())}
+
+    assert responses["fast"]["result"] == {"status": "fast"}
+    assert responses["slow"]["result"] == {"fast_completed": True}
 
 
 def test_native_worker_fails_closed_without_photokit_helper(
@@ -188,6 +366,50 @@ def test_native_worker_can_create_project_directly_from_shared_album(tmp_path: P
 
     assert created["album_id"] == "demo-shared-album"
     assert created["album_name"] == "Семейный Shared Album"
+    with database_connection(paths.database) as connection:
+        stored = repository.get_project(connection, str(created["id"]))
+    assert json.loads(str(stored["settings_json"]))["source_album_shared"] is True
+
+    coordinator.run(str(created["id"]))
+    candidates = worker.dispatch("quality_candidates", {"project_id": created["id"], "limit": 4})
+    assert candidates["requested"] == 4
+    assert candidates["available"] == 4
+    assert all(item["manual_disposition"] is None for item in candidates["items"])
+
+    missing_id = candidates["items"][0]["asset_uuid"]
+    with database_connection(paths.database) as connection:
+        missing_asset = repository.get_asset(connection, str(created["id"]), str(missing_id))
+    Path(str(missing_asset["review_path"])).unlink()
+    project = worker.dispatch("project", {"project_id": created["id"]})
+    assert project["summary"]["unavailable_preview_files"] == 1
+    refreshed = worker.dispatch("quality_candidates", {"project_id": created["id"], "limit": 4})
+    assert missing_id not in {item["asset_uuid"] for item in refreshed["items"]}
+
+
+def test_native_worker_persists_independent_local_engine_switches(tmp_path: Path) -> None:
+    paths, provider, coordinator, _ = build_pipeline(tmp_path)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    created = worker.dispatch(
+        "create_project",
+        {
+            "album_id": provider.ALBUM_ID,
+            "engine_apple": False,
+            "engine_nima": True,
+            "engine_mobileclip": False,
+            "engine_musiq": True,
+        },
+    )
+
+    with database_connection(paths.database) as connection:
+        project = repository.get_project(connection, str(created["id"]))
+    settings = json.loads(str(project["settings_json"]))
+    assert settings["local_engines"] == {
+        "apple": False,
+        "nima": True,
+        "mobileclip": False,
+        "musiq": True,
+    }
 
 
 def test_native_worker_keeps_history_until_explicit_project_delete(tmp_path: Path) -> None:
@@ -214,9 +436,17 @@ def test_native_worker_keeps_history_until_explicit_project_delete(tmp_path: Pat
     assert shared_cache.is_dir()
     assert len(worker.dispatch("projects", {})) == 2
 
-    deleted = worker.dispatch("delete_project", {"project_id": abandoned["id"]})
+    with pytest.raises(NativeWorkerError, match="confirmed=true"):
+        worker.dispatch("delete_project", {"project_id": abandoned["id"]})
 
-    assert deleted == {"status": "deleted", "project_id": abandoned["id"]}
+    deleted = worker.dispatch("delete_project", {"project_id": abandoned["id"], "confirmed": True})
+
+    assert deleted["status"] == "deleted"
+    assert deleted["project_id"] == abandoned["id"]
+    assert Path(deleted["backup_path"]).is_file()
+    audit = (paths.data_dir / "destructive-actions.jsonl").read_text()
+    assert '"status": "requested"' in audit
+    assert '"status": "completed"' in audit
     assert preserved_cache.is_dir()
     assert not abandoned_cache.exists()
     assert shared_cache.is_dir()
@@ -275,7 +505,13 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     assert profile["training_examples"] == 3
     coordinator.run(project_id, from_stage="decisions")
     reranked = worker.dispatch("assets", {"project_id": project_id})["items"]
-    assert any(abs(item["personal_delta"] or 0) > 0.1 for item in reranked)
+    calibration_accuracy = float(profile["evidence"]["calibration_accuracy"])
+    if calibration_accuracy > 0.5:
+        assert any(abs(item["personal_delta"] or 0) > 0.1 for item in reranked)
+    else:
+        # A worse-than-chance profile is persisted for transparency but cannot
+        # silently influence ranking before better preference evidence exists.
+        assert all(float(item["personal_delta"] or 0) == 0 for item in reranked)
     next_pair = worker.dispatch("taste_pair", {"project_id": project_id})["pair"]
     held_out = worker.dispatch(
         "taste_preference",
@@ -307,7 +543,24 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
         },
     )
     quality = worker.dispatch("quality_export", {"project_id": project_id})
+    assert quality["manifest"]["assets"] == []
+    worker.dispatch(
+        "quality_label",
+        {
+            "project_id": project_id,
+            "asset_uuid": reranked[0]["asset_uuid"],
+            "disposition": "keep",
+            "defect_codes": [],
+        },
+    )
+    quality = worker.dispatch("quality_export", {"project_id": project_id})
     assert quality["manifest"]["assets"][0]["expected_disposition"] == "keep"
+    assert set(quality["baseline_snapshots"]) == {
+        "current",
+        "non_personalized",
+        "apple_only",
+    }
+    assert len(quality["baseline_snapshots"]["apple_only"]["scores"]) == 12
     assert len(quality["manifest"]["preference_pairs"]) == 4
     assert quality["summary"]["manual_labels"] == 1
     assert quality["summary"]["held_out_pairs"] == 1
@@ -591,6 +844,176 @@ def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Pa
     assert custom["leader_uuid"] == ungrouped[1]["asset_uuid"]
     assert custom["duplicate_group"].startswith("human-")
     status = worker.dispatch("quality_status", {"project_id": project_id})
-    assert status["manual_labels"] == 1
+    assert status["manual_labels"] == 0
     assert status["expected_top_k"] == 2
     assert status["release_ready"] is False
+
+
+def test_quality_wizard_is_blind_and_keeps_held_out_pairs_out_of_taste_profile(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    candidates = worker.dispatch("quality_candidates", {"project_id": project_id, "limit": 12})
+    assert candidates["available"] == 12
+    first = candidates["items"][0]
+    assert "swipe_score" not in first
+    assert "reasons" not in first
+    assert "final_disposition" not in first
+
+    with pytest.raises(ValueError, match="укажите хотя бы один дефект"):
+        worker.dispatch(
+            "quality_label",
+            {
+                "project_id": project_id,
+                "asset_uuid": first["asset_uuid"],
+                "disposition": "reject",
+                "defect_codes": [],
+            },
+        )
+    labelled = worker.dispatch(
+        "quality_label",
+        {
+            "project_id": project_id,
+            "asset_uuid": first["asset_uuid"],
+            "disposition": "reject",
+            "defect_codes": ["motion_blur"],
+            "defect_severity": 3,
+            "defect_confidence": 0.9,
+            "note": "Смаз заметен на лице",
+        },
+    )
+    assert labelled["manual_disposition"] == "reject"
+    assert labelled["quality_defect_codes"] == ["motion_blur"]
+    second = candidates["items"][1]
+    worker.dispatch(
+        "quality_label",
+        {
+            "project_id": project_id,
+            "asset_uuid": second["asset_uuid"],
+            "disposition": "keep",
+            "defect_codes": [],
+        },
+    )
+
+    pair = worker.dispatch("quality_pair", {"project_id": project_id})["pair"]
+    assert pair is not None
+    preference = worker.dispatch(
+        "quality_preference",
+        {
+            "project_id": project_id,
+            "left_uuid": pair["left"]["asset_uuid"],
+            "right_uuid": pair["right"]["asset_uuid"],
+            "preferred_uuid": pair["left"]["asset_uuid"],
+        },
+    )
+    assert preference["split"] == "held_out"
+    with database_connection(paths.database) as connection:
+        assert repository.list_preference_examples(connection) == []
+        assert len(repository.list_quality_preference_examples(connection, project_id)) == 1
+    evidence = worker.dispatch("quality_export", {"project_id": project_id})
+    assert evidence["summary"]["held_out_pairs"] == 1
+    assert evidence["summary"]["defect_labels"] == 1
+    assert any(asset["defect_codes"] == ["motion_blur"] for asset in evidence["manifest"]["assets"])
+
+
+def test_delete_project_fails_closed_when_database_backup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+
+    def fail_backup(*_args, **_kwargs):
+        raise OSError("backup volume unavailable")
+
+    monkeypatch.setattr("photo_curator.native_worker.create_database_backup", fail_backup)
+
+    with pytest.raises(OSError, match="backup volume unavailable"):
+        worker.dispatch("delete_project", {"project_id": project_id, "confirmed": True})
+
+    assert [item["id"] for item in worker.dispatch("projects", {})] == [project_id]
+
+
+def test_native_worker_photokit_acceptance_requires_confirmation_and_audits_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    expected = {
+        "schema_version": 2,
+        "passed": True,
+        "project_id": project_id,
+        "album_name": "PhotoCurator Acceptance Best — test",
+        "album_identifier": "acceptance-album",
+        "asset_identifier": "asset-1",
+        "acceptance_album_removed": True,
+        "source_asset_preserved_after_cleanup": True,
+    }
+    monkeypatch.setattr(
+        native_worker_module,
+        "run_photokit_acceptance",
+        lambda _paths, *, project_id: {**expected, "project_id": project_id},
+    )
+
+    with pytest.raises(NativeWorkerError, match="confirmed=true"):
+        worker.dispatch("photokit_acceptance", {"project_id": project_id})
+
+    assert (
+        worker.dispatch("photokit_acceptance", {"project_id": project_id, "confirmed": True})
+        == expected
+    )
+    audit = (paths.data_dir / "photokit-acceptance.jsonl").read_text()
+    record = json.loads(audit)
+    assert record["passed"] is True
+    assert record["album_identifier"] == "acceptance-album"
+    assert record["acceptance_album_removed"] is True
+
+
+def test_native_worker_photokit_acceptance_two_phase_gui_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    prepared = {
+        "prepared_schema_version": 1,
+        "project_id": project_id,
+        "album_name": "PhotoCurator Acceptance Best — test",
+        "album_identifier": "acceptance-album",
+        "source_album_identifier": "source-album",
+        "asset_identifier": "asset-1",
+    }
+    expected = {
+        "schema_version": 2,
+        "passed": True,
+        "project_id": project_id,
+        "album_name": prepared["album_name"],
+        "album_identifier": prepared["album_identifier"],
+        "acceptance_album_removed": True,
+        "source_asset_preserved_after_cleanup": True,
+    }
+    monkeypatch.setattr(
+        native_worker_module,
+        "prepare_photokit_acceptance",
+        lambda _paths, *, project_id: {**prepared, "project_id": project_id},
+    )
+    monkeypatch.setattr(
+        native_worker_module,
+        "finalize_photokit_acceptance",
+        lambda _paths, *, prepared: {**expected, "project_id": prepared["project_id"]},
+    )
+
+    with pytest.raises(NativeWorkerError, match="confirmed=true"):
+        worker.dispatch(
+            "photokit_acceptance_prepare", {"project_id": project_id, "confirmed": False}
+        )
+    assert worker.dispatch(
+        "photokit_acceptance_prepare", {"project_id": project_id, "confirmed": True}
+    ) == {**prepared, "project_id": project_id}
+    assert (
+        worker.dispatch("photokit_acceptance_finalize", {"prepared": prepared, "confirmed": True})
+        == expected
+    )
+    audit = (paths.data_dir / "photokit-acceptance.jsonl").read_text()
+    assert json.loads(audit)["passed"] is True

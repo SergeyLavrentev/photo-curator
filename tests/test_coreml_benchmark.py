@@ -69,7 +69,10 @@ def test_engine_validates_coreml_result_and_removes_requests(tmp_path: Path) -> 
     sys.platform != "darwin" or shutil.which("xcrun") is None,
     reason="Core ML helper requires the macOS Swift toolchain",
 )
-def test_coreml_helper_compiles_and_reports_capability(tmp_path: Path) -> None:
+def test_coreml_helper_compiles_and_reports_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PHOTO_CURATOR_COREML_SWIFTC_OPTIMIZATION", "-Onone")
     paths = default_application_paths(tmp_path / "app")
     paths.ensure()
     engine = CoreMLBenchmarkEngine(paths)

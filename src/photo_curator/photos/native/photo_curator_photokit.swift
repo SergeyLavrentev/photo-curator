@@ -132,8 +132,21 @@ func safeStem(_ identifier: String) -> String {
 // on the other hand, may obtain review copies from iCloud and reports progress
 // for that work.  The mode forms part of the cache key so a local-only miss
 // never prevents a later full analysis from obtaining the same photo.
-let reviewRenderVersion = "review-v4-2048-q88"
+let reviewRenderVersion = "review-v5-2048-q88-degraded-fallback"
 let maximumConcurrentRenders = 3
+let minimumAnalysisReviewShortEdge = 256
+let minimumAnalysisReviewLongEdge = 512
+
+func reviewRenderIsAnalysisGrade(_ image: NSImage) -> Bool {
+    var pixelWidth = 0
+    var pixelHeight = 0
+    for representation in image.representations {
+        pixelWidth = max(pixelWidth, representation.pixelsWide)
+        pixelHeight = max(pixelHeight, representation.pixelsHigh)
+    }
+    return min(pixelWidth, pixelHeight) >= minimumAnalysisReviewShortEdge
+        && max(pixelWidth, pixelHeight) >= minimumAnalysisReviewLongEdge
+}
 
 func renderCacheKey(_ asset: PHAsset, allowNetwork: Bool) -> String {
     let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
@@ -150,12 +163,22 @@ func exportReviewRender(
         safeStem(renderCacheKey(asset, allowNetwork: allowNetwork)) + ".jpg"
     )
     if FileManager.default.fileExists(atPath: destination.path) {
-        return (destination.path, nil)
+        if let cached = NSImage(contentsOf: destination), reviewRenderIsAnalysisGrade(cached) {
+            return (destination.path, nil)
+        }
+        // A tiny opportunistic iCloud preview is useful for UI fallback, but it
+        // must not become a permanent cache hit after Photos obtains the real
+        // asset. This path is service-owned and scoped to the exact cache key.
+        try? FileManager.default.removeItem(at: destination)
     }
     let options = PHImageRequestOptions()
     options.isSynchronous = false
     options.isNetworkAccessAllowed = allowNetwork
-    options.deliveryMode = .highQualityFormat
+    // Opportunistic delivery gives us the locally cached preview first and the
+    // full-quality render later.  Photos can display that cached preview even
+    // when iCloud cannot currently provide the original; keeping it is much
+    // safer than classifying the asset as missing and discarding all analysis.
+    options.deliveryMode = .opportunistic
     options.resizeMode = .exact
     let manager = PHImageManager.default()
     let completion = DispatchSemaphore(value: 0)
@@ -172,17 +195,25 @@ func exportReviewRender(
         let isDegraded = info?[PHImageResultIsDegradedKey] as? Bool == true
         let error = info?[PHImageErrorKey] as? Error
         let isCancelled = info?[PHImageCancelledKey] as? Bool == true
-        guard !isDegraded || error != nil || isCancelled else { return }
         stateLock.lock()
         guard !finished else {
             stateLock.unlock()
             return
         }
-        rendered = image
+        if isDegraded, let image {
+            rendered = image
+            stateLock.unlock()
+            return
+        }
+        if let image { rendered = image }
         if let error { requestError = error.localizedDescription }
         if isCancelled { requestError = "PhotoKit request cancelled" }
         if info?[PHImageResultIsInCloudKey] as? Bool == true, image == nil {
             requestError = "Фото доступно только в iCloud. Откройте его в Photos, чтобы скачать локальную копию."
+        }
+        if image == nil, rendered != nil {
+            let detail = requestError ?? "полноразмерная версия недоступна"
+            requestError = "Используется локальный preview PhotoKit: \(detail)"
         }
         finished = true
         stateLock.unlock()
@@ -191,10 +222,16 @@ func exportReviewRender(
     let timeout = allowNetwork ? 120.0 : 12.0
     if completion.wait(timeout: .now() + timeout) == .timedOut {
         stateLock.lock()
+        let hasCachedPreview = rendered != nil
+        if hasCachedPreview {
+            requestError = "Используется локальный preview PhotoKit: загрузка полной версии превысила \(Int(timeout)) секунд"
+        }
         finished = true
         stateLock.unlock()
         manager.cancelImageRequest(requestID)
-        return (nil, "PhotoKit render timed out after \(Int(timeout)) seconds")
+        if !hasCachedPreview {
+            return (nil, "PhotoKit render timed out after \(Int(timeout)) seconds")
+        }
     }
     guard let image = rendered,
           let tiff = image.tiffRepresentation,
@@ -203,7 +240,7 @@ func exportReviewRender(
     else { return (nil, requestError ?? "PhotoKit did not return an image render") }
     do {
         try jpeg.write(to: destination, options: .atomic)
-        return (destination.path, nil)
+        return (destination.path, requestError)
     } catch {
         return (nil, error.localizedDescription)
     }
@@ -420,68 +457,70 @@ func printJSON<T: Encodable>(_ value: T) throws {
     FileHandle.standardOutput.write(Data([0x0A]))
 }
 
-do {
-    let arguments = CommandLine.arguments
-    if arguments == [arguments[0], "--capability"] {
-        print("photokit-source-v1")
-        exit(0)
+public func runPhotoCuratorSourceHelper(arguments: [String]) -> Int32 {
+    do {
+        if arguments == [arguments[0], "--capability"] {
+            print("photokit-source-v1")
+            return 0
+        }
+        try requestAuthorization()
+        guard arguments.count >= 2 else { throw PhotoKitError.invalidArguments }
+        switch arguments[1] {
+        case "albums":
+            let regular = albumPayloads(subtype: .albumRegular, shared: false)
+            let shared = albumPayloads(subtype: .albumCloudShared, shared: true)
+            NSLog("Photo Curator PhotoKit albums: regular=%d shared=%d", regular.count, shared.count)
+            try printJSON([
+                "regular": regular,
+                "shared": shared,
+            ])
+        case "assets":
+            guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
+            let album = try fetchAlbum(arguments[2])
+            try printJSON(assets(
+                in: album,
+                outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
+            ))
+        case "assets-jsonl":
+            guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
+            try streamAssets(
+                in: try fetchAlbum(arguments[2]),
+                outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
+            )
+        case "asset-metadata-jsonl":
+            guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
+            try streamAssetMetadata(in: try fetchAlbum(arguments[2]))
+        case "asset-metadata":
+            guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
+            try printJSON(assetMetadata(in: try fetchAlbum(arguments[2])))
+        case "assets-by-id":
+            guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
+            let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
+            let request = try JSONDecoder().decode(AssetIdentifiersRequest.self, from: data)
+            try printJSON(assets(
+                with: request.asset_identifiers,
+                outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
+            ))
+        case "assets-by-id-jsonl":
+            guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
+            let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
+            let request = try JSONDecoder().decode(AssetIdentifiersRequest.self, from: data)
+            try streamAssets(
+                with: request.asset_identifiers,
+                outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
+            )
+        case "album-identifiers":
+            guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
+            try printJSON(identifiers(in: try fetchAlbum(arguments[2])))
+        case "album-photo-identifiers":
+            guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
+            try printJSON(recentPhotoIdentifiers(in: try fetchAlbum(arguments[2])))
+        default:
+            throw PhotoKitError.invalidArguments
+        }
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+        return 1
     }
-    try requestAuthorization()
-    guard arguments.count >= 2 else { throw PhotoKitError.invalidArguments }
-    switch arguments[1] {
-    case "albums":
-        let regular = albumPayloads(subtype: .albumRegular, shared: false)
-        let shared = albumPayloads(subtype: .albumCloudShared, shared: true)
-        NSLog("Photo Curator PhotoKit albums: regular=%d shared=%d", regular.count, shared.count)
-        try printJSON([
-            "regular": regular,
-            "shared": shared,
-        ])
-    case "assets":
-        guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
-        let album = try fetchAlbum(arguments[2])
-        try printJSON(assets(
-            in: album,
-            outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
-        ))
-    case "assets-jsonl":
-        guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
-        try streamAssets(
-            in: try fetchAlbum(arguments[2]),
-            outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
-        )
-    case "asset-metadata-jsonl":
-        guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
-        try streamAssetMetadata(in: try fetchAlbum(arguments[2]))
-    case "asset-metadata":
-        guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
-        try printJSON(assetMetadata(in: try fetchAlbum(arguments[2])))
-    case "assets-by-id":
-        guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
-        let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
-        let request = try JSONDecoder().decode(AssetIdentifiersRequest.self, from: data)
-        try printJSON(assets(
-            with: request.asset_identifiers,
-            outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
-        ))
-    case "assets-by-id-jsonl":
-        guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
-        let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
-        let request = try JSONDecoder().decode(AssetIdentifiersRequest.self, from: data)
-        try streamAssets(
-            with: request.asset_identifiers,
-            outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
-        )
-    case "album-identifiers":
-        guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
-        try printJSON(identifiers(in: try fetchAlbum(arguments[2])))
-    case "album-photo-identifiers":
-        guard arguments.count == 3 else { throw PhotoKitError.invalidArguments }
-        try printJSON(recentPhotoIdentifiers(in: try fetchAlbum(arguments[2])))
-    default:
-        throw PhotoKitError.invalidArguments
-    }
-} catch {
-    FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
-    exit(1)
 }
