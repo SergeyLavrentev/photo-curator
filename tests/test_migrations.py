@@ -1,7 +1,17 @@
 from pathlib import Path
 
+import pytest
+
+from photo_curator.db import migrations as migrations_module
 from photo_curator.db.connection import database_connection
-from photo_curator.db.migrations import SCHEMA_VERSION, migrate
+from photo_curator.db.migrations import MIGRATIONS, SCHEMA_VERSION, migrate
+
+
+def create_schema_at(connection, version: int) -> None:
+    for migration in MIGRATIONS[:version]:
+        connection.executescript(migration)
+    connection.execute(f"PRAGMA user_version = {version}")
+    connection.commit()
 
 
 def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
@@ -77,24 +87,25 @@ def test_migration_19_preserves_existing_quality_truth_without_erasing_decisions
     tmp_path: Path,
 ) -> None:
     with database_connection(tmp_path / "v18.sqlite3") as connection:
+        create_schema_at(connection, 18)
         connection.executescript(
             """
-            CREATE TABLE quality_asset_labels (
-                project_id TEXT NOT NULL,
-                asset_uuid TEXT NOT NULL,
-                lab_sampled INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (project_id, asset_uuid)
+            INSERT INTO projects (
+                id, name, library_path, library_fingerprint, album_id, album_name,
+                album_full_path, state, created_at, updated_at
+            ) VALUES (
+                'project', 'Project', '/library', 'fingerprint', 'album', 'Album',
+                'Album', 'ready', 'now', 'now'
             );
-            CREATE TABLE decisions (
-                project_id TEXT NOT NULL,
-                asset_uuid TEXT NOT NULL,
-                manual_disposition TEXT,
-                manual_override INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (project_id, asset_uuid)
-            );
-            INSERT INTO quality_asset_labels VALUES ('project', 'asset', 1);
-            INSERT INTO decisions VALUES ('project', 'asset', 'reject', 1);
-            PRAGMA user_version = 18;
+            INSERT INTO assets (project_id, asset_uuid, created_at, updated_at)
+            VALUES ('project', 'asset', 'now', 'now');
+            INSERT INTO decisions (
+                project_id, asset_uuid, auto_disposition, manual_disposition,
+                final_disposition, confidence, manual_override, updated_at
+            ) VALUES ('project', 'asset', 'keep', 'reject', 'reject', 1, 1, 'now');
+            INSERT INTO quality_asset_labels (
+                project_id, asset_uuid, updated_at, lab_sampled
+            ) VALUES ('project', 'asset', 'now', 1);
             """
         )
 
@@ -113,22 +124,23 @@ def test_migration_19_preserves_existing_quality_truth_without_erasing_decisions
 
 def test_schema_nine_database_upgrades_without_recreating_project_data(tmp_path: Path) -> None:
     with database_connection(tmp_path / "v9.sqlite3") as connection:
+        create_schema_at(connection, 9)
         connection.executescript(
             """
-            CREATE TABLE assets (
-                project_id TEXT NOT NULL,
-                asset_uuid TEXT NOT NULL,
-                PRIMARY KEY (project_id, asset_uuid)
+            INSERT INTO projects (
+                id, name, library_path, library_fingerprint, album_id, album_name,
+                album_full_path, state, created_at, updated_at
+            ) VALUES (
+                'project', 'Project', '/library', 'fingerprint', 'album', 'Album',
+                'Album', 'ready', 'now', 'now'
             );
-            INSERT INTO assets VALUES ('project', 'asset');
-            PRAGMA user_version = 9;
             """
         )
 
         migrate(connection)
 
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-        assert connection.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
         assert (
             connection.execute(
                 "SELECT COUNT(*) FROM sqlite_master "
@@ -136,3 +148,60 @@ def test_schema_nine_database_upgrades_without_recreating_project_data(tmp_path:
             ).fetchone()[0]
             == 1
         )
+    backups = list((tmp_path / "backups").glob("*-before-schema-v9-to-v19.sqlite3"))
+    assert len(backups) == 1
+    with database_connection(backups[0]) as backup_connection:
+        assert backup_connection.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert backup_connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+
+
+def test_partial_versioned_schema_fails_without_advancing_version(tmp_path: Path) -> None:
+    with database_connection(tmp_path / "partial-v9.sqlite3") as connection:
+        connection.executescript(
+            """
+            CREATE TABLE assets (
+                project_id TEXT NOT NULL,
+                asset_uuid TEXT NOT NULL,
+                PRIMARY KEY (project_id, asset_uuid)
+            );
+            PRAGMA user_version = 9;
+            """
+        )
+
+        with pytest.raises(RuntimeError, match="missing tables"):
+            migrate(connection)
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        } == {"assets"}
+
+
+def test_migration_rolls_back_schema_and_version_when_post_verifier_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "fault-v18.sqlite3"
+    with database_connection(database) as connection:
+        create_schema_at(connection, 18)
+        original_verify = migrations_module.verify_schema
+
+        def fail_post_verification(received_connection, expected_version: int) -> None:
+            original_verify(received_connection, expected_version)
+            if expected_version == SCHEMA_VERSION:
+                raise RuntimeError("injected post-migration failure")
+
+        monkeypatch.setattr(migrations_module, "verify_schema", fail_post_verification)
+        with pytest.raises(RuntimeError, match="injected post-migration failure"):
+            migrate(connection)
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 18
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(quality_asset_labels)").fetchall()
+        }
+        assert "expected_disposition" not in columns
+
+    assert len(list((tmp_path / "backups").glob("*-before-schema-v18-to-v19.sqlite3"))) == 1

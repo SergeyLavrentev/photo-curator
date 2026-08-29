@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
+
+from photo_curator.db.connection import create_database_backup
 
 SCHEMA_VERSION = 19
 
@@ -477,6 +480,161 @@ CHECK (
 );
 """
 
+MIGRATION_19_BACKFILL = """
+UPDATE quality_asset_labels
+SET expected_disposition = (
+    SELECT decisions.manual_disposition
+    FROM decisions
+    WHERE decisions.project_id=quality_asset_labels.project_id
+      AND decisions.asset_uuid=quality_asset_labels.asset_uuid
+      AND decisions.manual_override=1
+)
+WHERE lab_sampled=1 AND expected_disposition IS NULL;
+"""
+
+MIGRATIONS = (
+    MIGRATION_1,
+    MIGRATION_2,
+    MIGRATION_3,
+    MIGRATION_4,
+    MIGRATION_5,
+    MIGRATION_6,
+    MIGRATION_7,
+    MIGRATION_8,
+    MIGRATION_9,
+    MIGRATION_10,
+    MIGRATION_11,
+    MIGRATION_12,
+    MIGRATION_13,
+    MIGRATION_14,
+    MIGRATION_15,
+    MIGRATION_16,
+    MIGRATION_17,
+    MIGRATION_18,
+    MIGRATION_19,
+)
+
+_TABLES_BY_VERSION = {
+    1: {
+        "projects",
+        "assets",
+        "metrics",
+        "duplicate_groups",
+        "duplicate_members",
+        "decisions",
+        "jobs",
+        "publishes",
+    },
+    4: {"shared_copy_jobs"},
+    6: {"analysis_signals"},
+    7: {"swipe_scores"},
+    8: {"taste_profiles", "preference_examples"},
+    9: {"model_registry"},
+    10: {"quality_asset_labels"},
+    11: {"taste_rounds", "taste_assets"},
+    14: {"stage_fingerprints"},
+    18: {"quality_preference_examples"},
+}
+
+_COLUMNS_BY_VERSION = {
+    1: {
+        "projects": {"id", "album_id", "state", "settings_json"},
+        "assets": {"project_id", "asset_uuid", "source_fingerprint", "cache_state"},
+        "metrics": {"project_id", "asset_uuid", "phash", "technical_quality"},
+        "decisions": {"project_id", "asset_uuid", "final_disposition"},
+        "publishes": {"id", "project_id", "album_name", "status"},
+    },
+    2: {"publishes": {"kind"}},
+    3: {"metrics": {"face_count", "face_capture_quality", "eyes_detected"}},
+    5: {"publishes": {"destination_album_id"}},
+    12: {"taste_rounds": {"rejected_json"}},
+    13: {
+        "decisions": {"auto_selection", "manual_selection", "final_selection"},
+    },
+    15: {"decisions": {"manual_rating"}},
+    17: {"metrics": {"dominant_horizon_degrees", "horizon_support"}},
+    18: {
+        "quality_asset_labels": {
+            "defect_codes_json",
+            "defect_severity",
+            "defect_confidence",
+            "quality_note",
+            "lab_sampled",
+        },
+    },
+    19: {"quality_asset_labels": {"expected_disposition"}},
+}
+
+
+def verify_schema(connection: sqlite3.Connection, expected_version: int) -> None:
+    """Fail closed when a versioned database is structurally incomplete."""
+    actual_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    if actual_version != expected_version:
+        raise RuntimeError(
+            f"Database schema version mismatch: expected {expected_version}, got {actual_version}"
+        )
+    tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    required_tables: set[str] = set()
+    for introduced_at, introduced_tables in _TABLES_BY_VERSION.items():
+        if introduced_at <= expected_version:
+            required_tables.update(introduced_tables)
+    missing_tables = sorted(required_tables - tables)
+    if missing_tables:
+        raise RuntimeError(
+            f"Database schema {expected_version} is missing tables: {', '.join(missing_tables)}"
+        )
+    missing_columns: list[str] = []
+    for introduced_at, table_columns in _COLUMNS_BY_VERSION.items():
+        if introduced_at > expected_version:
+            continue
+        for table, expected_columns in table_columns.items():
+            if table not in tables:
+                continue
+            actual_columns = {
+                str(row[1])
+                for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+            }
+            missing_columns.extend(
+                f"{table}.{column}" for column in sorted(expected_columns - actual_columns)
+            )
+    if missing_columns:
+        raise RuntimeError(
+            f"Database schema {expected_version} is missing columns: {', '.join(missing_columns)}"
+        )
+    integrity = connection.execute("PRAGMA quick_check").fetchone()
+    if not integrity or str(integrity[0]) != "ok":
+        raise sqlite3.DatabaseError(f"Database integrity check failed: {integrity!r}")
+    foreign_key_violation = connection.execute("PRAGMA foreign_key_check").fetchone()
+    if foreign_key_violation is not None:
+        raise sqlite3.IntegrityError(
+            f"Database foreign key check failed: {tuple(foreign_key_violation)!r}"
+        )
+
+
+def _main_database_path(connection: sqlite3.Connection) -> Path | None:
+    row = next(
+        (row for row in connection.execute("PRAGMA database_list").fetchall() if row[1] == "main"),
+        None,
+    )
+    if row is None or not row[2]:
+        return None
+    return Path(str(row[2])).resolve()
+
+
+def _migration_script(version: int) -> str:
+    statements = ["BEGIN IMMEDIATE;"]
+    for target_version in range(version + 1, SCHEMA_VERSION + 1):
+        statements.append(MIGRATIONS[target_version - 1])
+        if target_version == 19:
+            statements.append(MIGRATION_19_BACKFILL)
+        statements.append(f"PRAGMA user_version = {target_version};")
+    return "\n".join(statements)
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -484,123 +642,30 @@ def migrate(connection: sqlite3.Connection) -> None:
         raise RuntimeError(
             f"Database schema {version} is newer than supported schema {SCHEMA_VERSION}"
         )
-    if version < 1:
-        connection.executescript(MIGRATION_1)
-        connection.execute("PRAGMA user_version = 1")
-        version = 1
-    if version < 2:
-        connection.executescript(MIGRATION_2)
-        connection.execute("PRAGMA user_version = 2")
-        version = 2
-    if version < 3:
-        connection.executescript(MIGRATION_3)
-        connection.execute("PRAGMA user_version = 3")
-        version = 3
-    if version < 4:
-        connection.executescript(MIGRATION_4)
-        connection.execute("PRAGMA user_version = 4")
-        version = 4
-    if version < 5:
-        connection.executescript(MIGRATION_5)
-        connection.execute("PRAGMA user_version = 5")
-        version = 5
-    if version < 6:
-        connection.executescript(MIGRATION_6)
-        connection.execute("PRAGMA user_version = 6")
-        version = 6
-    if version < 7:
-        connection.executescript(MIGRATION_7)
-        connection.execute("PRAGMA user_version = 7")
-        version = 7
-    if version < 8:
-        connection.executescript(MIGRATION_8)
-        connection.execute("PRAGMA user_version = 8")
-        version = 8
-    if version < 9:
-        connection.executescript(MIGRATION_9)
-        connection.execute("PRAGMA user_version = 9")
-        version = 9
-    if version < 10:
-        connection.executescript(MIGRATION_10)
-        connection.execute("PRAGMA user_version = 10")
-        version = 10
-    if version < 11:
-        connection.executescript(MIGRATION_11)
-        connection.execute("PRAGMA user_version = 11")
-        version = 11
-    if version < 12:
-        connection.executescript(MIGRATION_12)
-        connection.execute("PRAGMA user_version = 12")
-        version = 12
-    if version < 13:
-        decisions_exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decisions'"
-        ).fetchone()
-        if decisions_exists:
-            connection.executescript(MIGRATION_13)
-        connection.execute("PRAGMA user_version = 13")
-        version = 13
-    if version < 14:
-        connection.executescript(MIGRATION_14)
-        connection.execute("PRAGMA user_version = 14")
-        version = 14
-    if version < 15:
-        decisions_exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decisions'"
-        ).fetchone()
-        if decisions_exists:
-            connection.executescript(MIGRATION_15)
-        connection.execute("PRAGMA user_version = 15")
-        version = 15
-    if version < 16:
-        tables = {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        if {"swipe_scores", "decisions"} <= tables:
-            connection.executescript(MIGRATION_16)
-        connection.execute("PRAGMA user_version = 16")
-        version = 16
-    if version < 17:
-        metrics_exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metrics'"
-        ).fetchone()
-        if metrics_exists:
-            connection.executescript(MIGRATION_17)
-        connection.execute("PRAGMA user_version = 17")
-        version = 17
-    if version < 18:
-        quality_exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='quality_asset_labels'"
-        ).fetchone()
-        if quality_exists:
-            connection.executescript(MIGRATION_18)
-        connection.execute("PRAGMA user_version = 18")
-        version = 18
-    if version < 19:
-        tables = {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        if "quality_asset_labels" in tables:
-            connection.executescript(MIGRATION_19)
-            if "decisions" in tables:
-                connection.execute(
-                    """
-                    UPDATE quality_asset_labels
-                    SET expected_disposition = (
-                        SELECT decisions.manual_disposition
-                        FROM decisions
-                        WHERE decisions.project_id=quality_asset_labels.project_id
-                          AND decisions.asset_uuid=quality_asset_labels.asset_uuid
-                          AND decisions.manual_override=1
-                    )
-                    WHERE lab_sampled=1 AND expected_disposition IS NULL
-                    """
-                )
-        connection.execute("PRAGMA user_version = 19")
+    existing_tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    if version == 0 and existing_tables:
+        raise RuntimeError("Unversioned database contains application tables")
+    if version > 0:
+        database_path = _main_database_path(connection)
+        if version < SCHEMA_VERSION and database_path is not None:
+            create_database_backup(
+                database_path,
+                database_path.parent / "backups",
+                reason=f"before-schema-v{version}-to-v{SCHEMA_VERSION}",
+            )
+        verify_schema(connection, version)
+    if version == SCHEMA_VERSION:
+        return
+    try:
+        connection.executescript(_migration_script(version))
+        verify_schema(connection, SCHEMA_VERSION)
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
     connection.commit()

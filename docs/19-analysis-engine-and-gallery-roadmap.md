@@ -99,8 +99,11 @@ Quality Lab и нативной галереи в последовательну
   orientation и revision/render fingerprint.
 - [ ] Централизовать invalidation derived data при изменении времени, membership, render,
   media subtype или edit state.
-- [ ] Сделать schema migration атомарной: pre-migration backup, обязательные core tables,
+- [x] Сделать schema migration атомарной: pre-migration backup, обязательные core tables,
   post-schema verifier, fault-injection tests; не повышать `user_version` частичной схеме.
+  Evidence: все pending DDL и `user_version` выполняются в одной `BEGIN IMMEDIATE`
+  transaction; verifier проверяет version/tables/columns/integrity/FK до commit, а injected
+  post-verifier failure возвращает v18 без колонки v19.
 - [ ] Исправить same-process degraded/iCloud preview repair: tiny render обязан повторно
   пройти provider/helper либо остаться честно degraded.
 - [ ] Описать и реализовать явную policy для video, Live Photo, animated image, burst,
