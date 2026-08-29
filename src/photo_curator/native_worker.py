@@ -1050,36 +1050,48 @@ class NativeWorker:
 
     def _handle_publish_dry_run(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
-        publish = self.publisher.dry_run(project_id, str(params.get("kind") or "best"))
-        uuid_file = Path(str(publish["uuid_file"]))
-        asset_uuids = [line for line in uuid_file.read_text(encoding="utf-8").splitlines() if line]
-        with database_connection(self.paths.database) as connection:
-            assets = repository.assets_by_uuid(connection, project_id, set(asset_uuids))
-        payload = _publish_payload(publish)
-        payload["asset_uuids"] = asset_uuids
-        payload["asset_set_sha256"] = hashlib.sha256(
-            ("\n".join(asset_uuids) + "\n").encode()
-        ).hexdigest()
-        payload["items"] = [
-            _related_asset_payload(assets[asset_uuid])
-            for asset_uuid in asset_uuids
-            if asset_uuid in assets
-        ]
-        return payload
+        with self.coordinator.project_operation(project_id):
+            if self.coordinator.is_running(project_id):
+                raise NativeWorkerError("Сначала остановите выполняющийся анализ")
+            publish = self.publisher.dry_run(project_id, str(params.get("kind") or "best"))
+            uuid_file = Path(str(publish["uuid_file"]))
+            asset_uuids = [
+                line for line in uuid_file.read_text(encoding="utf-8").splitlines() if line
+            ]
+            with database_connection(self.paths.database) as connection:
+                assets = repository.assets_by_uuid(connection, project_id, set(asset_uuids))
+            payload = _publish_payload(publish)
+            payload["asset_uuids"] = asset_uuids
+            payload["asset_set_sha256"] = hashlib.sha256(
+                ("\n".join(asset_uuids) + "\n").encode()
+            ).hexdigest()
+            payload["items"] = [
+                _related_asset_payload(assets[asset_uuid])
+                for asset_uuid in asset_uuids
+                if asset_uuid in assets
+            ]
+            return payload
 
     def _handle_publish_apply(self, params: dict[str, object]) -> dict[str, object]:
         if params.get("confirmed") is not True:
             raise NativeWorkerError("Publish apply requires confirmed=true")
-        return _publish_payload(
-            self.publisher.apply(
-                _required_string(params, "publish_id"),
-                progress=(
-                    self._publish_progress
-                    if getattr(self._dispatch_state, "progress", None)
-                    else None
-                ),
+        publish_id = _required_string(params, "publish_id")
+        with database_connection(self.paths.database) as connection:
+            publish = repository.get_publish(connection, publish_id)
+        project_id = str(publish["project_id"])
+        with self.coordinator.project_operation(project_id):
+            if self.coordinator.is_running(project_id):
+                raise NativeWorkerError("Сначала остановите выполняющийся анализ")
+            return _publish_payload(
+                self.publisher.apply(
+                    publish_id,
+                    progress=(
+                        self._publish_progress
+                        if getattr(self._dispatch_state, "progress", None)
+                        else None
+                    ),
+                )
             )
-        )
 
     def _publish_progress(self, phase: str, processed: int, total: int) -> None:
         progress = getattr(self._dispatch_state, "progress", None)

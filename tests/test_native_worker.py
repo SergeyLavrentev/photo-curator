@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 
 import pytest
 
@@ -982,6 +983,114 @@ def test_delete_project_cannot_race_pipeline_start(
 
     release.set()
     coordinator._futures[project_id].result(timeout=5)
+
+
+def test_publish_dry_run_is_blocked_while_pipeline_future_is_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    entered = Event()
+    release = Event()
+
+    def blocked_run(received_project_id: str, *, from_stage: str | None = None) -> None:
+        del from_stage
+        assert received_project_id == project_id
+        entered.set()
+        assert release.wait(timeout=5)
+        with database_connection(paths.database) as connection:
+            repository.set_project_state(connection, project_id, "ready")
+
+    class UnexpectedPublisher:
+        def dry_run(self, *_args, **_kwargs):
+            raise AssertionError("publisher must not run during analysis")
+
+    monkeypatch.setattr(coordinator, "run", blocked_run)
+    worker = NativeWorker(
+        paths,
+        provider=provider,
+        coordinator=coordinator,
+        publisher=UnexpectedPublisher(),
+    )
+    worker.dispatch("start_analysis", {"project_id": project_id})
+    assert entered.wait(timeout=5)
+
+    with pytest.raises(NativeWorkerError, match="остановите выполняющийся анализ"):
+        worker.dispatch("publish_dry_run", {"project_id": project_id, "kind": "best"})
+
+    release.set()
+    coordinator._futures[project_id].result(timeout=5)
+
+
+def test_parallel_publish_apply_is_serialized_per_project(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    uuid_file = tmp_path / "publish.txt"
+    uuid_file.write_text("demo-001\n", encoding="utf-8")
+    with database_connection(paths.database) as connection:
+        publish_id = repository.create_publish(
+            connection,
+            project_id=project_id,
+            album_name="Best",
+            asset_count=1,
+            uuid_file=str(uuid_file),
+            kind="best",
+        )
+        repository.record_dry_run(
+            connection,
+            publish_id,
+            stdout="ok",
+            stderr="",
+            return_code=0,
+        )
+
+    first_entered = Event()
+    second_attempted = Event()
+    second_entered = Event()
+    release = Event()
+
+    class BlockingPublisher:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.lock = Lock()
+
+        def apply(self, received_publish_id, *, progress=None):
+            del progress
+            assert received_publish_id == publish_id
+            with self.lock:
+                self.calls += 1
+                call = self.calls
+            (first_entered if call == 1 else second_entered).set()
+            if call == 1:
+                assert release.wait(timeout=5)
+            with database_connection(paths.database) as connection:
+                return repository.get_publish(connection, publish_id)
+
+    publisher = BlockingPublisher()
+    worker = NativeWorker(
+        paths,
+        provider=provider,
+        coordinator=coordinator,
+        publisher=publisher,
+    )
+
+    def second_apply():
+        second_attempted.set()
+        return worker.dispatch("publish_apply", {"publish_id": publish_id, "confirmed": True})
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            worker.dispatch,
+            "publish_apply",
+            {"publish_id": publish_id, "confirmed": True},
+        )
+        assert first_entered.wait(timeout=5)
+        second = executor.submit(second_apply)
+        assert second_attempted.wait(timeout=5)
+        assert not second_entered.wait(timeout=0.2)
+        release.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+
+    assert publisher.calls == 2
 
 
 def test_native_worker_photokit_acceptance_requires_confirmation_and_audits_result(
