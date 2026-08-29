@@ -58,16 +58,20 @@ def prepare_photokit_acceptance(
     name = album_name or (
         "PhotoCurator Acceptance Best — " + datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     )
+    reservation = importer.reserve_album(name)
+    album_identifier = str(reservation.get("album_identifier") or "")
+    if not album_identifier:
+        raise RuntimeError("PhotoKit publisher не вернул album_identifier")
     result = importer.add_assets(
         name,
         [asset_uuid],
+        album_identifier=album_identifier,
         progress=lambda phase, processed, total: progress.append(
             {"phase": phase, "processed": processed, "total": total}
         ),
     )
-    album_identifier = str(result.get("album_identifier") or "")
-    if not album_identifier:
-        raise RuntimeError("PhotoKit publisher не вернул album_identifier")
+    if str(result.get("album_identifier") or "") != album_identifier:
+        raise RuntimeError("PhotoKit publisher изменил identity acceptance-альбома")
     verification_error: str | None = None
     visible = False
     source_reused = False

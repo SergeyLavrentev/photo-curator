@@ -3,6 +3,8 @@ import Photos
 
 struct PublishRequest: Decodable {
     let album_name: String
+    let destination_album_identifier: String?
+    let reserve_album: Bool?
     let files: [String]?
     let duplicate_asset_identifiers: [String]?
     let existing_asset_identifiers: [String]?
@@ -36,7 +38,9 @@ enum PublishError: LocalizedError {
     case invalidArguments
     case authorizationDenied
     case albumMissing
+    case albumAlreadyExists
     case ambiguousAlbumName
+    case albumIdentityMismatch
     case incompleteImport
     case sourceResourceMissing
     case sourceExportFailed
@@ -48,7 +52,9 @@ enum PublishError: LocalizedError {
         case .invalidArguments: return "Invalid publisher arguments"
         case .authorizationDenied: return "Photo Library access was not granted"
         case .albumMissing: return "Published Photos album could not be found"
+        case .albumAlreadyExists: return "A Photos album already uses the reserved publish name"
         case .ambiguousAlbumName: return "More than one Photos album has the publish name"
+        case .albumIdentityMismatch: return "The reserved Photos album identity no longer matches"
         case .incompleteImport: return "PhotoKit did not import every selected image"
         case .sourceResourceMissing: return "A selected photo has no exportable source resource"
         case .sourceExportFailed: return "PhotoKit could not export a selected source photo"
@@ -371,7 +377,24 @@ func publish(
     progress: ((String, Int, Int) throws -> Void)? = nil
 ) throws -> PublishResponse {
     try requestAuthorization()
-    let album = try fetchAlbum(named: request.album_name) ?? createAlbum(named: request.album_name)
+    if request.reserve_album == true {
+        if try fetchAlbum(named: request.album_name) != nil {
+            throw PublishError.albumAlreadyExists
+        }
+        let album = try createAlbum(named: request.album_name)
+        return PublishResponse(
+            album_identifier: album.localIdentifier,
+            imported: 0,
+            reused: 0,
+            added: 0
+        )
+    }
+    guard let destinationIdentifier = request.destination_album_identifier,
+          let album = fetchAlbum(identifier: destinationIdentifier)
+    else { throw PublishError.albumMissing }
+    guard album.localizedTitle == request.album_name else {
+        throw PublishError.albumIdentityMismatch
+    }
     if let identifiers = request.existing_asset_identifiers {
         return try addExistingAssets(identifiers: identifiers, into: album, progress: progress)
     }
@@ -424,7 +447,7 @@ func printJSON<T: Encodable>(_ value: T) throws {
 public func runPhotoCuratorPublishHelper(arguments: [String]) -> Int32 {
     do {
         if arguments == [arguments[0], "--capability"] {
-            print("photokit-publish-existing-assets-v6")
+            print("photokit-publish-reserved-album-v7")
             return 0
         }
         if arguments.count == 3 && arguments[1] == "--delete-album" {

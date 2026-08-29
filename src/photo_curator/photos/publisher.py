@@ -15,6 +15,7 @@ from photo_curator.photos.native_publisher import NativePhotosImporter
 from photo_curator.photos.provider import PhotoAsset, PhotosProvider
 from photo_curator.photos.render_resolver import resolve_source_render
 from photo_curator.pipeline.previews import source_fingerprint
+from photo_curator.utils.identifiers import new_id
 from photo_curator.utils.safe_paths import ensure_within
 from photo_curator.utils.subprocesses import CommandResult, find_executable, run_command
 
@@ -231,19 +232,26 @@ class PhotosPublisher:
             raise ValueError("; ".join(validation.blockers))
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)
-        album_name = self._next_album_name(project_id, str(project["album_name"]), kind)
+        publish_id = new_id()
+        album_name = self._next_album_name(
+            project_id,
+            str(project["album_name"]),
+            kind,
+            reservation_id=publish_id,
+        )
         publish_dir = self.paths.cache_dir / project_id / "publish"
         publish_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        uuid_file = publish_dir / f"{kind}-uuids-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.txt"
+        uuid_file = publish_dir / f"{kind}-uuids-{publish_id}.txt"
         uuid_file.write_text("\n".join(validation.asset_uuids) + "\n", encoding="utf-8")
         with database_connection(self.database_path) as connection:
-            publish_id = repository.create_publish(
+            repository.create_publish(
                 connection,
                 project_id=project_id,
                 album_name=album_name,
                 asset_count=len(validation.asset_uuids),
                 uuid_file=str(uuid_file),
                 kind=kind,
+                publish_id=publish_id,
             )
         if self._is_local_project(project) or self._is_photokit_project(project):
             result = CommandResult(
@@ -279,8 +287,15 @@ class PhotosPublisher:
             publish = repository.get_publish(connection, publish_id)
         return publish
 
-    def _next_album_name(self, project_id: str, source_album: str, kind: str) -> str:
-        base = unique_album_name(source_album, kind=kind)
+    def _next_album_name(
+        self,
+        project_id: str,
+        source_album: str,
+        kind: str,
+        *,
+        reservation_id: str,
+    ) -> str:
+        base = unique_album_name(source_album, kind=kind, reservation_id=reservation_id)
         with database_connection(self.database_path) as connection:
             existing = {
                 str(row[0])
@@ -307,7 +322,7 @@ class PhotosPublisher:
         with database_connection(self.database_path) as connection:
             publish = repository.get_publish(connection, publish_id)
         if (
-            publish.get("status") not in {"dry_run_ok", "apply_failed"}
+            publish.get("status") not in {"dry_run_ok", "destination_reserved", "apply_failed"}
             or publish.get("dry_run_return_code") != 0
         ):
             raise ValueError("Успешный dry-run обязателен перед apply")
@@ -323,16 +338,25 @@ class PhotosPublisher:
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, str(publish["project_id"]))
             assets = repository.list_assets(connection, str(publish["project_id"]))
-        destination_album_id = None
+        destination_album_id = str(publish.get("destination_album_id") or "") or None
         if self._is_local_project(project):
             by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
             files = [Path(str(by_uuid[uuid]["source_path"])) for uuid in prepared]
             try:
+                destination_album_id = self._reserve_native_destination(
+                    publish_id,
+                    str(publish["album_name"]),
+                    destination_album_id,
+                )
                 progress_args = {"progress": progress} if progress else {}
                 native_result = self.local_importer.publish(
-                    str(publish["album_name"]), files, **progress_args
+                    str(publish["album_name"]),
+                    files,
+                    album_identifier=destination_album_id,
+                    **progress_args,
                 )
-                destination_album_id = str(native_result["album_identifier"])
+                if str(native_result["album_identifier"]) != destination_album_id:
+                    raise ValueError("PhotoKit изменил зарезервированную identity альбома")
                 result = CommandResult(
                     ["photokit-publish"],
                     0,
@@ -343,11 +367,20 @@ class PhotosPublisher:
                 result = CommandResult(["photokit-publish"], 1, "", str(error)[:500])
         elif self._is_photokit_project(project):
             try:
+                destination_album_id = self._reserve_native_destination(
+                    publish_id,
+                    str(publish["album_name"]),
+                    destination_album_id,
+                )
                 progress_args = {"progress": progress} if progress else {}
                 native_result = self.local_importer.add_assets(
-                    str(publish["album_name"]), prepared, **progress_args
+                    str(publish["album_name"]),
+                    prepared,
+                    album_identifier=destination_album_id,
+                    **progress_args,
                 )
-                destination_album_id = str(native_result["album_identifier"])
+                if str(native_result["album_identifier"]) != destination_album_id:
+                    raise ValueError("PhotoKit изменил зарезервированную identity альбома")
                 result = CommandResult(
                     ["photokit-publish"],
                     0,
@@ -377,6 +410,22 @@ class PhotosPublisher:
                 destination_album_id=destination_album_id,
             )
             return repository.get_publish(connection, publish_id)
+
+    def _reserve_native_destination(
+        self,
+        publish_id: str,
+        album_name: str,
+        destination_album_id: str | None,
+    ) -> str:
+        if destination_album_id:
+            return destination_album_id
+        reservation = self.local_importer.reserve_album(album_name)
+        reserved_id = str(reservation.get("album_identifier") or "")
+        if not reserved_id:
+            raise ValueError("PhotoKit не вернул identity созданного альбома")
+        with database_connection(self.database_path) as connection:
+            repository.record_publish_destination(connection, publish_id, reserved_id)
+        return reserved_id
 
     @staticmethod
     def _is_local_project(project: dict[str, object]) -> bool:
@@ -470,13 +519,23 @@ def _source_revision_matches(stored: dict[str, object] | None, current: PhotoAss
 
 
 def unique_album_name(
-    source_album: str, now: datetime | None = None, *, kind: str = "reject"
+    source_album: str,
+    now: datetime | None = None,
+    *,
+    kind: str = "reject",
+    reservation_id: str | None = None,
 ) -> str:
     now = now or datetime.now()
     source = re.sub(r"[/:\n\r\t]+", " — ", source_album).strip(" —") or "Album"
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     label = "Best" if kind == "best" else "Reject"
-    suffix = f" — {label} — {timestamp}"
+    reservation = ""
+    if reservation_id:
+        token = re.sub(r"[^A-Za-z0-9]", "", reservation_id)[:16]
+        if not token:
+            raise ValueError("Invalid publish reservation identity")
+        reservation = f" — {token}"
+    suffix = f" — {label} — {timestamp}{reservation}"
     prefix = "PhotoCurator — "
     max_source = max(1, 120 - len(prefix) - len(suffix))
     return f"{prefix}{source[:max_source]}{suffix}"

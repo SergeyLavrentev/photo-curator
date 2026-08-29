@@ -84,10 +84,13 @@ Unedited:
 1. получает local identifiers только из repository;
 2. повторно валидирует membership и текущие решения;
 3. сохраняет immutable dry-run;
-4. после явного подтверждения создаёт новый regular album публичным PhotoKit API;
-5. добавляет в него существующие `PHAsset` по local identifier без экспорта и создания
+4. присваивает dry-run уникальный reservation token в имени destination;
+5. после явного подтверждения отдельно создаёт новый regular album публичным PhotoKit API,
+   сохраняет его immutable local identifier и не переиспользует одноимённый album;
+6. добавляет в зарезервированный album существующие `PHAsset` по local identifier без экспорта и создания
    новых library assets;
-6. сохраняет destination album identifier, число новых membership и audit результата.
+7. при retry обращается только к сохранённому identifier и fail-closed проверяет имя;
+8. сохраняет число новых membership и audit результата.
 
 Для legacy `OSXPhotosProvider` publisher:
 

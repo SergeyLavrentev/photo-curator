@@ -21,26 +21,42 @@ class FakeNativeImporter:
     capability_available = True
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, list[Path]]] = []
+        self.calls: list[tuple[object, ...]] = []
+        self.reservation_count = 0
 
-    def publish(self, album_name: str, files: list[Path]) -> dict[str, object]:
-        self.calls.append((album_name, files))
-        return {"album_identifier": "photos-album-1", "imported": len(files), "reused": 0}
+    def reserve_album(self, album_name: str) -> dict[str, object]:
+        self.reservation_count += 1
+        identifier = f"photos-album-{self.reservation_count}"
+        self.calls.append(("reserve", album_name, identifier))
+        return {"album_identifier": identifier, "imported": 0, "reused": 0, "added": 0}
 
-    def duplicate_assets(self, album_name: str, asset_identifiers: list[str]) -> dict[str, object]:
-        self.calls.append((album_name, asset_identifiers))
+    def publish(
+        self, album_name: str, files: list[Path], *, album_identifier: str
+    ) -> dict[str, object]:
+        self.calls.append(("publish", album_name, album_identifier, files))
+        return {"album_identifier": album_identifier, "imported": len(files), "reused": 0}
+
+    def duplicate_assets(
+        self, album_name: str, asset_identifiers: list[str], *, album_identifier: str
+    ) -> dict[str, object]:
+        self.calls.append(("duplicate", album_name, album_identifier, asset_identifiers))
         return {
-            "album_identifier": "photos-album-1",
+            "album_identifier": album_identifier,
             "imported": len(asset_identifiers),
             "reused": 0,
         }
 
     def add_assets(
-        self, album_name: str, asset_identifiers: list[str], **_: object
+        self,
+        album_name: str,
+        asset_identifiers: list[str],
+        *,
+        album_identifier: str,
+        **_: object,
     ) -> dict[str, object]:
-        self.calls.append((album_name, asset_identifiers))
+        self.calls.append(("add", album_name, album_identifier, asset_identifiers))
         return {
-            "album_identifier": "photos-album-1",
+            "album_identifier": album_identifier,
             "imported": 0,
             "reused": len(asset_identifiers),
         }
@@ -50,12 +66,16 @@ class FailingOnceNativeImporter(FakeNativeImporter):
     def __init__(self) -> None:
         super().__init__()
         self.failed = False
+        self.publish_attempts = 0
 
-    def publish(self, album_name: str, files: list[Path]) -> dict[str, object]:
+    def publish(
+        self, album_name: str, files: list[Path], *, album_identifier: str
+    ) -> dict[str, object]:
+        self.publish_attempts += 1
         if not self.failed:
             self.failed = True
             raise RuntimeError("synthetic partial failure")
-        return super().publish(album_name, files)
+        return super().publish(album_name, files, album_identifier=album_identifier)
 
 
 def build_local_pipeline(tmp_path: Path):
@@ -412,12 +432,35 @@ def test_local_project_publishes_approved_best_files_after_dry_run(tmp_path: Pat
 
     assert applied["status"] == "applied"
     assert applied["destination_album_id"] == "photos-album-1"
-    assert len(importer.calls) == 1
-    album_name, files = importer.calls[0]
+    assert len(importer.calls) == 2
+    assert importer.calls[0] == ("reserve", dry_run["album_name"], "photos-album-1")
+    _, album_name, album_identifier, files = importer.calls[1]
     assert album_name == dry_run["album_name"]
+    assert album_identifier == "photos-album-1"
     assert len(files) == len(validation.asset_uuids)
     assert all(path.is_file() for path in files)
     assert all(paths.data_dir / "local_albums" in path.parents for path in files)
+
+
+def test_each_publish_plan_reserves_a_distinct_native_album(tmp_path: Path) -> None:
+    paths, provider, project_id = build_local_pipeline(tmp_path)
+    importer = FakeNativeImporter()
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        local_importer=importer,
+    )
+
+    first_plan = publisher.dry_run(project_id, "best")
+    second_plan = publisher.dry_run(project_id, "best")
+    first = publisher.apply(str(first_plan["id"]))
+    second = publisher.apply(str(second_plan["id"]))
+
+    assert first_plan["album_name"] != second_plan["album_name"]
+    assert first["destination_album_id"] == "photos-album-1"
+    assert second["destination_album_id"] == "photos-album-2"
+    assert first["destination_album_id"] != second["destination_album_id"]
 
 
 def test_local_project_reject_publish_is_not_supported(tmp_path: Path) -> None:
@@ -474,6 +517,8 @@ def test_failed_local_apply_can_retry_the_same_audited_plan(tmp_path: Path) -> N
     assert "synthetic partial failure" in str(failed["apply_stderr"])
     assert retried["status"] == "applied"
     assert retried["destination_album_id"] == "photos-album-1"
+    assert importer.reservation_count == 1
+    assert importer.publish_attempts == 2
 
 
 def test_photokit_project_duplicates_assets_without_osxphotos(tmp_path: Path) -> None:
@@ -499,8 +544,11 @@ def test_photokit_project_duplicates_assets_without_osxphotos(tmp_path: Path) ->
     assert applied["status"] == "applied"
     assert applied["destination_album_id"] == "photos-album-1"
     assert importer.calls == [
+        ("reserve", dry_run["album_name"], "photos-album-1"),
         (
+            "add",
             dry_run["album_name"],
+            "photos-album-1",
             Path(str(dry_run["uuid_file"])).read_text().splitlines(),
-        )
+        ),
     ]

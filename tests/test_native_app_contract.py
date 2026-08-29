@@ -380,7 +380,10 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     assert "PHAssetResourceManager.default().writeData" in publisher
     assert "PHAssetCreationRequest.forAsset()" in publisher
     assert "creation.addResource(with: .photo" in publisher
-    assert "photokit-publish-existing-assets-v6" in publisher
+    assert "photokit-publish-reserved-album-v7" in publisher
+    assert "destination_album_identifier" in publisher
+    assert "reserve_album" in publisher
+    assert "?? createAlbum" not in publisher
     assert "func performPhotoLibraryChanges" in publisher
     assert "PHPhotoLibrary.shared().performChanges(changes)" in publisher
     assert "performChangesAndWait" not in publisher

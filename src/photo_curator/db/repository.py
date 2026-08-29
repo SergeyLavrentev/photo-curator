@@ -2121,8 +2121,9 @@ def create_publish(
     asset_count: int,
     uuid_file: str,
     kind: str = "reject",
+    publish_id: str | None = None,
 ) -> str:
-    publish_id = new_id()
+    publish_id = publish_id or new_id()
     connection.execute(
         """
         INSERT INTO publishes (
@@ -2132,6 +2133,27 @@ def create_publish(
         (publish_id, project_id, album_name, asset_count, uuid_file, kind, utc_now()),
     )
     return publish_id
+
+
+def record_publish_destination(
+    connection: sqlite3.Connection,
+    publish_id: str,
+    destination_album_id: str,
+) -> None:
+    if not destination_album_id:
+        raise ValueError("destination_album_id is required")
+    row = connection.execute(
+        "SELECT destination_album_id FROM publishes WHERE id=?", (publish_id,)
+    ).fetchone()
+    if not row:
+        raise KeyError(publish_id)
+    existing = str(row["destination_album_id"] or "")
+    if existing and existing != destination_album_id:
+        raise RuntimeError("Publish destination identity is already reserved")
+    connection.execute(
+        "UPDATE publishes SET destination_album_id=?, status='destination_reserved' WHERE id=?",
+        (destination_album_id, publish_id),
+    )
 
 
 def record_dry_run(

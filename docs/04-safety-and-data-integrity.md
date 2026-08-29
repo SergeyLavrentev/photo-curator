@@ -9,7 +9,9 @@
 5. Regular PhotoKit publish добавляет существующие assets в новый Best album без дублей;
    только Shared/service-owned disk snapshot импортирует отдельные Best-копии.
 6. Реальному publish всегда предшествует отдельный dry-run.
-7. Каждый publish использует новый уникальный album name.
+7. Каждый publish использует новый уникальный album name с reservation token; нативный helper
+   отдельно создаёт пустой destination album, сохраняет его PhotoKit identifier и при retry
+   обращается только к этому identifier. Одноимённый существующий album не переиспользуется.
 8. Финальное удаление выполняет пользователь в Photos.app.
 
 ## Защищённые категории

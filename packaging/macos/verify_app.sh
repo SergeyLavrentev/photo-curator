@@ -79,7 +79,7 @@ require_photos_entitlement "$MAIN"
   || fail "PhotoKit publish launcher does not exec the main TCC identity"
 [[ "$("$SOURCE" --capability)" == "photokit-source-v1" ]] \
   || fail "PhotoKit source capability is unavailable through the main app"
-[[ "$("$PUBLISH" --capability)" == "photokit-publish-existing-assets-v6" ]] \
+[[ "$("$PUBLISH" --capability)" == "photokit-publish-reserved-album-v7" ]] \
   || fail "PhotoKit publish capability is unavailable through the main app"
 
 backend_entitlements="$(/usr/bin/codesign -d --entitlements :- "$BACKEND" 2>/dev/null)"

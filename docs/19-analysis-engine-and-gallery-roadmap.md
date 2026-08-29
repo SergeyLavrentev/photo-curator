@@ -79,8 +79,11 @@ Quality Lab и нативной галереи в последовательну
   analysis Future и другим apply.
   Evidence: native worker проверяет live Future под project operation lock; concurrent
   regression удерживает первый apply и подтверждает, что второй не входит в publisher.
-- [ ] Зарезервировать уникальный destination album identity до apply и исключить reuse
-  существующего одноимённого Photos album.
+- [x] Зарезервировать уникальный destination album identity до content apply и исключить
+  reuse существующего одноимённого Photos album.
+  Evidence: dry-run name содержит reservation token; confirmed apply сначала создаёт пустой
+  album, сохраняет PhotoKit local identifier и добавляет assets только по нему. Retry использует
+  тот же identifier, а helper отклоняет существующее имя и identity/name mismatch.
 
 ### R1 acceptance
 
@@ -91,7 +94,8 @@ Quality Lab и нативной галереи в последовательну
 - [x] Concurrency regression: coordinated start/delete не удаляет проект между submit и
   первым DB write pipeline.
 - [x] Concurrency regression: parallel apply одного проекта выполняются последовательно.
-- [ ] Concurrency regression: публикации разных проектов не объединяют destination albums.
+- [x] Regression: независимые publish plans получают разные имена и PhotoKit identities;
+  повторный apply одного failed plan не создаёт новый destination.
 - [ ] Реальный disposable PhotoKit acceptance на edited asset и source membership drift.
 
 ## R2 — snapshot, schema и media integrity

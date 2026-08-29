@@ -57,8 +57,7 @@ class NativePhotosImporter:
                 self._ensure_compiled()
                 result = self.runner([str(self.executable), "--capability"], timeout=30)
                 self._capability = (
-                    result.returncode == 0
-                    and "photokit-publish-existing-assets-v6" in result.stdout
+                    result.returncode == 0 and "photokit-publish-reserved-album-v7" in result.stdout
                 )
             except Exception:
                 LOGGER.warning("Native PhotoKit publisher unavailable", exc_info=True)
@@ -70,10 +69,15 @@ class NativePhotosImporter:
         album_name: str,
         files: list[Path],
         *,
+        album_identifier: str,
         progress: PublishProgress | None = None,
     ) -> dict[str, object]:
         return self._publish_request(
-            {"album_name": album_name, "files": [str(path) for path in files]},
+            {
+                "album_name": album_name,
+                "destination_album_identifier": album_identifier,
+                "files": [str(path) for path in files],
+            },
             progress=progress,
         )
 
@@ -82,11 +86,13 @@ class NativePhotosImporter:
         album_name: str,
         asset_identifiers: list[str],
         *,
+        album_identifier: str,
         progress: PublishProgress | None = None,
     ) -> dict[str, object]:
         return self._publish_request(
             {
                 "album_name": album_name,
+                "destination_album_identifier": album_identifier,
                 "duplicate_asset_identifiers": asset_identifiers,
             },
             progress=progress,
@@ -97,15 +103,28 @@ class NativePhotosImporter:
         album_name: str,
         asset_identifiers: list[str],
         *,
+        album_identifier: str,
         progress: PublishProgress | None = None,
     ) -> dict[str, object]:
         return self._publish_request(
             {
                 "album_name": album_name,
+                "destination_album_identifier": album_identifier,
                 "existing_asset_identifiers": asset_identifiers,
             },
             progress=progress,
         )
+
+    def reserve_album(self, album_name: str) -> dict[str, object]:
+        """Create a new empty album and return its immutable PhotoKit identifier."""
+
+        result = self._publish_request(
+            {"album_name": album_name, "reserve_album": True},
+        )
+        album_identifier = result.get("album_identifier")
+        if not isinstance(album_identifier, str) or not album_identifier:
+            raise ValueError("PhotoKit helper не вернул identity созданного альбома")
+        return result
 
     def delete_album(self, album_identifier: str) -> dict[str, object]:
         """Delete only the exact PhotoKit album created for disposable acceptance."""

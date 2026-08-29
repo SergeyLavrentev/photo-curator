@@ -35,9 +35,16 @@ class AcceptanceImporter:
         self.provider = provider
         self.deleted: list[str] = []
 
-    def add_assets(self, album_name: str, asset_uuids: list[str], *, progress):
+    def reserve_album(self, album_name: str):
+        assert album_name == "Disposable acceptance"
+        return {"album_identifier": "acceptance-album", "added": 0}
+
+    def add_assets(
+        self, album_name: str, asset_uuids: list[str], *, album_identifier: str, progress
+    ):
         assert album_name == "Disposable acceptance"
         assert asset_uuids == ["asset-1"]
+        assert album_identifier == "acceptance-album"
         progress("prepare", 1, 1)
         progress("commit", 1, 1)
         return {
