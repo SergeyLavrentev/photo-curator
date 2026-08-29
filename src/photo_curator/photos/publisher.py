@@ -77,20 +77,30 @@ class PhotosPublisher:
         candidates = [
             asset
             for asset in assets
-            if (
+            if not asset.get("no_longer_exists")
+            and not asset.get("is_missing")
+            and (
                 asset.get("final_selection") == "pick"
                 if kind == "best"
                 else asset.get("final_disposition") == "reject"
             )
         ]
+        group_member_ids = {
+            str(member["asset_uuid"]) for group in groups for member in group["members"]
+        }
+        revalidation_ids = sorted(
+            group_member_ids.union(str(asset["asset_uuid"]) for asset in candidates)
+        )
         try:
+            self.provider.refresh_library()
             refreshed = {
-                asset.uuid: asset
-                for asset in self.provider.refresh_assets(
-                    [str(asset["asset_uuid"]) for asset in candidates]
-                )
+                asset.uuid: asset for asset in self.provider.refresh_assets(revalidation_ids)
             }
             current_library = self.provider.get_current_library()
+            membership = {
+                asset_uuid: self.provider.asset_still_in_album(str(project["album_id"]), asset_uuid)
+                for asset_uuid in revalidation_ids
+            }
         except Exception:
             return PublishValidation(
                 [], blockers=["Photos Library недоступна; повторите Doctor/read gate"]
@@ -101,12 +111,7 @@ class PhotosPublisher:
         for row in candidates:
             uuid = str(row["asset_uuid"])
             current = refreshed.get(uuid)
-            try:
-                still_in_album = self.provider.asset_still_in_album(str(project["album_id"]), uuid)
-            except Exception:
-                blockers.append("Photos Library стала недоступна во время revalidation")
-                break
-            if not current or not still_in_album:
+            if not current or not membership.get(uuid, False):
                 removed.append(uuid)
                 continue
             if kind == "best":
@@ -130,9 +135,36 @@ class PhotosPublisher:
                 warnings.append(f"{uuid}: manual reject не отмечен reviewed")
             accepted.append(uuid)
         by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
+        unsafe_duplicate_rejects: set[str] = set()
         for group in groups if kind == "reject" else []:
             members = [by_uuid.get(str(member["asset_uuid"])) for member in group["members"]]
-            members = [member for member in members if member]
+            members = [
+                member
+                for member in members
+                if member
+                and not member.get("no_longer_exists")
+                and not member.get("is_missing")
+                and member.get("cache_state") == "ready"
+                and str(member["asset_uuid"]) in refreshed
+                and membership.get(str(member["asset_uuid"]), False)
+            ]
+            active_by_uuid = {str(member["asset_uuid"]): member for member in members}
+            rejected_members = [
+                active_by_uuid[uuid]
+                for uuid in accepted
+                if uuid in active_by_uuid
+                and active_by_uuid[uuid].get("final_disposition") == "reject"
+            ]
+            active_leader = active_by_uuid.get(str(group.get("leader_uuid") or ""))
+            for rejected in rejected_members:
+                if "duplicate_loser" not in set(rejected.get("flags") or []):
+                    continue
+                if not active_leader or active_leader.get("final_disposition") != "keep":
+                    unsafe_duplicate_rejects.add(str(rejected["asset_uuid"]))
+                    blockers.append(
+                        f"{rejected['asset_uuid']}: duplicate group {group['group_id']} "
+                        "не содержит активного сохранённого лидера"
+                    )
             max_pixels = max(
                 (
                     int(member.get("width") or 0) * int(member.get("height") or 0)
@@ -167,6 +199,7 @@ class PhotosPublisher:
                         warnings.append(message + " подтверждён вручную")
                     else:
                         blockers.append(message)
+        accepted = [uuid for uuid in accepted if uuid not in unsafe_duplicate_rejects]
         if not accepted:
             blockers.append(
                 "Нет отобранных фотографий"

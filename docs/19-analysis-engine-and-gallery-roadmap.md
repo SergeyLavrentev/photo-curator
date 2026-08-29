@@ -61,8 +61,10 @@ Quality Lab и нативной галереи в последовательну
   Evidence: unavailable-asset и signal-rerank regressions, повторный inventory удалённого
   asset очищает metrics/group membership и уменьшает gallery total.
 - [ ] Исключить stale-revision assets из publish safety evidence и любых сохранённых leaders.
-- [ ] Запретить near/exact Reject, если fresh active snapshot не содержит проверенного
+- [x] Запретить near/exact Reject, если fresh active snapshot не содержит проверенного
   сохранённого лидера или эквивалентной full-resolution копии.
+  Evidence: publish всегда сбрасывает provider caches, заново читает assets/membership и
+  исключает duplicate loser при исчезнувшем retained leader.
 - [ ] Перед каждым dry-run и apply заново читать exact source membership и сравнивать
   media type, modification/edit revision и render/content fingerprint.
 - [ ] Сериализовать start/resume/delete/publish per-project lock/state machine; delete и
@@ -72,7 +74,7 @@ Quality Lab и нативной галереи в последовательну
 
 ### R1 acceptance
 
-- [ ] Ghost duplicate regression: после исчезновения лидера живая копия не получает Reject,
+- [x] Ghost duplicate regression: после исчезновения лидера живая копия не получает Reject,
   publish fail-closed до свежего анализа.
 - [ ] Source-drift regression: membership/edit/content change после dry-run блокирует apply.
 - [ ] Concurrency regression: coordinated start/delete и parallel apply не теряют локальные

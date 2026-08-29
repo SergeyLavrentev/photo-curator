@@ -309,6 +309,41 @@ def test_exact_copy_reject_is_not_a_resolution_inversion_when_full_size_copy_is_
     assert not any("resolution inversion" in blocker for blocker in validation.blockers)
 
 
+def test_exact_copy_reject_is_blocked_when_retained_leader_left_source_album(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        runner=lambda args: CommandResult(args, 0, "--uuid-from-file --add-to-album --dry-run", ""),
+        executable="/usr/bin/true",
+    )
+    with database_connection(paths.database) as connection:
+        group = next(
+            group
+            for group in repository.list_duplicate_groups(connection, project_id)
+            if group["kind"] == "exact"
+            and {str(member["asset_uuid"]) for member in group["members"]}
+            >= {"demo-001", "demo-002"}
+        )
+        loser = repository.get_asset(connection, project_id, "demo-002")
+    assert group["leader_uuid"] == "demo-001"
+    assert loser["final_disposition"] == "reject"
+
+    provider._assets = [asset for asset in provider._assets if asset.uuid != "demo-001"]
+
+    validation = publisher.validate(project_id)
+
+    assert "demo-002" not in validation.asset_uuids
+    assert any(
+        "demo-002" in blocker and "активного сохранённого лидера" in blocker
+        for blocker in validation.blockers
+    )
+
+
 def test_provider_failure_becomes_publish_blocker(tmp_path: Path) -> None:
     paths, provider, coordinator, project_id = build_pipeline(tmp_path)
     coordinator.run(project_id)
