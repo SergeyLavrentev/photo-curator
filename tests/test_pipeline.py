@@ -509,7 +509,17 @@ def test_inventory_snapshot_tracks_render_metadata_video_count_and_removed_asset
     coordinator.run(project_id, from_stage="inventory")
     with database_connection(paths.database) as connection:
         removed = repository.get_asset(connection, project_id, "demo-012")
+        groups = repository.list_duplicate_groups(connection, project_id)
+        summary = repository.project_summary(connection, project_id)
+        gallery_total = repository.count_assets(connection, project_id)
     assert removed["no_longer_exists"] == 1
+    assert removed["phash"] is None
+    assert all(
+        "demo-012" not in {str(member["asset_uuid"]) for member in group["members"]}
+        for group in groups
+    )
+    assert summary["total"] == 11
+    assert gallery_total == 11
 
 
 def test_startup_interruption_updates_both_job_and_project_state(tmp_path: Path) -> None:

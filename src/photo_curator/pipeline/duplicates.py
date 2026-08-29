@@ -64,7 +64,7 @@ def find_duplicate_groups(
     candidate_pairs: list[tuple[dict[str, object], dict[str, object]]] | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> list[DuplicateGroupResult]:
-    candidates = [asset for asset in assets if asset.get("phash")]
+    candidates = [asset for asset in assets if _eligible_duplicate_asset(asset)]
     union = UnionFind([str(asset["asset_uuid"]) for asset in candidates])
     pair_evidence: dict[frozenset[str], dict[str, object]] = {}
     preview_cache: dict[str, tuple[np.ndarray, np.ndarray] | None] = {}
@@ -609,7 +609,7 @@ def _signal_aware_groups(
     *,
     check_cancelled: Callable[[], None] | None = None,
 ) -> list[DuplicateGroupResult]:
-    candidates = [asset for asset in assets if asset.get("phash")]
+    candidates = [asset for asset in assets if _eligible_duplicate_asset(asset)]
     union = UnionFind([str(asset["asset_uuid"]) for asset in candidates])
     evidence: dict[frozenset[str], dict[str, object]] = {}
     for index, (left, right) in enumerate(_candidate_pairs(candidates), start=1):
@@ -641,6 +641,15 @@ def _signal_aware_groups(
         _build_group(index, members, evidence, relaxed_phash_distance)
         for index, members in enumerate(coherent, start=1)
     ]
+
+
+def _eligible_duplicate_asset(asset: dict[str, object]) -> bool:
+    return bool(
+        asset.get("phash")
+        and not asset.get("no_longer_exists")
+        and not asset.get("is_missing")
+        and asset.get("cache_state") == "ready"
+    )
 
 
 def _feature_vector(signals: dict[str, dict[str, object]]) -> np.ndarray | None:

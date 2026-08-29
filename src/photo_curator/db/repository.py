@@ -407,6 +407,15 @@ def upsert_assets(
         """,
         rows,
     )
+    inactive_uuids = [
+        str(row["asset_uuid"])
+        for row in connection.execute(
+            "SELECT asset_uuid FROM assets WHERE project_id=? AND no_longer_exists=1",
+            (project_id,),
+        ).fetchall()
+    ]
+    for asset_uuid in inactive_uuids:
+        invalidate_asset_analysis(connection, project_id, asset_uuid)
     return len(rows)
 
 
@@ -458,6 +467,16 @@ def update_asset_preview(
 def invalidate_asset_analysis(
     connection: sqlite3.Connection, project_id: str, asset_uuid: str
 ) -> None:
+    connection.execute(
+        """
+        DELETE FROM duplicate_groups
+        WHERE project_id=? AND group_id IN (
+            SELECT group_id FROM duplicate_members
+            WHERE project_id=? AND asset_uuid=?
+        )
+        """,
+        (project_id, project_id, asset_uuid),
+    )
     connection.execute(
         "DELETE FROM metrics WHERE project_id=? AND asset_uuid=?", (project_id, asset_uuid)
     )
@@ -1979,7 +1998,7 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         SELECT COUNT(*) total,
             SUM(cache_state='ready') ready,
             SUM(cache_state!='ready') missing
-        FROM assets WHERE project_id=?
+        FROM assets WHERE project_id=? AND no_longer_exists=0
         """,
         (project_id,),
     ).fetchone()
@@ -1988,7 +2007,8 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
     for row in connection.execute(
         """
         SELECT final_disposition disposition, COUNT(*) count
-        FROM decisions WHERE project_id=? GROUP BY final_disposition
+        FROM decisions d JOIN assets a USING (project_id, asset_uuid)
+        WHERE d.project_id=? AND a.no_longer_exists=0 GROUP BY final_disposition
         """,
         (project_id,),
     ).fetchall():
@@ -1996,7 +2016,8 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
     for row in connection.execute(
         """
         SELECT final_selection selection, COUNT(*) count
-        FROM decisions WHERE project_id=? GROUP BY final_selection
+        FROM decisions d JOIN assets a USING (project_id, asset_uuid)
+        WHERE d.project_id=? AND a.no_longer_exists=0 GROUP BY final_selection
         """,
         (project_id,),
     ).fetchall():
@@ -2004,7 +2025,10 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         result[key if key in {"pick", "alternative"} else f"selection_{key}"] = int(row["count"])
     result["reviewed"] = int(
         connection.execute(
-            "SELECT COUNT(*) FROM decisions WHERE project_id=? AND reviewed=1", (project_id,)
+            """SELECT COUNT(*) FROM decisions d
+            JOIN assets a USING (project_id, asset_uuid)
+            WHERE d.project_id=? AND d.reviewed=1 AND a.no_longer_exists=0""",
+            (project_id,),
         ).fetchone()[0]
     )
     result["duplicate_groups"] = int(
@@ -2035,7 +2059,7 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
             SUM(d.flags_json LIKE '%best_candidate%'),
             SUM(d.flags_json LIKE '%resolution%')
         FROM assets a LEFT JOIN decisions d USING(project_id, asset_uuid)
-        WHERE a.project_id=?
+        WHERE a.project_id=? AND a.no_longer_exists=0
         """,
         (project_id,),
     ).fetchone()
@@ -2070,7 +2094,7 @@ def publish_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
             SUM(d.final_disposition='reject' AND a.cache_state!='ready') missing,
             SUM(d.final_disposition='reject' AND d.reviewed=0) unreviewed
         FROM assets a LEFT JOIN decisions d USING(project_id, asset_uuid)
-        WHERE a.project_id=?
+        WHERE a.project_id=? AND a.no_longer_exists=0
         """,
         (project_id,),
     ).fetchone()

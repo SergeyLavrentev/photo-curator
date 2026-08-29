@@ -31,7 +31,7 @@ def list_assets_page(
             cursor_asset_uuid=cursor_asset_uuid,
         )
 
-    clauses = ["a.project_id = ?"]
+    clauses = ["a.project_id = ?", "a.no_longer_exists = 0"]
     parameters: list[object] = [project_id]
     if disposition is not None:
         clauses.append("d.final_disposition = ?")
@@ -93,7 +93,15 @@ def _list_ranked_decision_page(
     probe the decision index for the small number of candidates required by the
     page.  Starting from ``assets`` made every cursor page sort the full album.
     """
-    clauses = ["s.project_id = ?"]
+    clauses = [
+        "s.project_id = ?",
+        """EXISTS (
+            SELECT 1 FROM assets active_a
+            WHERE active_a.project_id=s.project_id
+              AND active_a.asset_uuid=s.asset_uuid
+              AND active_a.no_longer_exists=0
+        )""",
+    ]
     parameters: list[object] = [project_id]
     if cursor_score is not None and cursor_asset_uuid is not None:
         clauses.append("(s.score < ? OR (s.score = ? AND s.asset_uuid > ?))")
@@ -154,7 +162,7 @@ def count_assets(
     disposition: str | None = None,
     selection: str | None = None,
 ) -> int:
-    clauses = ["a.project_id = ?"]
+    clauses = ["a.project_id = ?", "a.no_longer_exists = 0"]
     parameters: list[object] = [project_id]
     if disposition is not None:
         clauses.append("d.final_disposition = ?")

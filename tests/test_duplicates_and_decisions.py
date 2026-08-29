@@ -44,6 +44,40 @@ def test_duplicate_group_prefers_favorite_and_higher_resolution() -> None:
     assert "leader_lower_resolution" in groups[0].flags
 
 
+@pytest.mark.parametrize(
+    "unavailable",
+    [
+        {"no_longer_exists": 1},
+        {"is_missing": 1},
+        {"cache_state": "missing"},
+        {"cache_state": "degraded"},
+    ],
+)
+def test_duplicate_group_excludes_unavailable_assets(
+    unavailable: dict[str, object],
+) -> None:
+    active = asset("active")
+    inactive = {**asset("inactive"), **unavailable}
+
+    assert find_duplicate_groups([active, inactive]) == []
+
+
+def test_signal_rerank_drops_group_when_previous_leader_is_inactive() -> None:
+    initial_assets = [asset("leader", pixels=2000), asset("copy", pixels=2000)]
+    initial = find_duplicate_groups(initial_assets)[0]
+    persisted = {
+        "group_id": initial.group_id,
+        "leader_uuid": initial.leader_uuid,
+        "flags": initial.flags,
+        "members": [{"asset_uuid": member.asset_uuid} for member in initial.members],
+    }
+    next(item for item in initial_assets if item["asset_uuid"] == initial.leader_uuid)[
+        "no_longer_exists"
+    ] = 1
+
+    assert rerank_duplicate_groups([persisted], initial_assets, {}) == []
+
+
 def test_duplicate_leader_is_rebuilt_after_full_quality_signals() -> None:
     initial_assets = [asset("large", pixels=3000), asset("clear-face", pixels=2000)]
     initial = find_duplicate_groups(initial_assets)[0]

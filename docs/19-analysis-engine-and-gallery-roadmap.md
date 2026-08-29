@@ -55,8 +55,12 @@ Quality Lab и нативной галереи в последовательну
 - [ ] Добавить безопасную миграцию уже созданных Quality Lab overrides. Миграция должна
   отличать lab provenance от настоящих пользовательских решений и не переписывать их
   без доказуемого происхождения и отдельного backup.
-- [ ] Исключить `no_longer_exists`, missing/degraded и stale-revision assets из duplicate
-  grouping, leader selection, gallery counts и publish safety evidence.
+- [x] Исключить `no_longer_exists`, missing/degraded assets из duplicate grouping и leader
+  selection; удалить затронутые группы при inventory/preview invalidation и не показывать
+  исчезнувшие assets в активных gallery counts.
+  Evidence: unavailable-asset и signal-rerank regressions, повторный inventory удалённого
+  asset очищает metrics/group membership и уменьшает gallery total.
+- [ ] Исключить stale-revision assets из publish safety evidence и любых сохранённых leaders.
 - [ ] Запретить near/exact Reject, если fresh active snapshot не содержит проверенного
   сохранённого лидера или эквивалентной full-resolution копии.
 - [ ] Перед каждым dry-run и apply заново читать exact source membership и сравнивать

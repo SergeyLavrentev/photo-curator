@@ -458,6 +458,7 @@ class PipelineCoordinator:
                 if not render or not render.path:
                     warnings += 1
                     with database_connection(self.database_path) as connection:
+                        repository.invalidate_asset_analysis(connection, project_id, asset_uuid)
                         repository.update_asset_preview(
                             connection,
                             project_id,
@@ -543,6 +544,7 @@ class PipelineCoordinator:
                 errors += 1
                 LOGGER.exception("Preview failed for %s", asset_uuid)
                 with database_connection(self.database_path) as connection:
+                    repository.invalidate_asset_analysis(connection, project_id, asset_uuid)
                     repository.update_asset_preview(
                         connection,
                         project_id,
