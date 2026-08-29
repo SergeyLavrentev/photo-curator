@@ -7,7 +7,14 @@ from collections.abc import Iterable
 
 from photo_curator.analysis.decision_engine import binary_disposition
 from photo_curator.db import gallery_repository
-from photo_curator.photos.provider import PhotoAlbum, PhotoAsset, PhotoLibrary
+from photo_curator.photos.provider import (
+    PhotoAlbum,
+    PhotoAsset,
+    PhotoLibrary,
+    is_supported_photo,
+    normalized_media_type,
+    photo_asset_revision,
+)
 from photo_curator.utils.identifiers import new_id
 from photo_curator.utils.timestamps import utc_now
 
@@ -331,8 +338,56 @@ def upsert_assets(
     assets: Iterable[PhotoAsset],
 ) -> int:
     now = utc_now()
+    existing = {
+        str(row["asset_uuid"]): dict(row)
+        for row in connection.execute(
+            """
+            SELECT asset_uuid, taken_at, width, height, orientation, media_type,
+                media_subtypes, creation_timestamp, modification_timestamp,
+                edit_state, source_revision
+            FROM assets WHERE project_id=?
+            """,
+            (project_id,),
+        ).fetchall()
+    }
     rows = []
+    changed_uuids: set[str] = set()
     for asset in assets:
+        if not is_supported_photo(asset):
+            continue
+        media_type = normalized_media_type(asset)
+        revision = photo_asset_revision(asset)
+        previous = existing.get(asset.uuid)
+        current_revision_fields = (
+            asset.taken_at,
+            asset.width,
+            asset.height,
+            asset.orientation,
+            media_type,
+            int(asset.media_subtypes),
+            asset.creation_timestamp,
+            asset.modification_timestamp,
+            asset.edit_state,
+            revision,
+        )
+        if previous is not None:
+            previous_revision_fields = tuple(
+                previous[key]
+                for key in (
+                    "taken_at",
+                    "width",
+                    "height",
+                    "orientation",
+                    "media_type",
+                    "media_subtypes",
+                    "creation_timestamp",
+                    "modification_timestamp",
+                    "edit_state",
+                    "source_revision",
+                )
+            )
+            if previous_revision_fields != current_revision_fields:
+                changed_uuids.add(asset.uuid)
         rows.append(
             (
                 project_id,
@@ -363,10 +418,21 @@ def upsert_assets(
                         "derivative_count": len(asset.derivative_paths),
                         "album_membership": True,
                         "provider_error": asset.provider_error,
+                        "media_type": media_type,
+                        "media_subtypes": int(asset.media_subtypes),
+                        "creation_timestamp": asset.creation_timestamp,
+                        "modification_timestamp": asset.modification_timestamp,
+                        "edit_state": asset.edit_state,
                     },
                     sort_keys=True,
                 ),
                 json.dumps(asset.apple_scores) if asset.apple_scores else None,
+                media_type,
+                int(asset.media_subtypes),
+                asset.creation_timestamp,
+                asset.modification_timestamp,
+                asset.edit_state,
+                revision,
                 now,
                 now,
             )
@@ -379,8 +445,9 @@ def upsert_assets(
             date_added, width, height, original_width, original_height, orientation,
             favorite, hidden, has_adjustments, is_live_photo, is_burst, burst_key,
             burst_default_pick, is_missing, no_longer_exists, source_path, metadata_json,
-            apple_scores_json, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            apple_scores_json, media_type, media_subtypes, creation_timestamp,
+            modification_timestamp, edit_state, source_revision, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
             original_filename=excluded.original_filename,
             current_filename=excluded.current_filename,
@@ -403,6 +470,12 @@ def upsert_assets(
             source_path=excluded.source_path,
             metadata_json=excluded.metadata_json,
             apple_scores_json=excluded.apple_scores_json,
+            media_type=excluded.media_type,
+            media_subtypes=excluded.media_subtypes,
+            creation_timestamp=excluded.creation_timestamp,
+            modification_timestamp=excluded.modification_timestamp,
+            edit_state=excluded.edit_state,
+            source_revision=excluded.source_revision,
             updated_at=excluded.updated_at
         """,
         rows,
@@ -414,9 +487,144 @@ def upsert_assets(
             (project_id,),
         ).fetchall()
     ]
-    for asset_uuid in inactive_uuids:
+    for asset_uuid in sorted({*inactive_uuids, *changed_uuids}):
         invalidate_asset_analysis(connection, project_id, asset_uuid)
     return len(rows)
+
+
+def create_album_snapshot(
+    connection: sqlite3.Connection,
+    project_id: str,
+    assets: Iterable[PhotoAsset],
+) -> dict[str, object]:
+    source_assets = list(assets)
+    project = get_project(connection, project_id)
+    snapshot_id = new_id()
+    captured_at = utc_now()
+    items: list[tuple[object, ...]] = []
+    membership_payload = []
+    photo_count = 0
+    video_count = 0
+    for position, asset in enumerate(source_assets):
+        media_type = normalized_media_type(asset)
+        revision = photo_asset_revision(asset)
+        revision_fingerprint = hashlib.sha256(revision.encode()).hexdigest()
+        render_fingerprint = hashlib.sha256(f"review-v5|{revision}".encode()).hexdigest()
+        edit_state = asset.edit_state if asset.edit_state in {"original", "adjusted"} else "unknown"
+        photo_count += int(is_supported_photo(asset))
+        video_count += int(media_type == "video")
+        item = {
+            "asset_uuid": asset.uuid,
+            "position": position,
+            "creation_date": asset.taken_at,
+            "creation_timestamp": asset.creation_timestamp,
+            "modification_timestamp": asset.modification_timestamp,
+            "media_type": media_type,
+            "media_subtypes": int(asset.media_subtypes),
+            "edit_state": edit_state,
+            "width": asset.width,
+            "height": asset.height,
+            "orientation": asset.orientation,
+            "revision_fingerprint": revision_fingerprint,
+            "render_fingerprint": render_fingerprint,
+        }
+        membership_payload.append(item)
+        items.append(
+            (
+                snapshot_id,
+                project_id,
+                asset.uuid,
+                position,
+                1,
+                asset.taken_at,
+                asset.creation_timestamp,
+                asset.modification_timestamp,
+                media_type,
+                int(asset.media_subtypes),
+                edit_state,
+                asset.width,
+                asset.height,
+                asset.orientation,
+                revision_fingerprint,
+                render_fingerprint,
+            )
+        )
+    encoded = json.dumps(membership_payload, sort_keys=True, separators=(",", ":"))
+    membership_hash = hashlib.sha256(encoded.encode()).hexdigest()
+    connection.execute(
+        """
+        INSERT INTO album_snapshots (
+            id, project_id, source_album_id, membership_hash, item_count,
+            photo_count, skipped_video_count, captured_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            snapshot_id,
+            project_id,
+            str(project["album_id"]),
+            membership_hash,
+            len(items),
+            photo_count,
+            video_count,
+            captured_at,
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO album_snapshot_items (
+            snapshot_id, project_id, asset_uuid, album_position, source_membership,
+            creation_date, creation_timestamp, modification_timestamp, media_type,
+            media_subtypes, edit_state, width, height, orientation,
+            revision_fingerprint, render_fingerprint
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        items,
+    )
+    settings = json.loads(str(project.get("settings_json") or "{}"))
+    settings["snapshot_photo_count"] = photo_count
+    settings["snapshot_video_count"] = video_count
+    settings["video_count"] = max(int(settings.get("video_count") or 0), video_count)
+    connection.execute(
+        """
+        UPDATE projects SET album_snapshot_hash=?, settings_json=?, updated_at=? WHERE id=?
+        """,
+        (membership_hash, json.dumps(settings, sort_keys=True), captured_at, project_id),
+    )
+    return {
+        "id": snapshot_id,
+        "project_id": project_id,
+        "membership_hash": membership_hash,
+        "item_count": len(items),
+        "photo_count": photo_count,
+        "skipped_video_count": video_count,
+        "captured_at": captured_at,
+    }
+
+
+def latest_album_snapshot(
+    connection: sqlite3.Connection, project_id: str
+) -> dict[str, object] | None:
+    row = connection.execute(
+        """
+        SELECT * FROM album_snapshots
+        WHERE project_id=? ORDER BY captured_at DESC, id DESC LIMIT 1
+        """,
+        (project_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def album_snapshot_items(
+    connection: sqlite3.Connection, snapshot_id: str
+) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT * FROM album_snapshot_items
+        WHERE snapshot_id=? ORDER BY album_position
+        """,
+        (snapshot_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _normalized_burst_key(value: object) -> str | None:
@@ -1998,7 +2206,7 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         SELECT COUNT(*) total,
             SUM(cache_state='ready') ready,
             SUM(cache_state!='ready') missing
-        FROM assets WHERE project_id=? AND no_longer_exists=0
+        FROM assets WHERE project_id=? AND no_longer_exists=0 AND media_type='image'
         """,
         (project_id,),
     ).fetchone()
@@ -2008,7 +2216,8 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         """
         SELECT final_disposition disposition, COUNT(*) count
         FROM decisions d JOIN assets a USING (project_id, asset_uuid)
-        WHERE d.project_id=? AND a.no_longer_exists=0 GROUP BY final_disposition
+        WHERE d.project_id=? AND a.no_longer_exists=0 AND a.media_type='image'
+        GROUP BY final_disposition
         """,
         (project_id,),
     ).fetchall():
@@ -2017,7 +2226,8 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         """
         SELECT final_selection selection, COUNT(*) count
         FROM decisions d JOIN assets a USING (project_id, asset_uuid)
-        WHERE d.project_id=? AND a.no_longer_exists=0 GROUP BY final_selection
+        WHERE d.project_id=? AND a.no_longer_exists=0 AND a.media_type='image'
+        GROUP BY final_selection
         """,
         (project_id,),
     ).fetchall():
@@ -2027,7 +2237,8 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
         connection.execute(
             """SELECT COUNT(*) FROM decisions d
             JOIN assets a USING (project_id, asset_uuid)
-            WHERE d.project_id=? AND d.reviewed=1 AND a.no_longer_exists=0""",
+            WHERE d.project_id=? AND d.reviewed=1 AND a.no_longer_exists=0
+              AND a.media_type='image'""",
             (project_id,),
         ).fetchone()[0]
     )
@@ -2059,7 +2270,7 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
             SUM(d.flags_json LIKE '%best_candidate%'),
             SUM(d.flags_json LIKE '%resolution%')
         FROM assets a LEFT JOIN decisions d USING(project_id, asset_uuid)
-        WHERE a.project_id=? AND a.no_longer_exists=0
+        WHERE a.project_id=? AND a.no_longer_exists=0 AND a.media_type='image'
         """,
         (project_id,),
     ).fetchone()
@@ -2094,7 +2305,7 @@ def publish_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
             SUM(d.final_disposition='reject' AND a.cache_state!='ready') missing,
             SUM(d.final_disposition='reject' AND d.reviewed=0) unreviewed
         FROM assets a LEFT JOIN decisions d USING(project_id, asset_uuid)
-        WHERE a.project_id=? AND a.no_longer_exists=0
+        WHERE a.project_id=? AND a.no_longer_exists=0 AND a.media_type='image'
         """,
         (project_id,),
     ).fetchone()

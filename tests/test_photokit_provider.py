@@ -16,7 +16,7 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
     def runner(command, *, timeout):
         calls.append((command, timeout))
         if command[-1] == "--capability":
-            return CommandResult(command, 0, "photokit-source-v1\n", "")
+            return CommandResult(command, 0, "photokit-source-media-v2\n", "")
         if command[1:] == ["albums"]:
             return CommandResult(
                 command,
@@ -63,16 +63,24 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
                         "original_filename": "IMG_1.HEIC",
                         "current_filename": "IMG_1.HEIC",
                         "taken_at": "2026-01-01T00:00:00Z",
+                        "creation_timestamp": 1767225600.125,
+                        "modification_timestamp": 1767225601.5,
                         "width": 4032,
                         "height": 3024,
+                        "orientation": 1,
                         "favorite": True,
                         "hidden": False,
+                        "has_adjustments": True,
                         "is_live_photo": True,
                         "is_burst": False,
                         "burst_key": None,
                         "burst_default_pick": False,
                         "is_missing": False,
                         "is_photo": True,
+                        "media_type": "image",
+                        "media_subtypes": 8,
+                        "edit_state": "adjusted",
+                        "source_revision": "photokit-revision-1",
                         "source_path": str(render),
                         "provider_error": None,
                     }
@@ -92,6 +100,11 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
     assert asset.uuid == "asset/L0/001"
     assert asset.source_path and asset.source_path.is_file()
     assert asset.favorite and asset.is_live_photo
+    assert asset.has_adjustments and asset.edit_state == "adjusted"
+    assert asset.media_type == "image" and asset.media_subtypes == 8
+    assert asset.creation_timestamp == 1767225600.125
+    assert asset.modification_timestamp == 1767225601.5
+    assert asset.source_revision == "photokit-revision-1"
     refreshed = provider.refresh_assets([asset.uuid])
     assert [item.uuid for item in refreshed] == [asset.uuid]
     sampled = provider.sample_assets(

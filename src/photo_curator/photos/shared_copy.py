@@ -264,6 +264,13 @@ def _local_asset(asset: PhotoAsset, path: Path) -> PhotoAsset:
         is_burst=asset.is_burst,
         burst_key=asset.burst_key,
         burst_default_pick=asset.burst_default_pick,
+        is_photo=True,
+        media_type="image",
+        media_subtypes=asset.media_subtypes,
+        creation_timestamp=asset.creation_timestamp,
+        modification_timestamp=asset.modification_timestamp,
+        edit_state=asset.edit_state,
+        source_revision=None,
         source_path=path,
         apple_scores=asset.apple_scores,
     )

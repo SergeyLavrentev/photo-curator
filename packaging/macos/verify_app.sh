@@ -77,7 +77,7 @@ require_photos_entitlement "$MAIN"
   || fail "PhotoKit source launcher does not exec the main TCC identity"
 /usr/bin/grep -Fq -- '--photo-curator-publish-helper' "$PUBLISH" \
   || fail "PhotoKit publish launcher does not exec the main TCC identity"
-[[ "$("$SOURCE" --capability)" == "photokit-source-v1" ]] \
+[[ "$("$SOURCE" --capability)" == "photokit-source-media-v2" ]] \
   || fail "PhotoKit source capability is unavailable through the main app"
 [[ "$("$PUBLISH" --capability)" == "photokit-publish-reserved-album-v7" ]] \
   || fail "PhotoKit publish capability is unavailable through the main app"

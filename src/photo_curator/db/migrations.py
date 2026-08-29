@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -480,6 +480,56 @@ CHECK (
 );
 """
 
+MIGRATION_20 = """
+ALTER TABLE assets ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'
+CHECK (media_type IN ('image', 'video', 'audio', 'unknown'));
+ALTER TABLE assets ADD COLUMN media_subtypes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE assets ADD COLUMN creation_timestamp REAL;
+ALTER TABLE assets ADD COLUMN modification_timestamp REAL;
+ALTER TABLE assets ADD COLUMN edit_state TEXT NOT NULL DEFAULT 'original'
+CHECK (edit_state IN ('original', 'adjusted', 'unknown'));
+ALTER TABLE assets ADD COLUMN source_revision TEXT;
+
+CREATE TABLE album_snapshots (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    source_album_id TEXT NOT NULL,
+    membership_hash TEXT NOT NULL,
+    item_count INTEGER NOT NULL,
+    photo_count INTEGER NOT NULL,
+    skipped_video_count INTEGER NOT NULL,
+    captured_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX album_snapshots_project_captured
+ON album_snapshots(project_id, captured_at, id);
+
+CREATE TABLE album_snapshot_items (
+    snapshot_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    asset_uuid TEXT NOT NULL,
+    album_position INTEGER NOT NULL,
+    source_membership INTEGER NOT NULL DEFAULT 1 CHECK (source_membership IN (0, 1)),
+    creation_date TEXT,
+    creation_timestamp REAL,
+    modification_timestamp REAL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('image', 'video', 'audio', 'unknown')),
+    media_subtypes INTEGER NOT NULL DEFAULT 0,
+    edit_state TEXT NOT NULL CHECK (edit_state IN ('original', 'adjusted', 'unknown')),
+    width INTEGER,
+    height INTEGER,
+    orientation INTEGER,
+    revision_fingerprint TEXT NOT NULL,
+    render_fingerprint TEXT NOT NULL,
+    PRIMARY KEY (snapshot_id, asset_uuid),
+    UNIQUE (snapshot_id, album_position),
+    FOREIGN KEY (snapshot_id) REFERENCES album_snapshots(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX album_snapshot_items_project_media
+ON album_snapshot_items(project_id, media_type, snapshot_id);
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -512,6 +562,7 @@ MIGRATIONS = (
     MIGRATION_17,
     MIGRATION_18,
     MIGRATION_19,
+    MIGRATION_20,
 )
 
 _TABLES_BY_VERSION = {
@@ -534,6 +585,7 @@ _TABLES_BY_VERSION = {
     11: {"taste_rounds", "taste_assets"},
     14: {"stage_fingerprints"},
     18: {"quality_preference_examples"},
+    20: {"album_snapshots", "album_snapshot_items"},
 }
 
 _COLUMNS_BY_VERSION = {
@@ -563,6 +615,34 @@ _COLUMNS_BY_VERSION = {
         },
     },
     19: {"quality_asset_labels": {"expected_disposition"}},
+    20: {
+        "assets": {
+            "media_type",
+            "media_subtypes",
+            "creation_timestamp",
+            "modification_timestamp",
+            "edit_state",
+            "source_revision",
+        },
+        "album_snapshot_items": {
+            "snapshot_id",
+            "project_id",
+            "asset_uuid",
+            "album_position",
+            "source_membership",
+            "creation_date",
+            "creation_timestamp",
+            "modification_timestamp",
+            "media_type",
+            "media_subtypes",
+            "edit_state",
+            "width",
+            "height",
+            "orientation",
+            "revision_fingerprint",
+            "render_fingerprint",
+        },
+    },
 }
 
 

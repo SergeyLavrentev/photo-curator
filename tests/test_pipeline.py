@@ -12,6 +12,7 @@ from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.fake_provider import FakePhotosProvider
+from photo_curator.photos.provider import PhotoAsset
 from photo_curator.pipeline.coordinator import PipelineCoordinator
 
 
@@ -520,6 +521,99 @@ def test_inventory_snapshot_tracks_render_metadata_video_count_and_removed_asset
     )
     assert summary["total"] == 11
     assert gallery_total == 11
+
+
+def test_inventory_snapshots_video_but_never_sends_it_to_analysis(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    video_path = tmp_path / "clip.mov"
+    video_path.write_bytes(b"synthetic-video")
+    provider._assets.append(
+        PhotoAsset(
+            uuid="demo-video-001",
+            original_filename="clip.mov",
+            current_filename="clip.mov",
+            taken_at="2026-06-12T10:30:00.125+03:00",
+            creation_timestamp=1781249400.125,
+            modification_timestamp=1781249401.5,
+            width=1920,
+            height=1080,
+            is_photo=False,
+            media_type="video",
+            media_subtypes=0,
+            source_revision="video-revision-1",
+            source_path=video_path,
+        )
+    )
+
+    coordinator.run(project_id)
+
+    with database_connection(paths.database) as connection:
+        snapshot = repository.latest_album_snapshot(connection, project_id)
+        assert snapshot is not None
+        items = repository.album_snapshot_items(connection, str(snapshot["id"]))
+        active_uuids = {
+            str(asset["asset_uuid"])
+            for asset in repository.list_assets(connection, project_id)
+            if not asset["no_longer_exists"]
+        }
+        video_signals = connection.execute(
+            "SELECT COUNT(*) FROM analysis_signals WHERE project_id=? AND asset_uuid=?",
+            (project_id, "demo-video-001"),
+        ).fetchone()[0]
+
+    assert snapshot["item_count"] == 13
+    assert snapshot["photo_count"] == 12
+    assert snapshot["skipped_video_count"] == 1
+    assert items[-1]["asset_uuid"] == "demo-video-001"
+    assert items[-1]["media_type"] == "video"
+    assert items[-1]["creation_timestamp"] == 1781249400.125
+    assert "demo-video-001" not in active_uuids
+    assert video_signals == 0
+
+
+def test_source_revision_change_invalidates_only_affected_asset_analysis(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    provider._assets = [
+        replace(
+            asset,
+            modification_timestamp=1781249999.25,
+            source_revision="edited-revision-2",
+            has_adjustments=True,
+            edit_state="adjusted",
+        )
+        if asset.uuid == "demo-010"
+        else asset
+        for asset in provider._assets
+    ]
+
+    with database_connection(paths.database) as connection:
+        repository.create_album_snapshot(connection, project_id, provider._assets)
+        repository.upsert_assets(connection, project_id, provider._assets)
+        changed_metric = connection.execute(
+            "SELECT 1 FROM metrics WHERE project_id=? AND asset_uuid='demo-010'",
+            (project_id,),
+        ).fetchone()
+        unchanged_metric = connection.execute(
+            "SELECT 1 FROM metrics WHERE project_id=? AND asset_uuid='demo-011'",
+            (project_id,),
+        ).fetchone()
+        snapshots = connection.execute(
+            "SELECT id FROM album_snapshots WHERE project_id=? ORDER BY captured_at, id",
+            (project_id,),
+        ).fetchall()
+        first_items = repository.album_snapshot_items(connection, str(snapshots[0]["id"]))
+        second_items = repository.album_snapshot_items(connection, str(snapshots[-1]["id"]))
+
+    assert changed_metric is None
+    assert unchanged_metric is not None
+    first_revision = next(
+        item["revision_fingerprint"] for item in first_items if item["asset_uuid"] == "demo-010"
+    )
+    second_revision = next(
+        item["revision_fingerprint"] for item in second_items if item["asset_uuid"] == "demo-010"
+    )
+    assert first_revision != second_revision
 
 
 def test_startup_interruption_updates_both_job_and_project_state(tmp_path: Path) -> None:

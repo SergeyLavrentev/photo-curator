@@ -69,8 +69,10 @@ Quality Lab и нативной галереи в последовательну
   исключает duplicate loser при исчезнувшем retained leader.
 - [x] Перед каждым dry-run и apply заново читать exact source membership и сравнивать
   render/content fingerprint; любое изменение требует нового analysis/dry-run.
-- [ ] Добавить в snapshot и publish revalidation явные media type и modification/edit
+- [x] Добавить в snapshot и publish revalidation явные media type и modification/edit
   revision из PhotoKit вместо косвенной проверки через versioned render.
+  Evidence: source helper v2 возвращает media type/subtypes, fractional creation/modification,
+  adjustment state и source revision; apply сравнивает fresh revision и content fingerprint.
 - [x] Сериализовать start/resume/delete per-project lock/state machine; delete не может
   пересекаться с зарегистрированным analysis Future, даже до входа worker в `run`.
   Evidence: coordinator фиксирует `running` до submit, а start/delete проходят через один
@@ -100,11 +102,13 @@ Quality Lab и нативной галереи в последовательну
 
 ## R2 — snapshot, schema и media integrity
 
-- [ ] Ввести immutable `album_snapshot_items`: UUID, source membership, album position,
+- [x] Ввести immutable `album_snapshot_items`: UUID, source membership, album position,
   fractional creation date, modification date, media type/subtype, edit state, dimensions,
   orientation и revision/render fingerprint.
-- [ ] Централизовать invalidation derived data при изменении времени, membership, render,
+- [x] Централизовать invalidation derived data при изменении времени, membership, render,
   media subtype или edit state.
+  Evidence: каждый inventory создаёт append-only snapshot; upsert сравнивает revision fields и
+  удаляет metrics/signals/auto decisions и затронутую duplicate group только изменённого asset.
 - [x] Сделать schema migration атомарной: pre-migration backup, обязательные core tables,
   post-schema verifier, fault-injection tests; не повышать `user_version` частичной схеме.
   Evidence: все pending DDL и `user_version` выполняются в одной `BEGIN IMMEDIATE`
@@ -114,8 +118,11 @@ Quality Lab и нативной галереи в последовательну
   пройти provider/helper либо остаться честно degraded.
 - [ ] Описать и реализовать явную policy для video, Live Photo, animated image, burst,
   hidden, edited и iCloud-only assets.
-- [ ] Для обычного PhotoKit album полностью исключать видео до render/model pipeline и
+- [x] Для обычного PhotoKit album полностью исключать видео до render/model pipeline и
   показывать в UI `N видео пропущено`.
+  Evidence: metadata snapshot сохраняет video provenance/count, но source helper фильтрует
+  `.image` до render, а coordinator повторно фильтрует до active assets; mixed synthetic
+  regression подтверждает отсутствие video UUID в assets/signals.
 - [ ] Включить все разрешённые burst members в source snapshot, если это не нарушает
   пользовательскую Photos boundary.
 - [ ] Временно скрыть Shared Album intake либо завершить immutable local snapshot с safe
@@ -123,6 +130,8 @@ Quality Lab и нативной галереи в последовательну
 
 ### R2 acceptance
 
+- [x] Synthetic mixed-media regression: full video остаётся только в snapshot и не попадает
+  в analysis signals/gallery candidates.
 - [ ] Mixed-media corpus: photo, full video, Live Photo, animated image, burst, hidden,
   edited и iCloud-only; model-call audit содержит только разрешённые media types.
 - [ ] Повторный inventory сохраняет исходный album order и инвалидирует затронутые stages.

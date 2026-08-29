@@ -128,6 +128,7 @@ final class AppModel: ObservableObject {
     @Published var selectionReviewTotal = 0
     @Published var rejectedTotal = 0
     @Published var totalAssets = 0
+    @Published var videosSkipped = 0
     @Published var previewReady = 0
     @Published var previewMissing = 0
     @Published var appleVisionReady = 0
@@ -643,6 +644,7 @@ final class AppModel: ObservableObject {
         selectionReviewTotal = 0
         rejectedTotal = 0
         totalAssets = 0
+        videosSkipped = 0
         previewReady = 0
         previewMissing = 0
         appleVisionReady = 0
@@ -1798,6 +1800,7 @@ final class AppModel: ObservableObject {
         selectionReviewTotal = summary.selectionReview ?? selectionReviewTotal
         rejectedTotal = summary.selectionReject ?? summary.reject ?? rejectedTotal
         totalAssets = summary.total ?? totalAssets
+        videosSkipped = summary.videosSkipped ?? videosSkipped
         previewReady = summary.ready ?? previewReady
         previewMissing = summary.missing ?? previewMissing
         appleVisionReady = summary.appleVisionReady ?? appleVisionReady

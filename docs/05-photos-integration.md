@@ -104,6 +104,18 @@ Unedited:
 
 Если `--add-to-album` или иной необходимый capability недоступен в текущей версии, publish отключается. Запрещены direct DB writes и UI scripting как fallback.
 
+## Media policy
+
+- Обычный `PHAssetMediaType.video` сохраняется только в immutable source snapshot для счётчика
+  и provenance. Он не попадает в `assets`, preview/decode, Vision/Core ML/Codex, decisions,
+  gallery или publish candidates.
+- Live Photo считается фотографией: анализируется только текущий still render; motion resource
+  не декодируется и не публикуется отдельно.
+- Edited image анализируется по текущему PhotoKit render. `modificationDate`, adjustment state,
+  media subtype и revision входят в snapshot/cache identity; изменение требует нового анализа.
+- Animated image, burst coverage, hidden и iCloud-only остаются отдельными policy/acceptance
+  пунктами roadmap; отсутствие такого evidence нельзя трактовать как готовность.
+
 Для проекта из service-owned disk snapshot финальный `Best` использует тот же принцип
 через отдельный нативный PhotoKit helper:
 

@@ -12,7 +12,12 @@ from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
 from photo_curator.photos.native_publisher import NativePhotosImporter
-from photo_curator.photos.provider import PhotoAsset, PhotosProvider
+from photo_curator.photos.provider import (
+    PhotoAsset,
+    PhotosProvider,
+    is_supported_photo,
+    photo_asset_revision,
+)
 from photo_curator.photos.render_resolver import resolve_source_render
 from photo_curator.pipeline.previews import source_fingerprint
 from photo_curator.utils.identifiers import new_id
@@ -82,6 +87,7 @@ class PhotosPublisher:
             for asset in assets
             if not asset.get("no_longer_exists")
             and not asset.get("is_missing")
+            and asset.get("media_type") == "image"
             and (
                 asset.get("final_selection") == "pick"
                 if kind == "best"
@@ -157,6 +163,7 @@ class PhotosPublisher:
                 and not member.get("no_longer_exists")
                 and not member.get("is_missing")
                 and member.get("cache_state") == "ready"
+                and member.get("media_type") == "image"
                 and str(member["asset_uuid"]) in refreshed
                 and membership.get(str(member["asset_uuid"]), False)
                 and revision_matches.get(str(member["asset_uuid"]), False)
@@ -440,7 +447,11 @@ class PhotosPublisher:
             return PublishValidation(
                 [], blockers=["Для дискового проекта в Photos публикуется только финальный Best"]
             )
-        candidates = [asset for asset in assets if asset.get("final_selection") == "pick"]
+        candidates = [
+            asset
+            for asset in assets
+            if asset.get("final_selection") == "pick" and asset.get("media_type") == "image"
+        ]
         accepted: list[str] = []
         blockers: list[str] = []
         root = self.paths.data_dir / "local_albums"
@@ -504,7 +515,18 @@ class PhotosPublisher:
 
 
 def _source_revision_matches(stored: dict[str, object] | None, current: PhotoAsset | None) -> bool:
-    if not stored or not current or stored.get("cache_state") != "ready":
+    if (
+        not stored
+        or not current
+        or stored.get("cache_state") != "ready"
+        or stored.get("media_type") != "image"
+        or not is_supported_photo(current)
+    ):
+        return False
+    expected_revision = stored.get("source_revision")
+    if not isinstance(expected_revision, str) or not expected_revision:
+        return False
+    if photo_asset_revision(current) != expected_revision:
         return False
     expected = stored.get("source_fingerprint")
     if not isinstance(expected, str) or not expected:

@@ -22,6 +22,8 @@
 - `quality_asset_labels` (schema v10) с явным ordered Top-K и human duplicate-group/leader
   labels. Они не имеют foreign key к predicted `duplicate_groups`, поэтому не меняются и не
   исчезают после повторного запуска алгоритма.
+- `album_snapshots` и append-only `album_snapshot_items` (schema v20) фиксируют точный
+  source order/membership, fractional timestamps, media/edit state и revision fingerprints.
 
 Manual decisions и safety protections остаются отдельными от learned preference state.
 
@@ -116,6 +118,12 @@ CREATE TABLE assets (
     burst_default_pick INTEGER NOT NULL DEFAULT 0,
     is_missing INTEGER NOT NULL DEFAULT 0,
     no_longer_exists INTEGER NOT NULL DEFAULT 0,
+    media_type TEXT NOT NULL DEFAULT 'image',
+    media_subtypes INTEGER NOT NULL DEFAULT 0,
+    creation_timestamp REAL,
+    modification_timestamp REAL,
+    edit_state TEXT NOT NULL DEFAULT 'original',
+    source_revision TEXT,
     source_kind TEXT,
     source_path TEXT,
     source_size INTEGER,
@@ -130,6 +138,31 @@ CREATE TABLE assets (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (project_id, asset_uuid),
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+```
+
+`assets` содержит только поддерживаемые still images активного analysis working set. Полное
+содержимое исходного альбома, включая исключённые видео, хранится в immutable snapshot:
+
+```sql
+CREATE TABLE album_snapshot_items (
+    snapshot_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    asset_uuid TEXT NOT NULL,
+    album_position INTEGER NOT NULL,
+    source_membership INTEGER NOT NULL,
+    creation_date TEXT,
+    creation_timestamp REAL,
+    modification_timestamp REAL,
+    media_type TEXT NOT NULL,
+    media_subtypes INTEGER NOT NULL,
+    edit_state TEXT NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    orientation INTEGER,
+    revision_fingerprint TEXT NOT NULL,
+    render_fingerprint TEXT NOT NULL,
+    PRIMARY KEY (snapshot_id, asset_uuid)
 );
 ```
 

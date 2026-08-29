@@ -31,7 +31,7 @@ def list_assets_page(
             cursor_asset_uuid=cursor_asset_uuid,
         )
 
-    clauses = ["a.project_id = ?", "a.no_longer_exists = 0"]
+    clauses = ["a.project_id = ?", "a.no_longer_exists = 0", "a.media_type = 'image'"]
     parameters: list[object] = [project_id]
     if disposition is not None:
         clauses.append("d.final_disposition = ?")
@@ -100,6 +100,7 @@ def _list_ranked_decision_page(
             WHERE active_a.project_id=s.project_id
               AND active_a.asset_uuid=s.asset_uuid
               AND active_a.no_longer_exists=0
+              AND active_a.media_type='image'
         )""",
     ]
     parameters: list[object] = [project_id]
@@ -162,7 +163,7 @@ def count_assets(
     disposition: str | None = None,
     selection: str | None = None,
 ) -> int:
-    clauses = ["a.project_id = ?", "a.no_longer_exists = 0"]
+    clauses = ["a.project_id = ?", "a.no_longer_exists = 0", "a.media_type = 'image'"]
     parameters: list[object] = [project_id]
     if disposition is not None:
         clauses.append("d.final_disposition = ?")

@@ -130,6 +130,8 @@ class OSXPhotosProvider:
             current_filename=photo.filename,
             taken_at=_iso(getattr(photo, "date", None)),
             date_added=_iso(getattr(photo, "date_added", None)),
+            creation_timestamp=_timestamp(getattr(photo, "date", None)),
+            modification_timestamp=_timestamp(getattr(photo, "date_modified", None)),
             width=getattr(photo, "width", None),
             height=getattr(photo, "height", None),
             original_width=getattr(photo, "original_width", None),
@@ -144,6 +146,8 @@ class OSXPhotosProvider:
             burst_default_pick=bool(getattr(photo, "burst_default_pick", False)),
             is_missing=bool(getattr(photo, "ismissing", False)),
             is_photo=bool(getattr(photo, "isphoto", True)),
+            media_type="image" if bool(getattr(photo, "isphoto", True)) else "video",
+            edit_state="adjusted" if bool(getattr(photo, "hasadjustments", False)) else "original",
             source_path=_path_or_none(getattr(photo, "path", None)),
             edited_path=_path_or_none(getattr(photo, "path_edited", None)),
             derivative_paths=derivatives,
@@ -164,6 +168,10 @@ def _optional_text(value: Any) -> str | None:
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _timestamp(value: datetime | None) -> float | None:
+    return value.timestamp() if value else None
 
 
 def _score_dict(score: Any) -> dict[str, float] | None:

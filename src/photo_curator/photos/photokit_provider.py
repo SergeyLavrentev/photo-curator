@@ -144,7 +144,7 @@ class PhotoKitProvider:
         if not self.executable.is_file():
             raise RuntimeError("PhotoKit source helper is missing")
         result = self.runner([str(self.executable), "--capability"], timeout=30)
-        if result.returncode != 0 or "photokit-source-v1" not in result.stdout:
+        if result.returncode != 0 or "photokit-source-media-v2" not in result.stdout:
             raise RuntimeError("PhotoKit source helper is unavailable")
 
     def _load_albums(self) -> None:
@@ -252,16 +252,41 @@ class PhotoKitProvider:
                 original_filename=item.get("original_filename"),
                 current_filename=item.get("current_filename"),
                 taken_at=item.get("taken_at"),
+                creation_timestamp=(
+                    float(item["creation_timestamp"])
+                    if item.get("creation_timestamp") is not None
+                    else None
+                ),
+                modification_timestamp=(
+                    float(item["modification_timestamp"])
+                    if item.get("modification_timestamp") is not None
+                    else None
+                ),
                 width=int(item.get("width") or 0),
                 height=int(item.get("height") or 0),
+                orientation=(
+                    int(item["orientation"]) if item.get("orientation") is not None else None
+                ),
                 favorite=bool(item.get("favorite")),
                 hidden=bool(item.get("hidden")),
+                has_adjustments=bool(item.get("has_adjustments")),
                 is_live_photo=bool(item.get("is_live_photo")),
                 is_burst=bool(item.get("is_burst")),
                 burst_key=item.get("burst_key"),
                 burst_default_pick=bool(item.get("burst_default_pick")),
                 is_missing=bool(item.get("is_missing")),
                 is_photo=bool(item.get("is_photo")),
+                media_type=str(
+                    item.get("media_type") or ("image" if item.get("is_photo") else "video")
+                ),
+                media_subtypes=int(item.get("media_subtypes") or 0),
+                edit_state=str(
+                    item.get("edit_state")
+                    or ("adjusted" if item.get("has_adjustments") else "original")
+                ),
+                source_revision=(
+                    str(item["source_revision"]) if item.get("source_revision") else None
+                ),
                 source_path=(
                     ensure_within(Path(str(item["source_path"])), output)
                     if item.get("source_path") and output is not None

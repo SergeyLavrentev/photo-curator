@@ -56,7 +56,7 @@ from photo_curator.analysis.technical import (
 from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.paths import ApplicationPaths
-from photo_curator.photos.provider import PhotosProvider
+from photo_curator.photos.provider import PhotosProvider, is_supported_photo
 from photo_curator.photos.render_resolver import resolve_source_render
 from photo_curator.pipeline.duplicates import (
     DUPLICATE_ENGINE_VERSION,
@@ -220,7 +220,8 @@ class PipelineCoordinator:
                     """
                     SELECT asset_uuid, current_filename, width, height, favorite,
                         has_adjustments, burst_key, burst_default_pick, no_longer_exists,
-                        source_fingerprint, cache_state
+                        source_fingerprint, cache_state, media_type, media_subtypes,
+                        creation_timestamp, modification_timestamp, edit_state, source_revision
                     FROM assets WHERE project_id=? ORDER BY asset_uuid
                     """,
                     (project_id,),
@@ -411,17 +412,21 @@ class PipelineCoordinator:
             source_assets = self.provider.list_shared_assets(album_id)
         else:
             source_assets = self.provider.list_assets(album_id)
-        assets = [asset for asset in source_assets if asset.is_photo]
+        assets = [asset for asset in source_assets if is_supported_photo(asset)]
         self._check_cancelled(project_id)
         with database_connection(self.database_path) as connection:
             connection.execute("UPDATE jobs SET total_items=? WHERE id=?", (len(assets), job_id))
+            snapshot = repository.create_album_snapshot(connection, project_id, source_assets)
             repository.upsert_assets(connection, project_id, assets)
             repository.update_job(
                 connection,
                 job_id,
                 status="done",
                 processed=len(assets),
-                message=f"Инвентаризировано {len(assets)} фото",
+                message=(
+                    f"Инвентаризировано {len(assets)} фото · "
+                    f"видео пропущено: {snapshot['skipped_video_count']}"
+                ),
             )
             repository.set_project_state(connection, project_id, "running")
 
@@ -456,7 +461,7 @@ class PipelineCoordinator:
             source_assets = self.provider.list_shared_assets(album_id)
         else:
             source_assets = self.provider.list_assets(album_id)
-        current_assets = {asset.uuid: asset for asset in source_assets if asset.is_photo}
+        current_assets = {asset.uuid: asset for asset in source_assets if is_supported_photo(asset)}
         renders_reported = bool(current_assets) and all(
             asset.review_render for asset in current_assets.values()
         )

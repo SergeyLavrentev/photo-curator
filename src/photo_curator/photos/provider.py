@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -49,6 +51,12 @@ class PhotoAsset:
     burst_default_pick: bool = False
     is_missing: bool = False
     is_photo: bool = True
+    media_type: str = "image"
+    media_subtypes: int = 0
+    creation_timestamp: float | None = None
+    modification_timestamp: float | None = None
+    edit_state: str = "original"
+    source_revision: str | None = None
     source_path: Path | None = None
     edited_path: Path | None = None
     derivative_paths: tuple[Path, ...] = field(default_factory=tuple)
@@ -59,6 +67,46 @@ class PhotoAsset:
     @property
     def pixel_count(self) -> int:
         return int(self.width or 0) * int(self.height or 0)
+
+
+def normalized_media_type(asset: PhotoAsset) -> str:
+    value = str(asset.media_type or "").casefold()
+    if not asset.is_photo and value == "image":
+        return "video"
+    if value in {"image", "video", "audio"}:
+        return value
+    return "image" if asset.is_photo else "video"
+
+
+def is_supported_photo(asset: PhotoAsset) -> bool:
+    return asset.is_photo and normalized_media_type(asset) == "image"
+
+
+def photo_asset_revision(asset: PhotoAsset) -> str:
+    if asset.source_revision:
+        return str(asset.source_revision)
+    source_stat: tuple[int, int] | None = None
+    if asset.source_path:
+        try:
+            stat = asset.source_path.stat()
+            source_stat = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            pass
+    payload = {
+        "uuid": asset.uuid,
+        "creation_timestamp": asset.creation_timestamp,
+        "modification_timestamp": asset.modification_timestamp,
+        "taken_at": asset.taken_at,
+        "media_type": normalized_media_type(asset),
+        "media_subtypes": int(asset.media_subtypes),
+        "edit_state": asset.edit_state,
+        "has_adjustments": asset.has_adjustments,
+        "dimensions": [asset.width, asset.height],
+        "orientation": asset.orientation,
+        "source_stat": source_stat,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 class PhotosProvider(Protocol):

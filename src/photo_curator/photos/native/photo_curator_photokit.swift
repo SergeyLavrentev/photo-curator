@@ -15,16 +15,24 @@ struct AssetPayload: Encodable {
     let original_filename: String?
     let current_filename: String?
     let taken_at: String?
+    let creation_timestamp: Double?
+    let modification_timestamp: Double?
     let width: Int
     let height: Int
+    let orientation: Int?
     let favorite: Bool
     let hidden: Bool
+    let has_adjustments: Bool
     let is_live_photo: Bool
     let is_burst: Bool
     let burst_key: String?
     let burst_default_pick: Bool
     let is_missing: Bool
     let is_photo: Bool
+    let media_type: String
+    let media_subtypes: UInt
+    let edit_state: String
+    let source_revision: String
     let source_path: String?
     let provider_error: String?
     let review_render: Bool
@@ -149,9 +157,38 @@ func reviewRenderIsAnalysisGrade(_ image: NSImage) -> Bool {
 }
 
 func renderCacheKey(_ asset: PHAsset, allowNetwork: Bool) -> String {
-    let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
     let source = allowNetwork ? "network" : "local"
-    return "\(reviewRenderVersion)|\(source)|\(asset.localIdentifier)|\(modified)|\(asset.pixelWidth)x\(asset.pixelHeight)"
+    return "\(reviewRenderVersion)|\(source)|\(sourceRevision(asset))"
+}
+
+func mediaTypeName(_ asset: PHAsset) -> String {
+    switch asset.mediaType {
+    case .image: return "image"
+    case .video: return "video"
+    case .audio: return "audio"
+    default: return "unknown"
+    }
+}
+
+func hasAdjustments(_ asset: PHAsset) -> Bool {
+    PHAssetResource.assetResources(for: asset).contains {
+        $0.type == .adjustmentData || $0.type == .fullSizePhoto
+    }
+}
+
+func sourceRevision(_ asset: PHAsset) -> String {
+    let created = asset.creationDate?.timeIntervalSince1970 ?? 0
+    let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
+    let adjusted = hasAdjustments(asset) ? 1 : 0
+    return [
+        asset.localIdentifier,
+        String(created),
+        String(modified),
+        String(asset.mediaType.rawValue),
+        String(asset.mediaSubtypes.rawValue),
+        "\(asset.pixelWidth)x\(asset.pixelHeight)",
+        String(adjusted),
+    ].joined(separator: "|")
 }
 
 func exportReviewRender(
@@ -251,8 +288,10 @@ func payload(
     outputDirectory: URL?,
     allowNetwork: Bool = true
 ) -> AssetPayload {
-    let resource = PHAssetResource.assetResources(for: asset).first
+    let resources = PHAssetResource.assetResources(for: asset)
+    let resource = resources.first
     let isPhoto = asset.mediaType == .image
+    let adjusted = resources.contains { $0.type == .adjustmentData || $0.type == .fullSizePhoto }
     let shouldRender = isPhoto && outputDirectory != nil
     let render = shouldRender
         ? exportReviewRender(
@@ -265,16 +304,24 @@ func payload(
         original_filename: resource?.originalFilename,
         current_filename: resource?.originalFilename,
         taken_at: asset.creationDate.map { ISO8601DateFormatter().string(from: $0) },
+        creation_timestamp: asset.creationDate?.timeIntervalSince1970,
+        modification_timestamp: asset.modificationDate?.timeIntervalSince1970,
         width: asset.pixelWidth,
         height: asset.pixelHeight,
+        orientation: nil,
         favorite: asset.isFavorite,
         hidden: asset.isHidden,
+        has_adjustments: adjusted,
         is_live_photo: asset.mediaSubtypes.contains(.photoLive),
         is_burst: asset.burstIdentifier != nil,
         burst_key: asset.burstIdentifier,
         burst_default_pick: asset.representsBurst,
         is_missing: shouldRender && render.0 == nil,
         is_photo: isPhoto,
+        media_type: mediaTypeName(asset),
+        media_subtypes: asset.mediaSubtypes.rawValue,
+        edit_state: adjusted ? "adjusted" : "original",
+        source_revision: sourceRevision(asset),
         source_path: render.0,
         provider_error: render.1,
         review_render: shouldRender && render.0 != nil
@@ -360,12 +407,15 @@ func renderPayloads(
 }
 
 func assets(in album: PHAssetCollection, outputDirectory: URL) throws -> [AssetPayload] {
-    try renderPayloads(albumAssets(album), outputDirectory: outputDirectory)
+    try renderPayloads(
+        albumAssets(album).filter { $0.mediaType == .image },
+        outputDirectory: outputDirectory
+    )
 }
 
 func streamAssets(in album: PHAssetCollection, outputDirectory: URL) throws {
     let values = try renderPayloads(
-        albumAssets(album),
+        albumAssets(album).filter { $0.mediaType == .image },
         outputDirectory: outputDirectory
     ) { processed, total, identifier in
         try? printJSON(AssetProgressFrame(
@@ -401,6 +451,7 @@ func assets(with identifiers: [String], outputDirectory: URL) throws -> [AssetPa
     var byIdentifier: [String: PHAsset] = [:]
     result.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
     let ordered = identifiers.compactMap { byIdentifier[$0] }
+        .filter { $0.mediaType == .image }
     return try renderPayloads(ordered, outputDirectory: outputDirectory, allowNetwork: false)
 }
 
@@ -413,6 +464,7 @@ func streamAssets(with identifiers: [String], outputDirectory: URL) throws {
     var byIdentifier: [String: PHAsset] = [:]
     result.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
     let ordered = identifiers.compactMap { byIdentifier[$0] }
+        .filter { $0.mediaType == .image }
     let values = try renderPayloads(
         ordered,
         outputDirectory: outputDirectory,
@@ -460,7 +512,7 @@ func printJSON<T: Encodable>(_ value: T) throws {
 public func runPhotoCuratorSourceHelper(arguments: [String]) -> Int32 {
     do {
         if arguments == [arguments[0], "--capability"] {
-            print("photokit-source-v1")
+            print("photokit-source-media-v2")
             return 0
         }
         try requestAuthorization()

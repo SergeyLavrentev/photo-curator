@@ -507,6 +507,13 @@ struct RootView: View {
                             detail: "\(model.totalAssets)",
                             symbol: "photo.on.rectangle"
                         )
+                        if model.videosSkipped > 0 {
+                            ProcessingStatRow(
+                                title: "Видео пропущено",
+                                detail: "\(model.videosSkipped)",
+                                symbol: "video.slash"
+                            )
+                        }
                         ProcessingStatRow(
                             title: "Локальные review-копии",
                             detail: "\(model.previewReady) готовы · \(model.previewMissing) недоступны",

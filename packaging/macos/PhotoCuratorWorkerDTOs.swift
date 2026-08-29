@@ -255,6 +255,7 @@ struct ProjectSummaryDTO: Decodable {
     let total: Int?
     let ready: Int?
     let missing: Int?
+    let videosSkipped: Int?
     let appleVisionReady: Int?
     let appleVisionError: Int?
     let codexReady: Int?
@@ -263,6 +264,7 @@ struct ProjectSummaryDTO: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case keep, pick, alternative, reject, total, ready, missing
+        case videosSkipped = "videos_skipped"
         case selectionReview = "selection_review"
         case selectionReject = "selection_reject"
         case appleVisionReady = "apple_vision_ready"

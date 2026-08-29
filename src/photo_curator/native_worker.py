@@ -58,7 +58,7 @@ from photo_curator.photokit_acceptance import (
 )
 from photo_curator.photos.local_provider import LocalAlbumsProvider
 from photo_curator.photos.photokit_provider import PhotoKitProvider
-from photo_curator.photos.provider import PhotosProvider
+from photo_curator.photos.provider import PhotosProvider, is_supported_photo
 from photo_curator.photos.publisher import PhotosPublisher
 from photo_curator.pipeline.coordinator import STAGES, PipelineCoordinator
 
@@ -593,7 +593,7 @@ class NativeWorker:
         candidates = [
             asset
             for asset in sampled
-            if asset.is_photo
+            if is_supported_photo(asset)
             and not asset.hidden
             and not asset.is_missing
             and asset.source_path
