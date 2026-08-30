@@ -691,12 +691,12 @@ struct RootView: View {
                             selected: model.selectedPhotoID == photo.id,
                             multiSelected: model.selectedPhotoIDs.contains(photo.id),
                             developerToolsEnabled: model.qualityToolsEnabled,
-                            select: { model.selectedPhotoID = photo.id },
+                            select: { model.selectPhoto(photoID: photo.id) },
                             toggleMultiSelection: {
                                 model.togglePhotoSelection(photoID: photo.id)
                             },
                             preview: {
-                                model.selectedPhotoID = photo.id
+                                model.selectPhoto(photoID: photo.id)
                                 model.previewSelected()
                             },
                             openDetails: { model.openPhotoDetails(photoID: photo.id) },
@@ -729,7 +729,7 @@ struct RootView: View {
                         photos: model.photos,
                         selectedID: model.selectedPhotoID,
                         multiSelectedIDs: model.selectedPhotoIDs,
-                        select: { model.selectedPhotoID = $0 },
+                        select: { model.selectPhoto(photoID: $0) },
                         decide: { photoID, disposition in
                             model.setDecision(photoID: photoID, disposition: disposition)
                         },

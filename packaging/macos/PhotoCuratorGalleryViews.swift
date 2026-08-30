@@ -126,18 +126,27 @@ struct WorkspaceCanvas: View {
                         ) {
                             ForEach(displayed) { photo in
                                 ZStack(alignment: .bottom) {
-                                    if let path = photo.reviewPath ?? photo.thumbnailPath {
-                                        CachedThumbnail(
-                                            path: path,
-                                            maxPixelSize: mode == .loupe ? 2400 : 1400,
-                                            contentMode: .fit
-                                        )
+                                    Button { select(photo.id) } label: {
+                                        Group {
+                                            if let path = photo.reviewPath ?? photo.thumbnailPath {
+                                                CachedThumbnail(
+                                                    path: path,
+                                                    maxPixelSize: mode == .loupe ? 2400 : 1400,
+                                                    contentMode: .fit
+                                                )
+                                            } else {
+                                                Image(systemName: "photo")
+                                                    .font(.largeTitle)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    } else {
-                                        Image(systemName: "photo")
-                                            .font(.largeTitle)
-                                            .foregroundStyle(.secondary)
                                     }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Выбрать \(photo.filename)")
+                                    .accessibilityAddTraits(
+                                        photo.id == selectedID ? .isSelected : []
+                                    )
                                     HStack {
                                         Text(photo.filename).lineLimit(1)
                                         Spacer()
@@ -153,8 +162,6 @@ struct WorkspaceCanvas: View {
                                 .frame(maxWidth: .infinity)
                                 .frame(height: cellHeight)
                                 .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { select(photo.id) }
                                 .overlay(
                                     Rectangle().stroke(
                                         photo.id == selectedID ? Color.accentColor : .clear,
@@ -248,13 +255,16 @@ struct WorkspaceCanvas: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 4) {
                     ForEach(photos) { photo in
-                        Group {
-                            if let path = photo.imagePath {
-                                CachedThumbnail(path: path, maxPixelSize: 240)
-                            } else {
-                                Rectangle().fill(.quaternary)
+                        Button { select(photo.id) } label: {
+                            Group {
+                                if let path = photo.imagePath {
+                                    CachedThumbnail(path: path, maxPixelSize: 240)
+                                } else {
+                                    Rectangle().fill(.quaternary)
+                                }
                             }
                         }
+                        .buttonStyle(.plain)
                         .frame(width: 110, height: 72)
                         .clipped()
                         .overlay(
@@ -263,7 +273,8 @@ struct WorkspaceCanvas: View {
                                 lineWidth: 3
                             )
                         )
-                        .onTapGesture { select(photo.id) }
+                        .accessibilityLabel("Выбрать \(photo.filename) в ленте")
+                        .accessibilityAddTraits(photo.id == selectedID ? .isSelected : [])
                     }
                 }
             }
@@ -322,19 +333,22 @@ struct PhotoCard: View, Equatable {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Group {
-                if let path = photo.thumbnailPath ?? photo.reviewPath {
-                    CachedThumbnail(path: path, maxPixelSize: 320)
-                } else {
-                    Rectangle().fill(.quaternary).overlay(Image(systemName: "photo"))
+            ZStack {
+                Button(action: select) {
+                    Group {
+                        if let path = photo.thumbnailPath ?? photo.reviewPath {
+                            CachedThumbnail(path: path, maxPixelSize: 320)
+                        } else {
+                            Rectangle().fill(.quaternary).overlay(Image(systemName: "photo"))
+                        }
+                    }
                 }
+                .buttonStyle(.plain)
             }
             .frame(maxWidth: .infinity)
             .aspectRatio(4 / 3, contentMode: .fit)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .onTapGesture(count: 2, perform: openDetails)
-            .onTapGesture(count: 1, perform: select)
             .contextMenu {
                 Button("Быстрый просмотр", action: preview)
                 Button("Открыть детали", action: openDetails)
@@ -355,36 +369,52 @@ struct PhotoCard: View, Equatable {
             }
             .help("Нажмите, чтобы выбрать; пробел — быстрый просмотр")
             .overlay(alignment: .topTrailing) {
-                Image(systemName: multiSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3.weight(.semibold))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(Color.white, multiSelected ? Color.green : Color.black.opacity(0.55))
-                    .frame(width: 30, height: 30)
-                    .contentShape(Circle())
-                    .onTapGesture(perform: toggleMultiSelection)
-                .background(
-                    Color.black.opacity(multiSelected ? 0 : 0.24),
-                    in: Circle()
-                )
+                Button(action: toggleMultiSelection) {
+                    Image(systemName: multiSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3.weight(.semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(
+                            Color.white,
+                            multiSelected ? Color.green : Color.black.opacity(0.55)
+                        )
+                        .frame(width: 30, height: 30)
+                        .background(
+                            Color.black.opacity(multiSelected ? 0 : 0.24),
+                            in: Circle()
+                        )
+                }
+                .buttonStyle(.plain)
                 .padding(8)
                 .help(multiSelected ? "Снять отметку" : "Отметить для группового действия")
                 .accessibilityLabel(multiSelected ? "Снять отметку" : "Отметить фотографию")
-                .accessibilityAddTraits(.isButton)
             }
             .overlay(alignment: .bottomTrailing) {
                 if stackCount > 1 {
-                    Label("\(stackCount)", systemImage: "square.stack.3d.up.fill")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(Color.black.opacity(0.62), in: Capsule())
-                        .contentShape(Capsule())
-                        .onTapGesture(perform: toggleStack)
+                    Button(action: toggleStack) {
+                        Label("\(stackCount)", systemImage: "square.stack.3d.up.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.62), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                     .padding(8)
                     .help("Развернуть или свернуть серию")
-                    .accessibilityAddTraits(.isButton)
                 }
+            }
+            .overlay(alignment: .top) {
+                Button(action: openDetails) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(Color.black.opacity(0.48), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(8)
+                .help("Открыть детали")
+                .accessibilityLabel("Открыть детали фотографии")
             }
             .overlay(alignment: .topLeading) {
                 if let rating = photo.manualRating {
@@ -469,6 +499,7 @@ struct PhotoCard: View, Equatable {
         .accessibilityLabel("\(photo.filename), решение: \(decisionTitle)")
         .accessibilityValue(selectionTitle(photo.selection))
         .accessibilityHint("P добавляет в Best, X отклоняет; пробел открывает быстрый просмотр")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

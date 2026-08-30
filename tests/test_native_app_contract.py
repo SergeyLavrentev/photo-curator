@@ -102,7 +102,12 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "struct PhotoCard: View, Equatable" in app
     assert ".equatable()" in app
     assert "photos[initialIndex].disposition = disposition" in app
-    assert ".onTapGesture(count: 2, perform: openDetails)" in app
+    assert ".onTapGesture(count: 2, perform: openDetails)" not in app
+    assert (
+        ".onTapGesture" not in (ROOT / "packaging/macos/PhotoCuratorGalleryViews.swift").read_text()
+    )
+    assert "Button(action: select)" in app
+    assert ".accessibilityAddTraits(selected ? .isSelected : [])" in app
     assert "PhotoDetailView" in app
     assert "togglePhotoSelection" in app
     assert "setSelectedPhotosDecision" in app
@@ -159,7 +164,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "Обновляем критерии отбора" in app
     assert 'Label("Почему?"' not in app
     assert 'Button("Открыть детали", action: openDetails)' in app
-    assert 'Image(systemName: "info.circle.fill")' not in app
+    assert 'Image(systemName: "info.circle.fill")' in app
     assert "Создать Best‑альбом" in app
     assert '"delete_project"' in app
     assert "Отменить новый анализ" in app
@@ -573,8 +578,18 @@ def test_thumbnail_decode_work_is_cancelled_and_repair_invalidates_cache() -> No
     assert "task.cancel()" in pipeline
     assert "cancelWaiter" in pipeline
     assert "continuation.resume(returning: false)" in pipeline
+    assert "private static var inFlight" in pipeline
+    assert "existing.priority.rawValue >= priority.rawValue" in pipeline
+    assert "private static let thumbnailCache" in pipeline
+    assert "private static let reviewCache" in pipeline
+    assert "ThumbnailRequestIdentity" in pipeline
+    assert "let maxPixelSize: Int" in pipeline
+    assert "let cacheEpoch: Int" in pipeline
+    assert "image = nil\n            currentRequestKey = requestKey" in pipeline
     assert "priority: TaskPriority = .userInitiated" in pipeline
     assert "priority: .utility" in pipeline
     assert "guard !Task.isCancelled else" in pipeline
     assert "static func invalidateAll()" in pipeline
     assert "ThumbnailLoader.invalidateAll()" in app_model
+    assert "photos[$0].reviewPath ?? photos[$0].thumbnailPath" in app_model
+    assert "func selectPhoto(photoID: String)" in app_model

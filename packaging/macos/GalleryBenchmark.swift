@@ -7,6 +7,7 @@ private let pageSize = 36
 
 private struct BenchmarkGrid: View {
     let photos: [PhotoItem]
+    let selectedID: String?
 
     var body: some View {
         ScrollView {
@@ -18,7 +19,7 @@ private struct BenchmarkGrid: View {
                 ForEach(photos) { photo in
                     PhotoCard(
                         photo: photo,
-                        selected: false,
+                        selected: photo.id == selectedID,
                         multiSelected: false,
                         developerToolsEnabled: false,
                         select: {},
@@ -119,7 +120,7 @@ private func benchmark(count: Int, imagePaths: [String]) -> [String: Any] {
         backing: .buffered,
         defer: false
     )
-    let host = NSHostingView(rootView: BenchmarkGrid(photos: photos))
+    let host = NSHostingView(rootView: BenchmarkGrid(photos: photos, selectedID: nil))
     trace("host \(count)")
     window.contentView = host
     window.orderBack(nil)
@@ -128,6 +129,18 @@ private func benchmark(count: Int, imagePaths: [String]) -> [String: Any] {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.35))
     trace("layout \(count)")
     let initialLayoutMilliseconds = (CFAbsoluteTimeGetCurrent() - layoutStart) * 1000
+
+    var selectionSamples: [Double] = []
+    for step in 0..<30 {
+        let start = CFAbsoluteTimeGetCurrent()
+        host.rootView = BenchmarkGrid(
+            photos: photos,
+            selectedID: photos[step % photos.count].id
+        )
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.001))
+        selectionSamples.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
+    }
 
     guard let scroll = findScrollView(host) else {
         window.close()
@@ -153,7 +166,8 @@ private func benchmark(count: Int, imagePaths: [String]) -> [String: Any] {
                 offset: offset,
                 count: min(pageSize, count - offset),
                 imagePaths: imagePaths
-            )
+            ),
+            selectedID: nil
         )
         host.layoutSubtreeIfNeeded()
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
@@ -163,13 +177,15 @@ private func benchmark(count: Int, imagePaths: [String]) -> [String: Any] {
     trace("finish \(count)")
     let scrollP95 = percentile95(scrollSamples)
     let pageP95 = percentile95(pageSamples)
+    let selectionP95 = percentile95(selectionSamples)
     let passed = modelMilliseconds < 100 && initialLayoutMilliseconds < 1_200
-        && scrollP95 < 100 && pageP95 < 450
+        && selectionP95 < 50 && scrollP95 < 100 && pageP95 < 450
     return [
         "count": count,
         "page_size": pageSize,
         "model_ms": modelMilliseconds,
         "initial_layout_and_decode_ms": initialLayoutMilliseconds,
+        "selection_update_p95_ms": selectionP95,
         "scroll_p95_ms": scrollP95,
         "page_swap_p95_ms": pageP95,
         "scroll_view_found": true,
@@ -189,12 +205,13 @@ private struct GalleryBenchmark {
         defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
         let results = [2_000, 5_000].map { benchmark(count: $0, imagePaths: imagePaths) }
         let report: [String: Any] = [
-            "schema_version": 2,
+            "schema_version": 3,
             "surface": "production PhotoCard + CachedThumbnail + real JPEG paging",
             "viewport": ["width": 1440, "height": 900],
             "thresholds_ms": [
                 "model": 100,
                 "initial_layout_and_decode": 1_200,
+                "selection_update_p95": 50,
                 "scroll_p95": 100,
                 "page_swap_p95": 450,
             ],

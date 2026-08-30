@@ -1050,10 +1050,16 @@ final class AppModel: ObservableObject {
         guard !photos.isEmpty else { return }
         let current = selectedPhotoID.flatMap { id in photos.firstIndex(where: { $0.id == id }) } ?? 0
         let next = min(max(0, current + offset), photos.count - 1)
-        selectedPhotoID = photos[next].id
-        let paths = ((next - 2)...(next + 2)).compactMap { index in
-            photos.indices.contains(index) ? photos[index].imagePath : nil
-        }
+        selectPhoto(photoID: photos[next].id)
+    }
+
+    func selectPhoto(photoID: String) {
+        guard let index = photos.firstIndex(where: { $0.id == photoID }) else { return }
+        selectedPhotoID = photoID
+        let nearby = ((index - 2)...(index + 2))
+            .filter { photos.indices.contains($0) }
+            .sorted { abs($0 - index) < abs($1 - index) }
+        let paths = nearby.compactMap { photos[$0].reviewPath ?? photos[$0].thumbnailPath }
         ThumbnailLoader.prefetch(paths: paths, maxPixelSize: 1400)
     }
 
@@ -1149,7 +1155,7 @@ final class AppModel: ObservableObject {
     }
 
     func openPhotoDetails(photoID: String) {
-        selectedPhotoID = photoID
+        selectPhoto(photoID: photoID)
         guard let project else { return }
         Task {
             do {
@@ -1176,7 +1182,7 @@ final class AppModel: ObservableObject {
     }
 
     func togglePhotoSelection(photoID: String) {
-        selectedPhotoID = photoID
+        selectPhoto(photoID: photoID)
         if selectedPhotoIDs.contains(photoID) {
             selectedPhotoIDs.remove(photoID)
         } else {

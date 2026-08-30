@@ -140,9 +140,11 @@ Quality Lab включается пользователем в Settings и не 
 `make gallery-benchmark` компилирует production `PhotoCard`, `CachedThumbnail` и тот же SwiftUI
 код приложения с флагом, отключающим только application `@main`. Harness создаёт отдельные
 реальные JPEG, отображает production-страницу из 36 карточек и измеряет page-local DTO creation,
-initial layout/decode, scroll p95 и page-swap p95 для каталогов 2k/5k. DTO создаются постранично,
-как в production UI; отдельный SQLite gate проверяет data path на 50 000 строках. Прямоугольная
-surrogate-view больше не является release evidence. JSON сохраняется в
+initial layout/decode, selection-state-to-highlight p95, scroll p95 и page-swap p95 для каталогов
+2k/5k. Selection metric проверяет SwiftUI propagation после уже распознанного действия; он не
+заменяет end-to-end mouse/XCUITest click-to-highlight gate. DTO создаются постранично, как в
+production UI; отдельный SQLite gate проверяет data path на 50 000 строках. Прямоугольная
+surrogate-view больше не является release evidence. JSON schema v3 сохраняется в
 `build/evidence/gallery-benchmark.json`.
 
 ## PhotoKit import benchmark

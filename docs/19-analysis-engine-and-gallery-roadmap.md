@@ -226,19 +226,29 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   Pick/Alternative/Reject bucket.
 - [ ] Expand/Compare/Survey загружают явный series context и никогда не подставляют
   произвольную фотографию.
-- [ ] Устранить задержку single-click: selection выполняется сразу, Details получает
+- [x] Устранить задержку single-click: selection выполняется сразу, Details получает
   отдельное действие либо корректно exclusive AppKit recognizer.
+  Evidence: основной image surface — native `Button`, competing single/double tap recognizers
+  удалены, Details вынесен в отдельную info-кнопку и context menu.
 - [ ] Разделить монолитный `AppModel` минимум на workflow, gallery paging, selection,
   analysis progress, image pipeline и Quality Lab state.
-- [ ] Prefetch декодирует настоящий `reviewPath`, имеет in-flight coalescing, cancellation,
+- [x] Prefetch декодирует настоящий `reviewPath`, имеет in-flight coalescing, cancellation,
   visible priority и отдельные thumbnail/review caches.
-- [ ] Identity image task включает `(path, maxPixelSize)` и очищает stale image при смене.
+  Evidence: selection prefetch использует `reviewPath`, пять соседей отменяются при смене окна;
+  shared decode учитывает consumers и повышает utility request до visible priority; два bounded
+  `NSCache` разделяют card и review pixels.
+- [x] Identity image task включает `(path, maxPixelSize)` и очищает stale image при смене.
+  Evidence: SwiftUI task identity также включает cache epoch; loader очищает старый image до
+  cache/decode lookup, а repair атомарно инвалидирует cache, in-flight work и active views.
 - [ ] Реализовать auto-pagination near end, переход стрелкой через page boundary,
   scroll-to-selection, pinned toolbar и честный текст размера страницы.
 - [ ] Исправить Survey для 5–6 кадров, workspace Alternative action, stale detail/page races,
   empty shared-only picker и неверные progress/warning тексты.
 - [ ] Заменить gesture-only controls на `Button`/accessibility actions, добавить selected
   traits и guards для bare-key shortcuts при TextField/Quality Wizard focus.
+  - [x] Gallery card, workspace photo и filmstrip selection используют `Button`; selected state
+    опубликован как accessibility trait.
+  - [ ] Добавить guards для bare-key shortcuts при TextField/Quality Wizard focus.
 
 ### R6 performance acceptance
 
@@ -248,6 +258,11 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   при decode, worker restart или IPC.
 - [ ] Series expand показывает полный состав через границы page/bucket.
 - [ ] Retained VoiceOver/keyboard evidence покрывает выбор, series controls и decisions.
+
+Synthetic evidence 2026-08-30: production `PhotoCard`/ImageIO benchmark schema v3 прошёл для
+2k/5k; selection-state-to-highlight p95 5.1/9.1 ms, initial layout/decode 390/386 ms,
+page-swap p95 159/185 ms, scroll p95 7.6/7.7 ms. Это подтверждает быстрый SwiftUI update после
+распознанного действия, но не закрывает end-to-end click, Loupe, RSS или human visual gates.
 
 ## R7 — честный benchmark и behavioral tests
 

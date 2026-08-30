@@ -47,8 +47,9 @@ speculative ETA. Restart resumes completed fingerprints and visibly explains inv
 - collapsed series stacks that expand into Compare/Survey and may retain several distinct moments;
 - unobtrusive checkbox multi-selection; clear and batch move actions appear only
   after photos are selected;
-- double-click opens a large photo view with decision evidence; Space keeps the lightweight
-  system Quick Look;
+- a single click selects immediately; a separate info button or context-menu action opens the
+  large detail view without making selection wait for a double-click recognizer; Space keeps the
+  lightweight system Quick Look;
 - cards keep only selection, series, rating and category badges; detailed decisions live in the
   context menu, keyboard workflow and large detail view instead of per-card popovers;
 - category-specific explanations: positive evidence for Good, negative evidence for Bad;
@@ -59,8 +60,9 @@ speculative ETA. Restart resumes completed fingerprints and visibly explains inv
 - decision reliability and internal ranking score are different concepts; the score is not shown
   as a universal quality percentage;
 - Quick Look, arrow navigation and configurable shortcuts;
-- 36-card keyset-paged SQLite DTOs, ImageIO downsampling with four concurrent decoders, a bounded
-  cache keyed by file identity and stale-response generation guards;
+- 36-card keyset-paged SQLite DTOs, ImageIO downsampling with four concurrent decoders, separate
+  bounded thumbnail/review caches keyed by path and requested pixel size, in-flight coalescing,
+  visible-over-prefetch priority and stale-response generation/epoch guards;
 - explicit unavailable thumbnails when a database `ready` row points to a deleted cache file,
   plus a user-triggered **Restore previews** action; restoring a project never silently starts a
   full re-analysis;
