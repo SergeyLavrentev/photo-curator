@@ -2055,6 +2055,52 @@ def duplicate_context(
     return result
 
 
+def get_duplicate_series(
+    connection: sqlite3.Connection,
+    project_id: str,
+    group_id: str,
+) -> dict[str, object]:
+    group_row = connection.execute(
+        """
+        SELECT group_id, kind, confidence, leader_uuid, flags_json
+        FROM duplicate_groups
+        WHERE project_id=? AND group_id=?
+        """,
+        (project_id, group_id),
+    ).fetchone()
+    if not group_row:
+        raise KeyError((project_id, group_id))
+    member_rows = connection.execute(
+        """
+        SELECT m.asset_uuid
+        FROM duplicate_members m
+        JOIN assets a USING (project_id, asset_uuid)
+        WHERE m.project_id=? AND m.group_id=?
+          AND a.no_longer_exists=0 AND a.media_type='image'
+        ORDER BY a.taken_at, a.asset_uuid
+        """,
+        (project_id, group_id),
+    ).fetchall()
+    member_ids = [str(row["asset_uuid"]) for row in member_rows]
+    assets = assets_by_uuid(connection, project_id, set(member_ids))
+    contexts = duplicate_context(connection, project_id, set(member_ids))
+    items: list[dict[str, object]] = []
+    for asset_uuid in member_ids:
+        asset = assets.get(asset_uuid)
+        if not asset:
+            continue
+        asset["duplicate_context"] = contexts.get(asset_uuid, {})
+        items.append(asset)
+    return {
+        "group_id": str(group_row["group_id"]),
+        "kind": str(group_row["kind"]),
+        "confidence": float(group_row["confidence"]),
+        "leader_uuid": group_row["leader_uuid"],
+        "flags": json.loads(str(group_row["flags_json"] or "[]")),
+        "items": items,
+    }
+
+
 def list_duplicate_groups(
     connection: sqlite3.Connection, project_id: str
 ) -> list[dict[str, object]]:

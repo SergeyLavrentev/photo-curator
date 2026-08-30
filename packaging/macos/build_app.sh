@@ -120,6 +120,7 @@ xcrun swiftc \
   "$SCRIPT_DIR/PhotoCuratorQualityWizardView.swift" \
   "$SCRIPT_DIR/PhotoCuratorQualityModel.swift" \
   "$SCRIPT_DIR/PhotoCuratorAppModel.swift" \
+  "$SCRIPT_DIR/PhotoCuratorSeriesModel.swift" \
   "$SCRIPT_DIR/PhotoCuratorHelpViews.swift" \
   "$SCRIPT_DIR/PhotoCuratorRootView.swift" \
   "$SCRIPT_DIR/PhotoCuratorGalleryViews.swift" \

@@ -132,6 +132,112 @@ def test_native_worker_exposes_projects_ranked_assets_and_decisions_without_http
     assert set(batch_ids) <= rejected_ids
 
 
+def test_native_worker_series_is_complete_across_page_and_bucket_boundaries(
+    tmp_path: Path,
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    all_items = worker.dispatch("assets", {"project_id": project_id, "limit": 5000})["items"]
+    grouped = max(
+        (item for item in all_items if item["duplicate_group"]),
+        key=lambda item: item["duplicate_member_count"],
+    )
+    group_id = grouped["duplicate_group"]
+    with database_connection(paths.database) as connection:
+        member_ids = [
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT asset_uuid FROM duplicate_members
+                WHERE project_id=? AND group_id=? ORDER BY asset_uuid
+                """,
+                (project_id, group_id),
+            ).fetchall()
+        ]
+        connection.execute(
+            """
+            UPDATE decisions SET final_selection='alternative'
+            WHERE project_id=? AND asset_uuid IN ({})
+            """.format(",".join("?" for _ in member_ids)),
+            (project_id, *member_ids),
+        )
+        connection.execute(
+            """
+            UPDATE decisions SET final_selection='pick'
+            WHERE project_id=? AND asset_uuid=?
+            """,
+            (project_id, member_ids[0]),
+        )
+
+    pick_page = worker.dispatch(
+        "assets",
+        {"project_id": project_id, "selection": "pick", "limit": 1},
+    )
+    series = worker.dispatch(
+        "series",
+        {"project_id": project_id, "group_id": group_id},
+    )
+
+    assert len(pick_page["items"]) == 1
+    assert series["payload_kind"] == "series"
+    assert series["schema_version"] == 1
+    assert series["group_id"] == group_id
+    assert series["member_count"] == len(member_ids) > len(pick_page["items"])
+    assert {item["asset_uuid"] for item in series["items"]} == set(member_ids)
+    assert {item["final_selection"] for item in series["items"]} == {
+        "pick",
+        "alternative",
+    }
+    assert all(item["duplicate_group"] == group_id for item in series["items"])
+    with pytest.raises(NativeWorkerError, match="Series not found"):
+        worker.dispatch(
+            "series",
+            {"project_id": project_id, "group_id": "not-a-series"},
+        )
+
+
+def test_native_worker_series_excludes_inactive_and_video_members(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    grouped = next(
+        item
+        for item in worker.dispatch("assets", {"project_id": project_id})["items"]
+        if item["duplicate_group"]
+    )
+    group_id = grouped["duplicate_group"]
+    with database_connection(paths.database) as connection:
+        member_ids = [
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT asset_uuid FROM duplicate_members
+                WHERE project_id=? AND group_id=? ORDER BY asset_uuid
+                """,
+                (project_id, group_id),
+            ).fetchall()
+        ]
+        connection.execute(
+            "UPDATE assets SET no_longer_exists=1 WHERE project_id=? AND asset_uuid=?",
+            (project_id, member_ids[0]),
+        )
+        if len(member_ids) > 1:
+            connection.execute(
+                "UPDATE assets SET media_type='video' WHERE project_id=? AND asset_uuid=?",
+                (project_id, member_ids[1]),
+            )
+
+    series = worker.dispatch(
+        "series",
+        {"project_id": project_id, "group_id": group_id},
+    )
+
+    excluded = set(member_ids[:2])
+    assert not ({item["asset_uuid"] for item in series["items"]} & excluded)
+    assert series["member_count"] == max(0, len(member_ids) - len(excluded))
+
+
 def test_native_worker_exposes_final_decision_reasons_not_score_highlights(
     tmp_path: Path,
 ) -> None:

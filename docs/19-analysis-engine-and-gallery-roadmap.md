@@ -222,16 +222,23 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
 
 ## R6 — series-first Gallery и UX
 
-- [ ] Добавить API `series(group_id)` с полным составом независимо от page и
+- [x] Добавить API `series(group_id)` с полным составом независимо от page и
   Pick/Alternative/Reject bucket.
-- [ ] Expand/Compare/Survey загружают явный series context и никогда не подставляют
+  Evidence: typed schema v1 endpoint читает active image membership напрямую из
+  `duplicate_members`, а regression разводит одну серию по Pick/Alternative при page limit 1 и
+  всё равно получает полный состав; inactive/video rows исключаются.
+- [x] Expand/Compare/Survey загружают явный series context и никогда не подставляют
   произвольную фотографию.
+  Evidence: series cache живёт отдельно от gallery page; expanded stack инъецирует полный
+  context, Compare/Survey до загрузки показывает только выбранный кадр, не случайного соседа.
 - [x] Устранить задержку single-click: selection выполняется сразу, Details получает
   отдельное действие либо корректно exclusive AppKit recognizer.
   Evidence: основной image surface — native `Button`, competing single/double tap recognizers
   удалены, Details вынесен в отдельную info-кнопку и context menu.
 - [ ] Разделить монолитный `AppModel` минимум на workflow, gallery paging, selection,
   analysis progress, image pipeline и Quality Lab state.
+  - [x] Series cache, selection, rating, detail generation guards и neighbour prefetch вынесены
+    в отдельный `PhotoCuratorSeriesModel.swift`; основной state owner сохранён.
 - [x] Prefetch декодирует настоящий `reviewPath`, имеет in-flight coalescing, cancellation,
   visible priority и отдельные thumbnail/review caches.
   Evidence: selection prefetch использует `reviewPath`, пять соседей отменяются при смене окна;
@@ -244,6 +251,8 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   scroll-to-selection, pinned toolbar и честный текст размера страницы.
 - [ ] Исправить Survey для 5–6 кадров, workspace Alternative action, stale detail/page races,
   empty shared-only picker и неверные progress/warning тексты.
+  - [x] Detail response имеет generation/project/selection guards и не может открыть ранее
+    выбранную фотографию поверх более нового запроса.
 - [ ] Заменить gesture-only controls на `Button`/accessibility actions, добавить selected
   traits и guards для bare-key shortcuts при TextField/Quality Wizard focus.
   - [x] Gallery card, workspace photo и filmstrip selection используют `Button`; selected state
@@ -270,6 +279,8 @@ page-swap p95 159/185 ms, scroll p95 7.6/7.7 ms. Это подтверждает
   с cold cache на сценарий, decode readiness, append до 2k/5k, RSS, click, Loupe и series.
 - [ ] Добавить XCTest/XCUITest либо эквивалентные behavioral tests для single/double click,
   series pagination, Compare/Survey, arrow pagination, stale responses и accessibility.
+  - [x] Native worker behavioral regression покрывает полный series payload через page/bucket
+    boundary и fail-closed фильтрацию inactive/video members.
 - [ ] Добавить image pipeline tests для coalescing, cancellation, priority inversion и
   cache separation.
 - [ ] Source-string contract tests оставить только как smoke и не использовать как UX proof.

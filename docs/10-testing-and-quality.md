@@ -147,6 +147,10 @@ production UI; отдельный SQLite gate проверяет data path на 
 surrogate-view больше не является release evidence. JSON schema v3 сохраняется в
 `build/evidence/gallery-benchmark.json`.
 
+Native worker regression для `series(group_id)` искусственно разводит членов одной серии по
+разным selection buckets и ограничивает gallery page одним элементом. Series payload обязан
+вернуть полный typed состав и отдельно исключить `no_longer_exists` и full-video members.
+
 ## PhotoKit import benchmark
 
 Реальный album benchmark 2026-07-31: `Карелия: осень 2023`, 103 фотографии,

@@ -44,7 +44,9 @@ speculative ETA. Restart resumes completed fingerprints and visibly explains inv
 - four explicit Pick / Alternatives / Review / Reject filters with counts;
 - Lightroom-style Grid, Loupe, Compare and Survey modes with filmstrip and inspector;
 - direct `P` Pick, `U` Unflag, `X` Reject, ratings 1–5, arrows, Space and undo;
-- collapsed series stacks that expand into Compare/Survey and may retain several distinct moments;
+- collapsed series stacks whose explicit expansion and Compare/Survey context loads every active
+  member across page and category boundaries; an unavailable context never falls back to an
+  unrelated photo;
 - unobtrusive checkbox multi-selection; clear and batch move actions appear only
   after photos are selected;
 - a single click selects immediately; a separate info button or context-menu action opens the

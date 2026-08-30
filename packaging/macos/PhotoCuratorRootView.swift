@@ -10,7 +10,6 @@ struct RootView: View {
     @State private var projectPendingDeletion: ProjectItem?
     @State private var galleryCardWidth: CGFloat = selectionCardDefaultWidth
     @State private var collapseSeries = true
-    @State private var expandedSeriesIDs: Set<String> = []
 
     var body: some View {
         Group {
@@ -710,11 +709,7 @@ struct RootView: View {
                             stackCount: stackCount(for: photo),
                             toggleStack: {
                                 guard let group = photo.duplicateGroup else { return }
-                                if expandedSeriesIDs.contains(group) {
-                                    expandedSeriesIDs.remove(group)
-                                } else {
-                                    expandedSeriesIDs.insert(group)
-                                }
+                                model.toggleSeriesExpansion(groupID: group)
                             },
                             rate: { model.setRating(photoID: photo.id, rating: $0) }
                         ) { disposition in
@@ -726,7 +721,7 @@ struct RootView: View {
                 } else {
                     WorkspaceCanvas(
                         mode: model.workspaceMode,
-                        photos: model.photos,
+                        photos: model.workspacePhotos,
                         selectedID: model.selectedPhotoID,
                         multiSelectedIDs: model.selectedPhotoIDs,
                         select: { model.selectPhoto(photoID: $0) },
@@ -776,13 +771,21 @@ struct RootView: View {
 
     private var visibleGridPhotos: [PhotoItem] {
         guard collapseSeries else { return model.photos }
-        var seen = Set<String>()
-        return model.photos.filter { photo in
-            guard let group = photo.duplicateGroup, !expandedSeriesIDs.contains(group) else {
-                return true
+        var visible: [PhotoItem] = []
+        var emittedGroups = Set<String>()
+        for photo in model.photos {
+            guard let groupID = photo.duplicateGroup else {
+                visible.append(photo)
+                continue
             }
-            return seen.insert(group).inserted
+            guard emittedGroups.insert(groupID).inserted else { continue }
+            if model.expandedSeriesIDs.contains(groupID) {
+                visible.append(contentsOf: model.seriesMembers(groupID: groupID) ?? [photo])
+            } else {
+                visible.append(photo)
+            }
         }
+        return visible
     }
 
     private func stackCount(for photo: PhotoItem) -> Int {

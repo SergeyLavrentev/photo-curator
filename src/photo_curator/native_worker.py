@@ -420,6 +420,27 @@ class NativeWorker:
             "next_cursor": next_cursor,
         }
 
+    def _handle_series(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        group_id = _required_string(params, "group_id")
+        with database_connection(self.paths.database) as connection:
+            try:
+                series = repository.get_duplicate_series(connection, project_id, group_id)
+            except KeyError as error:
+                raise NativeWorkerError("Series not found") from error
+        items = list(series["items"])
+        return {
+            "payload_kind": "series",
+            "schema_version": 1,
+            "group_id": series["group_id"],
+            "kind": series["kind"],
+            "confidence": series["confidence"],
+            "leader_uuid": series["leader_uuid"],
+            "flags": series["flags"],
+            "member_count": len(items),
+            "items": [_asset_card_payload(asset) for asset in items],
+        }
+
     def _handle_asset_details(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         asset_uuid = _required_string(params, "asset_uuid")

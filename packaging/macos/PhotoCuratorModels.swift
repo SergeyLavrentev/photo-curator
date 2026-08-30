@@ -269,6 +269,55 @@ struct AssetPageDTO: Decodable {
     }
 }
 
+struct SeriesResponseDTO: Decodable {
+    let groupID: String
+    let kind: String
+    let confidence: Double
+    let leaderID: String?
+    let memberCount: Int
+    let items: [PhotoItem]
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case payloadKind = "payload_kind"
+        case groupID = "group_id"
+        case kind, confidence, items
+        case leaderID = "leader_uuid"
+        case memberCount = "member_count"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard try container.decode(Int.self, forKey: .schemaVersion) == 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "Unsupported series schema",
+            )
+        }
+        guard try container.decode(String.self, forKey: .payloadKind) == "series" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .payloadKind,
+                in: container,
+                debugDescription: "Unsupported series payload kind",
+            )
+        }
+        groupID = try container.decode(String.self, forKey: .groupID)
+        kind = try container.decode(String.self, forKey: .kind)
+        confidence = try container.decode(Double.self, forKey: .confidence)
+        leaderID = try container.decodeIfPresent(String.self, forKey: .leaderID)
+        memberCount = try container.decode(Int.self, forKey: .memberCount)
+        items = try container.decode([PhotoItem].self, forKey: .items)
+        guard memberCount == items.count else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .memberCount,
+                in: container,
+                debugDescription: "Series member count does not match payload",
+            )
+        }
+    }
+}
+
 struct DecisionReason: Identifiable, Hashable, JSONDictionaryDTO {
     let code: String
     let title: String

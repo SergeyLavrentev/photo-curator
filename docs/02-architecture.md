@@ -47,6 +47,11 @@ arbitrary filesystem paths. Photos publication is still a separate plan → expl
 → apply operation. When coordinator/storage move to Swift, Python enrichment workers become
 stateless and lose database and publish capabilities.
 
+Gallery cards are keyset-paged, but a series is a separate typed read model: `series(group_id)`
+returns every active image member regardless of current page or Pick/Alternative/Review/Reject
+filter. Swift keeps this context outside the page array so Compare/Survey never substitute an
+unrelated card merely because the rest of the series has not been paged in.
+
 Every analysis record includes:
 
 - source render fingerprint;

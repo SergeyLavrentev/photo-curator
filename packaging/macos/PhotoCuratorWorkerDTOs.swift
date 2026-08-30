@@ -68,6 +68,15 @@ struct AssetIDParams: Encodable {
     }
 }
 
+struct SeriesParams: Encodable {
+    let projectID: String
+    let groupID: String
+    enum CodingKeys: String, CodingKey {
+        case projectID = "project_id"
+        case groupID = "group_id"
+    }
+}
+
 struct GalleryPageParams: Encodable {
     let projectID: String
     let selection: String

@@ -121,7 +121,11 @@ final class AppModel: ObservableObject {
     @Published var photos: [PhotoItem] = []
     @Published var photosTotal = 0
     @Published var selectionBucket: SelectionBucket = .pick
-    @Published var workspaceMode: WorkspaceMode = .grid
+    @Published var workspaceMode: WorkspaceMode = .grid {
+        didSet {
+            if workspaceMode != oldValue { refreshSelectedSeriesContext() }
+        }
+    }
     @Published var keptTotal = 0
     @Published var pickedTotal = 0
     @Published var alternativeTotal = 0
@@ -186,6 +190,9 @@ final class AppModel: ObservableObject {
     @Published var isTasteBusy = false
     @Published var selectedPhotoID: String?
     @Published var selectedPhotoIDs: Set<String> = []
+    @Published var seriesContexts: [String: [PhotoItem]] = [:]
+    @Published var loadingSeriesIDs: Set<String> = []
+    @Published var expandedSeriesIDs: Set<String> = []
     @Published var detailPhoto: PhotoItem?
     @Published var photoAccessNeedsAction = false
     @Published var photoAccessCanRequest = false
@@ -211,11 +218,13 @@ final class AppModel: ObservableObject {
     private var permissionHelpTask: Task<Void, Never>?
     private var decisionHistory: [DecisionUndo] = []
     private var decisionGenerations: [String: Int] = [:]
-    private var ratingGenerations: [String: Int] = [:]
+    var ratingGenerations: [String: Int] = [:]
     private var binaryProjects: Set<String> = []
     private var galleryCursor: GalleryCursor?
     private var projectRequestGeneration = 0
     private var galleryRequestGeneration = 0
+    var seriesContextEpoch = 0
+    var detailRequestGeneration = 0
     private var hasStarted = false
     private let galleryPageSize = 36
     private let retainedProjectDefaultsKey = "retainedProjectID"
@@ -637,6 +646,7 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         jobs = []
         photos = []
+        resetSeriesContexts()
         selectionBucket = .pick
         keptTotal = 0
         pickedTotal = 0
@@ -876,9 +886,7 @@ final class AppModel: ObservableObject {
     }
 
     func setDecision(photoID: String, disposition: String?, recordUndo: Bool = true) {
-        guard let project else { return }
-        guard let initialIndex = photos.firstIndex(where: { $0.id == photoID }) else { return }
-        let previousPhoto = photos[initialIndex]
+        guard let project, let previousPhoto = photoItem(photoID: photoID) else { return }
         let generation = (decisionGenerations[photoID] ?? 0) + 1
         decisionGenerations[photoID] = generation
         let previousManual = previousPhoto.manualDisposition
@@ -886,20 +894,41 @@ final class AppModel: ObservableObject {
         let updatedSelection = disposition.flatMap {
             ["keep": "pick", "review": "review", "reject": "reject"][$0]
         }
+        func reconcilePage(_ updated: PhotoItem, from priorSelection: String?) {
+            let wasInBucket = priorSelection == selectionBucket.rawValue
+            let isInBucket = updated.selection == selectionBucket.rawValue
+            if wasInBucket != isInBucket {
+                photosTotal = max(0, photosTotal + (isInBucket ? 1 : -1))
+            }
+            if isInBucket {
+                if let index = photos.firstIndex(where: { $0.id == photoID }) {
+                    photos[index] = updated
+                } else if !wasInBucket {
+                    photos.append(updated)
+                }
+            } else {
+                photos.removeAll { $0.id == photoID }
+            }
+        }
         selectedPhotoID = photoID
         selectedPhotoIDs.remove(photoID)
+        var optimisticPhoto: PhotoItem?
         if let disposition {
             adjustDecisionCounts(from: previousPhoto.disposition, to: disposition)
             adjustSelectionCounts(from: previousSelection, to: updatedSelection)
-            photos[initialIndex].disposition = disposition
-            photos[initialIndex].manualDisposition = disposition
-            photos[initialIndex].selection = updatedSelection
-            photos[initialIndex].manualSelection = updatedSelection
-            if updatedSelection != selectionBucket.rawValue {
-                photos.remove(at: initialIndex)
-                photosTotal = max(0, photosTotal - 1)
-                selectedPhotoID = photos.indices.contains(initialIndex)
-                    ? photos[initialIndex].id : photos.last?.id
+            var optimistic = previousPhoto
+            optimistic.disposition = disposition
+            optimistic.manualDisposition = disposition
+            optimistic.selection = updatedSelection
+            optimistic.manualSelection = updatedSelection
+            optimisticPhoto = optimistic
+            updateCachedPhoto(optimistic)
+            reconcilePage(optimistic, from: previousSelection)
+            if optimistic.selection != selectionBucket.rawValue,
+               !seriesContexts.values.contains(where: { members in
+                   members.contains(where: { $0.id == photoID })
+               }) {
+                selectedPhotoID = photos.first?.id
             }
         }
         Task {
@@ -926,14 +955,8 @@ final class AppModel: ObservableObject {
                             to: updated.selection
                         )
                     }
-                    if let index = photos.firstIndex(where: { $0.id == photoID }) {
-                        if updated.selection == selectionBucket.rawValue {
-                            photos[index] = updated
-                        } else {
-                            photos.remove(at: index)
-                            photosTotal = max(0, photosTotal - 1)
-                        }
-                    }
+                    updateCachedPhoto(updated)
+                    reconcilePage(updated, from: optimisticPhoto?.selection ?? previousSelection)
                     if recordUndo && previousManual != disposition {
                         decisionHistory.append(
                             DecisionUndo(
@@ -954,11 +977,9 @@ final class AppModel: ObservableObject {
                     adjustDecisionCounts(from: disposition, to: previousPhoto.disposition)
                     adjustSelectionCounts(from: updatedSelection, to: previousSelection)
                 }
-                if let index = photos.firstIndex(where: { $0.id == photoID }) {
-                    photos[index] = previousPhoto
-                } else {
-                    photos.insert(previousPhoto, at: min(initialIndex, photos.count))
-                    photosTotal += 1
+                if let optimisticPhoto {
+                    updateCachedPhoto(previousPhoto)
+                    reconcilePage(previousPhoto, from: optimisticPhoto.selection)
                 }
                 errorMessage = error.localizedDescription
             }
@@ -1046,67 +1067,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func movePhotoSelection(_ offset: Int) {
-        guard !photos.isEmpty else { return }
-        let current = selectedPhotoID.flatMap { id in photos.firstIndex(where: { $0.id == id }) } ?? 0
-        let next = min(max(0, current + offset), photos.count - 1)
-        selectPhoto(photoID: photos[next].id)
-    }
-
-    func selectPhoto(photoID: String) {
-        guard let index = photos.firstIndex(where: { $0.id == photoID }) else { return }
-        selectedPhotoID = photoID
-        let nearby = ((index - 2)...(index + 2))
-            .filter { photos.indices.contains($0) }
-            .sorted { abs($0 - index) < abs($1 - index) }
-        let paths = nearby.compactMap { photos[$0].reviewPath ?? photos[$0].thumbnailPath }
-        ThumbnailLoader.prefetch(paths: paths, maxPixelSize: 1400)
-    }
-
-    func decideSelected(_ disposition: String?) {
-        guard let selectedPhotoID else { return }
-        setDecision(photoID: selectedPhotoID, disposition: disposition)
-    }
-
-    func rateSelected(_ rating: Int?) {
-        guard let selectedPhotoID else { return }
-        setRating(photoID: selectedPhotoID, rating: rating)
-    }
-
-    func setRating(photoID: String, rating: Int?) {
-        guard let project,
-              rating == nil || (1...5).contains(rating!),
-              let index = photos.firstIndex(where: { $0.id == photoID })
-        else { return }
-        let previous = photos[index].manualRating
-        let generation = (ratingGenerations[photoID] ?? 0) + 1
-        ratingGenerations[photoID] = generation
-        photos[index].manualRating = rating
-        Task {
-            do {
-                let updated: PhotoItem = try await callDTO(
-                    "rating",
-                    RatingMutationParams(
-                        projectID: project.id,
-                        assetUUID: photoID,
-                        rating: rating
-                    ),
-                    as: PhotoItem.self
-                )
-                guard ratingGenerations[photoID] == generation else { return }
-                if let current = photos.firstIndex(where: { $0.id == photoID }) {
-                    photos[current] = updated
-                }
-            } catch {
-                guard ratingGenerations[photoID] == generation else { return }
-                if let current = photos.firstIndex(where: { $0.id == photoID }) {
-                    photos[current].manualRating = previous
-                }
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
     func undoLastDecision() {
         guard let change = decisionHistory.popLast(), let project else { return }
         let generation = (decisionGenerations[change.photoID] ?? 0) + 1
@@ -1146,52 +1106,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func previewSelected() {
-        guard let selectedPhotoID,
-              let photo = photos.first(where: { $0.id == selectedPhotoID }),
-              let path = photo.reviewPath ?? photo.thumbnailPath
-        else { return }
-        QuickLookController.shared.show(path: path)
-    }
-
-    func openPhotoDetails(photoID: String) {
-        selectPhoto(photoID: photoID)
-        guard let project else { return }
-        Task {
-            do {
-                let photo: PhotoItem = try await callDTO(
-                    "asset_details",
-                    AssetIDParams(projectID: project.id, assetUUID: photoID),
-                    as: PhotoItem.self
-                )
-                detailPhoto = photo
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
     func openGoodPhoto(photoID: String) {
         guard let project else { return }
+        detailRequestGeneration += 1
         detailPhoto = nil
         selectionBucket = .pick
         photos = []
+        resetSeriesContexts()
         galleryCursor = nil
         photosTotal = pickedTotal
         selectedPhotoID = photoID
         selectedPhotoIDs.removeAll()
         Task { await loadPhotos(projectID: project.id, focusPhotoID: photoID) }
-    }
-
-    func togglePhotoSelection(photoID: String) {
-        selectPhoto(photoID: photoID)
-        if selectedPhotoIDs.contains(photoID) {
-            selectedPhotoIDs.remove(photoID)
-        } else {
-            selectedPhotoIDs.insert(photoID)
-        }
-    }
-
-    func clearPhotoSelection() {
-        selectedPhotoIDs.removeAll()
     }
 
     func setSelectedPhotosDecision(_ disposition: String) {
@@ -1625,7 +1551,10 @@ final class AppModel: ObservableObject {
             }
         }
         do {
-            if !append { galleryCursor = nil }
+            if !append {
+                galleryCursor = nil
+                resetSeriesContexts()
+            }
             if !binaryProjects.contains(projectID) {
                 let normalized: BinaryDecisionResponseDTO = try await callDTO(
                     "binary_decisions",
@@ -1670,6 +1599,7 @@ final class AppModel: ObservableObject {
             } else if !photos.contains(where: { $0.id == selectedPhotoID }) {
                 selectedPhotoID = photos.first?.id
             }
+            refreshSelectedSeriesContext()
             if !append {
                 UserDefaults.standard.set(projectID, forKey: retainedProjectDefaultsKey)
                 selectedPhotoIDs.removeAll()
@@ -1773,6 +1703,7 @@ final class AppModel: ObservableObject {
         project = nil
         jobs = []
         photos = []
+        resetSeriesContexts()
         galleryCursor = nil
         photosTotal = 0
         unavailablePreviewFiles = 0

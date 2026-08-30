@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_SOURCES = (
     "PhotoCuratorApp.swift",
     "PhotoCuratorAppModel.swift",
+    "PhotoCuratorSeriesModel.swift",
     "PhotoCuratorHelpViews.swift",
     "PhotoCuratorRootView.swift",
     "PhotoCuratorGalleryViews.swift",
@@ -21,6 +22,7 @@ def test_native_app_is_split_into_bounded_feature_modules() -> None:
     limits = {
         "PhotoCuratorApp.swift": 200,
         "PhotoCuratorAppModel.swift": 2_000,
+        "PhotoCuratorSeriesModel.swift": 350,
         "PhotoCuratorHelpViews.swift": 600,
         "PhotoCuratorQualityWizardView.swift": 900,
         "PhotoCuratorQualityModel.swift": 300,
@@ -59,6 +61,11 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'case focusAssetUUID = "focus_asset_uuid"' in worker_dtos
     assert '"asset_details"' in app
     assert "AssetIDParams(projectID:" in app
+    assert '"series"' in app
+    assert "SeriesParams(projectID:" in app
+    assert "photos: model.workspacePhotos" in app
+    assert "model.seriesMembers(groupID:" in app
+    assert "detailRequestGeneration == requestGeneration" in app
     assert "maxLogBytes: UInt64 = 5 * 1024 * 1024" in worker
     assert "native-worker.previous.log" in worker
     native_worker = (ROOT / "src/photo_curator/native_worker.py").read_text()
@@ -101,7 +108,8 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert ".allowsHitTesting(false)" in app
     assert "struct PhotoCard: View, Equatable" in app
     assert ".equatable()" in app
-    assert "photos[initialIndex].disposition = disposition" in app
+    assert "optimistic.disposition = disposition" in app
+    assert "updateCachedPhoto(optimistic)" in app
     assert ".onTapGesture(count: 2, perform: openDetails)" not in app
     assert (
         ".onTapGesture" not in (ROOT / "packaging/macos/PhotoCuratorGalleryViews.swift").read_text()
@@ -573,6 +581,7 @@ def test_taste_profile_does_not_flicker_as_unconfigured_during_bootstrap() -> No
 def test_thumbnail_decode_work_is_cancelled_and_repair_invalidates_cache() -> None:
     pipeline = (ROOT / "packaging/macos/PhotoCuratorImagePipeline.swift").read_text()
     app_model = (ROOT / "packaging/macos/PhotoCuratorAppModel.swift").read_text()
+    series_model = (ROOT / "packaging/macos/PhotoCuratorSeriesModel.swift").read_text()
 
     assert "withTaskCancellationHandler" in pipeline
     assert "task.cancel()" in pipeline
@@ -591,5 +600,5 @@ def test_thumbnail_decode_work_is_cancelled_and_repair_invalidates_cache() -> No
     assert "guard !Task.isCancelled else" in pipeline
     assert "static func invalidateAll()" in pipeline
     assert "ThumbnailLoader.invalidateAll()" in app_model
-    assert "photos[$0].reviewPath ?? photos[$0].thumbnailPath" in app_model
-    assert "func selectPhoto(photoID: String)" in app_model
+    assert "candidates[$0].reviewPath ?? candidates[$0].thumbnailPath" in series_model
+    assert "func selectPhoto(photoID: String)" in series_model
