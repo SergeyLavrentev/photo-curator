@@ -14,6 +14,7 @@ from photo_curator.paths import default_application_paths
 from photo_curator.photos.fake_provider import FakePhotosProvider
 from photo_curator.photos.provider import PhotoAsset
 from photo_curator.pipeline.coordinator import PipelineCoordinator
+from photo_curator.pipeline.previews import analysis_preview_is_eligible
 
 
 class FakeNativeVisionEngine:
@@ -266,6 +267,73 @@ def test_degraded_photokit_previews_remain_visible_but_never_reach_models_or_cod
     assert codex_job["status"] == "done"
     assert codex_job["processed_items"] == 0
     assert "нет preview достаточного разрешения" in codex_job["current_message"]
+
+
+def test_same_process_preview_repair_reloads_only_degraded_photokit_assets(
+    tmp_path: Path,
+) -> None:
+    class RepairingProvider(FakePhotosProvider):
+        def __init__(self, fixture_root: Path) -> None:
+            super().__init__(fixture_root)
+            self.full_assets = [
+                replace(asset, review_render=True, source_revision=f"source-{asset.uuid}")
+                for asset in self._assets
+            ]
+            tiny = fixture_root / "photokit-degraded-48x64.jpg"
+            Image.new("RGB", (48, 64), (72, 94, 118)).save(tiny, "JPEG", quality=70)
+            self._assets = [
+                replace(
+                    asset,
+                    source_path=tiny,
+                    review_render=True,
+                    source_revision=f"source-{asset.uuid}",
+                    provider_error="CloudPhotoLibraryErrorDomain error 1005",
+                )
+                for asset in self.full_assets
+            ]
+            self.repair_calls: list[list[str]] = []
+
+        def repair_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
+            self.repair_calls.append(list(asset_uuids))
+            wanted = set(asset_uuids)
+            repaired = [asset for asset in self.full_assets if asset.uuid in wanted]
+            self._assets = list(self.full_assets)
+            return repaired
+
+    paths = default_application_paths(tmp_path)
+    paths.ensure()
+    provider = RepairingProvider(paths.cache_dir / "sources")
+    with database_connection(paths.database) as connection:
+        migrate(connection)
+        project_id = repository.create_project(
+            connection,
+            name="Repair degraded PhotoKit previews",
+            library=provider.get_current_library(),
+            album=provider.list_regular_albums()[0],
+        )
+    coordinator = PipelineCoordinator(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        vision_engine=FakeNativeVisionEngine(),
+        model_engine=FakeLocalModelEngine(),
+    )
+
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        degraded = repository.list_assets(connection, project_id)
+    assert all(asset["cache_state"] == "degraded" for asset in degraded)
+    assert provider.repair_calls == []
+
+    coordinator.run(project_id, from_stage="previews")
+    with database_connection(paths.database) as connection:
+        repaired = repository.list_assets(connection, project_id)
+        signals = repository.list_analysis_signals(connection, project_id)
+
+    assert provider.repair_calls == [[f"demo-{index:03d}" for index in range(1, 13)]]
+    assert all(asset["cache_state"] == "ready" for asset in repaired)
+    assert all(analysis_preview_is_eligible(Path(str(asset["review_path"]))) for asset in repaired)
+    assert len(signals) == 96
 
 
 def test_stage_fingerprints_skip_unchanged_expensive_analysis(tmp_path: Path) -> None:

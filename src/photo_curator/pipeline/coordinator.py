@@ -504,6 +504,19 @@ class PipelineCoordinator:
         else:
             source_assets = self.provider.list_assets(album_id)
         current_assets = {asset.uuid: asset for asset in source_assets if is_supported_photo(asset)}
+        repair_uuids = [
+            str(row["asset_uuid"])
+            for row in stored
+            if not row.get("no_longer_exists") and row.get("cache_state") in {"degraded", "missing"}
+        ]
+        repair_assets = getattr(self.provider, "repair_assets", None)
+        refresh_assets = getattr(self.provider, "refresh_assets", None)
+        repair_loader = repair_assets if callable(repair_assets) else refresh_assets
+        if repair_uuids and callable(repair_loader):
+            refreshed = repair_loader(repair_uuids)
+            current_assets.update(
+                {asset.uuid: asset for asset in refreshed if is_supported_photo(asset)}
+            )
         renders_reported = bool(current_assets) and all(
             asset.review_render for asset in current_assets.values()
         )

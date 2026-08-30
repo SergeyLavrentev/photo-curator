@@ -16,7 +16,7 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
     def runner(command, *, timeout):
         calls.append((command, timeout))
         if command[-1] == "--capability":
-            return CommandResult(command, 0, "photokit-source-media-v2\n", "")
+            return CommandResult(command, 0, "photokit-source-media-v3\n", "")
         if command[1:] == ["albums"]:
             return CommandResult(
                 command,
@@ -51,7 +51,9 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
             return CommandResult(command, 0, json.dumps(["asset/L0/001"]), "")
         output = Path(command[3])
         output.mkdir(parents=True, exist_ok=True)
-        render = output / "asset.jpg"
+        render = output / (
+            "asset-repaired.jpg" if command[1] == "repair-assets-by-id" else "asset.jpg"
+        )
         render.write_bytes(b"jpeg")
         return CommandResult(
             command,
@@ -107,6 +109,9 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
     assert asset.source_revision == "photokit-revision-1"
     refreshed = provider.refresh_assets([asset.uuid])
     assert [item.uuid for item in refreshed] == [asset.uuid]
+    repaired = provider.repair_assets([asset.uuid])
+    assert [item.uuid for item in repaired] == [asset.uuid]
+    assert provider.list_assets("album/L0/040")[0].source_path == repaired[0].source_path
     sampled = provider.sample_assets(
         "album/L0/040",
         limit=10,
@@ -116,6 +121,7 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
     provider.refresh_library()
     assert provider.asset_still_in_album("album/L0/040", asset.uuid)
     assert any(command[1] == "assets-by-id" for command, _ in calls)
+    assert any(command[1] == "repair-assets-by-id" for command, _ in calls)
     assert any(command[1] == "album-identifiers" for command, _ in calls)
     assert any(command[1] == "album-photo-identifiers" for command, _ in calls)
     assert any(command[-1] == "--capability" for command, _ in calls)

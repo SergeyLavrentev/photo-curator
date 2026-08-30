@@ -446,13 +446,21 @@ func assetMetadata(in album: PHAssetCollection) -> [AssetPayload] {
     albumAssets(album).map { payload($0, outputDirectory: nil) }
 }
 
-func assets(with identifiers: [String], outputDirectory: URL) throws -> [AssetPayload] {
+func assets(
+    with identifiers: [String],
+    outputDirectory: URL,
+    allowNetwork: Bool = false
+) throws -> [AssetPayload] {
     let result = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
     var byIdentifier: [String: PHAsset] = [:]
     result.enumerateObjects { asset, _, _ in byIdentifier[asset.localIdentifier] = asset }
     let ordered = identifiers.compactMap { byIdentifier[$0] }
         .filter { $0.mediaType == .image }
-    return try renderPayloads(ordered, outputDirectory: outputDirectory, allowNetwork: false)
+    return try renderPayloads(
+        ordered,
+        outputDirectory: outputDirectory,
+        allowNetwork: allowNetwork
+    )
 }
 
 func streamAssets(with identifiers: [String], outputDirectory: URL) throws {
@@ -512,7 +520,7 @@ func printJSON<T: Encodable>(_ value: T) throws {
 public func runPhotoCuratorSourceHelper(arguments: [String]) -> Int32 {
     do {
         if arguments == [arguments[0], "--capability"] {
-            print("photokit-source-media-v2")
+            print("photokit-source-media-v3")
             return 0
         }
         try requestAuthorization()
@@ -552,6 +560,15 @@ public func runPhotoCuratorSourceHelper(arguments: [String]) -> Int32 {
             try printJSON(assets(
                 with: request.asset_identifiers,
                 outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true)
+            ))
+        case "repair-assets-by-id":
+            guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }
+            let data = try Data(contentsOf: URL(fileURLWithPath: arguments[2]))
+            let request = try JSONDecoder().decode(AssetIdentifiersRequest.self, from: data)
+            try printJSON(assets(
+                with: request.asset_identifiers,
+                outputDirectory: URL(fileURLWithPath: arguments[3], isDirectory: true),
+                allowNetwork: true
             ))
         case "assets-by-id-jsonl":
             guard arguments.count == 4 else { throw PhotoKitError.invalidArguments }

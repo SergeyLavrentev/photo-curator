@@ -115,6 +115,9 @@ Unedited:
   media subtype и revision входят в snapshot/cache identity; изменение требует нового анализа.
 - Animated image, burst coverage, hidden и iCloud-only остаются отдельными policy/acceptance
   пунктами roadmap; отсутствие такого evidence нельзя трактовать как готовность.
+- Повторный preview repair не доверяет in-memory tiny render: только UUID со статусом
+  `degraded`/`missing` повторно проходят PhotoKit helper с network access. Если analysis-grade
+  render всё ещё недоступен, asset остаётся честно degraded и не попадает в модели.
 
 Для проекта из service-owned disk snapshot финальный `Best` использует тот же принцип
 через отдельный нативный PhotoKit helper:

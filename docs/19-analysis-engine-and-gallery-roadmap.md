@@ -114,8 +114,11 @@ Quality Lab и нативной галереи в последовательну
   Evidence: все pending DDL и `user_version` выполняются в одной `BEGIN IMMEDIATE`
   transaction; verifier проверяет version/tables/columns/integrity/FK до commit, а injected
   post-verifier failure возвращает v18 без колонки v19.
-- [ ] Исправить same-process degraded/iCloud preview repair: tiny render обязан повторно
+- [x] Исправить same-process degraded/iCloud preview repair: tiny render обязан повторно
   пройти provider/helper либо остаться честно degraded.
+  Evidence: preview stage адресно вызывает `repair_assets` только для degraded/missing UUID;
+  PhotoKit source v3 удаляет tiny cache и повторяет request с network access. Same-process
+  regression восстанавливает analysis-grade renders и запускает ранее пропущенные models.
 - [ ] Описать и реализовать явную policy для video, Live Photo, animated image, burst,
   hidden, edited и iCloud-only assets.
 - [x] Для обычного PhotoKit album полностью исключать видео до render/model pipeline и

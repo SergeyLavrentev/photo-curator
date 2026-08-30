@@ -95,6 +95,12 @@ class LocalAlbumsProvider:
         return assets[:limit]
 
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
+        return self._reload_assets(asset_uuids, repair=False)
+
+    def repair_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
+        return self._reload_assets(asset_uuids, repair=True)
+
+    def _reload_assets(self, asset_uuids: list[str], *, repair: bool) -> list[PhotoAsset]:
         wanted = set(asset_uuids)
         local_assets: dict[str, PhotoAsset] = {}
         for album in self._local_albums():
@@ -102,7 +108,9 @@ class LocalAlbumsProvider:
                 if asset.uuid in wanted:
                     local_assets.setdefault(asset.uuid, asset)
         remaining = sorted(wanted - local_assets.keys())
-        return [*local_assets.values(), *self.base.refresh_assets(remaining)]
+        base_repair = getattr(self.base, "repair_assets", None)
+        loader = base_repair if repair and callable(base_repair) else self.base.refresh_assets
+        return [*local_assets.values(), *loader(remaining)]
 
     def asset_still_in_album(self, album_id: str, asset_uuid: str) -> bool:
         if album_id.startswith(self.PREFIX):

@@ -121,6 +121,19 @@ class PhotoKitProvider:
         return self.refresh_assets(selected)
 
     def refresh_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
+        return self._render_assets_by_id(asset_uuids, command="assets-by-id")
+
+    def repair_assets(self, asset_uuids: list[str]) -> list[PhotoAsset]:
+        """Retry degraded/missing renders with PhotoKit network access enabled."""
+        repaired = self._render_assets_by_id(asset_uuids, command="repair-assets-by-id")
+        replacements = {asset.uuid: asset for asset in repaired}
+        for album_id, cached in self._assets_by_album.items():
+            self._assets_by_album[album_id] = [
+                replacements.get(asset.uuid, asset) for asset in cached
+            ]
+        return repaired
+
+    def _render_assets_by_id(self, asset_uuids: list[str], *, command: str) -> list[PhotoAsset]:
         if not asset_uuids:
             return []
         request_dir = self.paths.cache_dir / "photokit-requests"
@@ -129,7 +142,7 @@ class PhotoKitProvider:
         request.write_text(json.dumps({"asset_identifiers": asset_uuids}), encoding="utf-8")
         output = self.paths.cache_dir / "photokit-renders" / "assets-v2"
         try:
-            result = self._run(["assets-by-id", str(request), str(output)], timeout=7200)
+            result = self._run([command, str(request), str(output)], timeout=7200)
         finally:
             request.unlink(missing_ok=True)
         return self._assets_from_payload(_json_result(result), output.resolve())
@@ -144,7 +157,7 @@ class PhotoKitProvider:
         if not self.executable.is_file():
             raise RuntimeError("PhotoKit source helper is missing")
         result = self.runner([str(self.executable), "--capability"], timeout=30)
-        if result.returncode != 0 or "photokit-source-media-v2" not in result.stdout:
+        if result.returncode != 0 or "photokit-source-media-v3" not in result.stdout:
             raise RuntimeError("PhotoKit source helper is unavailable")
 
     def _load_albums(self) -> None:

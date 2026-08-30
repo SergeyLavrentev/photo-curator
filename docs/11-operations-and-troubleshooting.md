@@ -42,6 +42,9 @@ Quality Lab. UI обнаруживает их отсутствие и предл
 ### Missing previews
 
 Открыть исходный альбом в Photos, дождаться загрузки, нажать `Восстановить изображения`.
+Repair повторно запрашивает через PhotoKit только `degraded`/`missing` assets и не использует
+закэшированный в памяти tiny render. Неуспешная загрузка оставляет asset в degraded, а не
+подменяет её успешным анализом.
 
 ### HEIC conversion failure
 

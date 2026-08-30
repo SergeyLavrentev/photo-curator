@@ -105,3 +105,19 @@ def test_shared_copy_reuses_files_when_resumed(tmp_path: Path) -> None:
     assert result["status"] == "done"
     assert result["imported_items"] == 0
     assert result["reused_items"] == 4
+
+
+def test_local_provider_forwards_preview_repair_to_photokit_base(tmp_path: Path) -> None:
+    _, provider, _ = _coordinator(tmp_path)
+    calls: list[list[str]] = []
+
+    def repair_assets(asset_uuids: list[str]):
+        calls.append(list(asset_uuids))
+        return provider.base.refresh_assets(asset_uuids)
+
+    provider.base.repair_assets = repair_assets
+
+    repaired = provider.repair_assets(["demo-001"])
+
+    assert calls == [["demo-001"]]
+    assert [asset.uuid for asset in repaired] == ["demo-001"]
