@@ -145,7 +145,10 @@ Quality Lab и нативной галереи в последовательну
 Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ranked subset
 ```
 
-- [ ] Exact duplicates выделить в независимый fail-safe слой без эстетической семантики.
+- [x] Exact duplicates выделить в независимый fail-safe слой без эстетической семантики.
+  Evidence: Engine v3 shadow создаёт album-wide `exact_duplicate` nodes только по
+  render-equivalence hash; эстетика не участвует в membership, а protected/quality выбирают
+  лишь advisory leader.
 - [ ] Capture episodes строить по album order, fractional time, gap/change points и GPS,
   если location доступна; отсутствие timestamp не должно отключать visual matching.
 - [ ] Semantic scenes строить внутри/между соседними episodes по validated embeddings и
@@ -156,12 +159,18 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   визуальной избыточности.
 - [ ] Разделить objective defect, technical quality, aesthetic appeal, personal taste,
   leader quality и marginal novelty; не начислять один штраф несколько раз.
-- [ ] Сохранить непрерывный rank signal без массового clamp в 0/100.
-- [ ] Ввести variable per-scene budget: минимум один representative essential scene,
+- [x] Сохранить непрерывный rank signal без массового clamp в 0/100.
+  Evidence: shadow members хранят непрерывный weighted rank и отдельный marginal novelty.
+- [x] Ввести variable per-scene budget: минимум один representative essential scene,
   дополнительные кадры только за новый момент, человека, выражение, ракурс или coverage.
+  Evidence: budget зависит от `sqrt(scene size)` и density, protected assets сохраняются,
+  остальные выбираются greedy quality+novelty; synthetic 100-frame scene даёт 10 picks.
 - [ ] Отдельно объяснять `безопасно оставить`, `лучший в серии`, `альтернатива` и
   `подтверждённый брак`; низкая привлекательность сама по себе не является delete evidence.
-- [ ] Запускать Engine v1/V2 и v3 параллельно в immutable shadow snapshots.
+- [x] Запускать Engine v1/V2 и v3 параллельно в immutable shadow snapshots.
+  Evidence: отдельный pipeline stage сохраняет versioned `engine_shadow_runs/nodes/members`,
+  повторный идентичный input переиспользует run, изменённый создаёт новый; regression
+  подтверждает неизменность product decisions и старого snapshot.
 
 ### R3 acceptance
 

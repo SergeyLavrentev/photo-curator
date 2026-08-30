@@ -4,6 +4,26 @@
 > compatibility path не запускается coordinator-ом: framework hang не должен блокировать
 > проект. Его прямой диагностический вызов изолирован в subprocess с жёстким timeout.
 
+## Engine v3 shadow pipeline
+
+Начиная со schema v21 основной pipeline после локальных/Vision signals параллельно строит
+неизменяемый advisory snapshot Engine v3:
+
+```text
+source snapshot -> adaptive capture episodes -> semantic scenes
+                -> complete-link moment stacks -> variable ranked subset
+```
+
+Exact render-equivalent duplicates сохраняются отдельным album-wide safety layer и не
+смешиваются с эстетической сегментацией. Время задаёт адаптивные границы capture episode,
+но не доказывает визуальную избыточность; при отсутствии timestamp visual matching продолжает
+работать. Scene budget зависит от размера сцены (`sqrt(N)` с density multiplier), а не от
+глобального percentile cutoff или фиксированного лимита в три кадра.
+
+Этот результат хранится в `engine_shadow_*`, не читает Codex ranking/personal taste и не
+изменяет `decisions`, `duplicate_groups`, Pick, Alternative или Reject. До album-separated
+human acceptance он служит только для сравнения с текущим product pipeline.
+
 ## Product pipeline
 
 ```text

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -530,6 +530,63 @@ CREATE INDEX album_snapshot_items_project_media
 ON album_snapshot_items(project_id, media_type, snapshot_id);
 """
 
+MIGRATION_21 = """
+CREATE TABLE engine_shadow_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    source_snapshot_id TEXT NOT NULL,
+    engine_name TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    input_fingerprint TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_snapshot_id) REFERENCES album_snapshots(id) ON DELETE CASCADE,
+    UNIQUE (project_id, engine_name, engine_version, input_fingerprint)
+);
+CREATE INDEX engine_shadow_runs_project_created
+ON engine_shadow_runs(project_id, created_at, id);
+
+CREATE TABLE engine_shadow_nodes (
+    run_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    parent_node_id TEXT,
+    kind TEXT NOT NULL CHECK (
+        kind IN ('episode', 'scene', 'moment_stack', 'exact_duplicate')
+    ),
+    node_position INTEGER NOT NULL,
+    member_count INTEGER NOT NULL,
+    selection_budget INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (run_id, node_id),
+    FOREIGN KEY (run_id) REFERENCES engine_shadow_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id, parent_node_id)
+      REFERENCES engine_shadow_nodes(run_id, node_id) ON DELETE CASCADE
+);
+CREATE INDEX engine_shadow_nodes_run_kind
+ON engine_shadow_nodes(run_id, kind, node_position);
+
+CREATE TABLE engine_shadow_members (
+    run_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    asset_uuid TEXT NOT NULL,
+    album_position INTEGER NOT NULL,
+    rank_score REAL,
+    novelty_score REAL,
+    recommended INTEGER NOT NULL DEFAULT 0 CHECK (recommended IN (0, 1)),
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (run_id, node_id, asset_uuid),
+    FOREIGN KEY (run_id, node_id)
+      REFERENCES engine_shadow_nodes(run_id, node_id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id, asset_uuid)
+      REFERENCES assets(project_id, asset_uuid) ON DELETE CASCADE
+);
+CREATE INDEX engine_shadow_members_project_asset
+ON engine_shadow_members(project_id, asset_uuid, run_id);
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -563,6 +620,7 @@ MIGRATIONS = (
     MIGRATION_18,
     MIGRATION_19,
     MIGRATION_20,
+    MIGRATION_21,
 )
 
 _TABLES_BY_VERSION = {
@@ -586,6 +644,7 @@ _TABLES_BY_VERSION = {
     14: {"stage_fingerprints"},
     18: {"quality_preference_examples"},
     20: {"album_snapshots", "album_snapshot_items"},
+    21: {"engine_shadow_runs", "engine_shadow_nodes", "engine_shadow_members"},
 }
 
 _COLUMNS_BY_VERSION = {
@@ -641,6 +700,40 @@ _COLUMNS_BY_VERSION = {
             "orientation",
             "revision_fingerprint",
             "render_fingerprint",
+        },
+    },
+    21: {
+        "engine_shadow_runs": {
+            "id",
+            "project_id",
+            "source_snapshot_id",
+            "engine_name",
+            "engine_version",
+            "input_fingerprint",
+            "config_json",
+            "summary_json",
+            "created_at",
+        },
+        "engine_shadow_nodes": {
+            "run_id",
+            "node_id",
+            "parent_node_id",
+            "kind",
+            "node_position",
+            "member_count",
+            "selection_budget",
+            "metadata_json",
+        },
+        "engine_shadow_members": {
+            "run_id",
+            "node_id",
+            "project_id",
+            "asset_uuid",
+            "album_position",
+            "rank_score",
+            "novelty_score",
+            "recommended",
+            "evidence_json",
         },
     },
 }

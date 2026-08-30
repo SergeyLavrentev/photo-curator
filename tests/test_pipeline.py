@@ -139,6 +139,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         project = repository.get_project(connection, project_id)
         signals = repository.list_analysis_signals(connection, project_id)
         swipe_scores = repository.list_swipe_scores(connection, project_id)
+        shadow = repository.latest_engine_shadow_run(connection, project_id)
 
     assert project["state"] == "ready"
     assert summary["total"] == 12
@@ -175,6 +176,10 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     assert any(score["components"]["diversity_value"] != 50 for score in swipe_scores)
     assert all(asset["swipe_score"] is not None for asset in assets)
     assert all(asset["swipe_personal_delta"] == 0 for asset in assets)
+    assert shadow is not None
+    assert shadow["engine_version"] == "3.0.0-shadow"
+    assert shadow["config"]["mutates_product_decisions"] is False
+    assert shadow["summary"]["asset_count"] == 12
     assert {job["stage"] for job in jobs} == {
         "inventory",
         "previews",
@@ -182,6 +187,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         "duplicates",
         "vision",
         "models",
+        "scene_shadow",
         "decisions",
     }
     assert all(job["status"] in {"done", "warning"} for job in jobs)
@@ -276,7 +282,7 @@ def test_stage_fingerprints_skip_unchanged_expensive_analysis(tmp_path: Path) ->
                 "SELECT COUNT(*) FROM stage_fingerprints WHERE project_id=?",
                 (project_id,),
             ).fetchone()[0]
-            == 8
+            == 9
         )
 
     coordinator.run(project_id)
@@ -288,6 +294,67 @@ def test_stage_fingerprints_skip_unchanged_expensive_analysis(tmp_path: Path) ->
             for row in repository.list_analysis_signals(connection, project_id)
         }
     assert second_signals == first_signals
+
+
+def test_scene_shadow_runs_are_immutable_and_never_mutate_product_decisions(
+    tmp_path: Path,
+) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        before_decisions = [
+            tuple(row)
+            for row in connection.execute(
+                """
+                SELECT asset_uuid, auto_disposition, manual_disposition, final_disposition,
+                    auto_selection, manual_selection, final_selection
+                FROM decisions WHERE project_id=? ORDER BY asset_uuid
+                """,
+                (project_id,),
+            ).fetchall()
+        ]
+        first_run = repository.latest_engine_shadow_run(connection, project_id)
+        assert first_run is not None
+        first_nodes = repository.engine_shadow_nodes(connection, str(first_run["id"]))
+
+    coordinator._stage_scene_shadow(project_id)
+    with database_connection(paths.database) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM engine_shadow_runs WHERE project_id=?", (project_id,)
+            ).fetchone()[0]
+            == 1
+        )
+        connection.execute(
+            """
+            UPDATE metrics SET technical_quality=technical_quality * 0.5
+            WHERE project_id=? AND asset_uuid='demo-012'
+            """,
+            (project_id,),
+        )
+
+    coordinator._stage_scene_shadow(project_id)
+    with database_connection(paths.database) as connection:
+        after_decisions = [
+            tuple(row)
+            for row in connection.execute(
+                """
+                SELECT asset_uuid, auto_disposition, manual_disposition, final_disposition,
+                    auto_selection, manual_selection, final_selection
+                FROM decisions WHERE project_id=? ORDER BY asset_uuid
+                """,
+                (project_id,),
+            ).fetchall()
+        ]
+        runs = connection.execute(
+            "SELECT id FROM engine_shadow_runs WHERE project_id=? ORDER BY created_at, id",
+            (project_id,),
+        ).fetchall()
+        persisted_first_nodes = repository.engine_shadow_nodes(connection, str(first_run["id"]))
+
+    assert len(runs) == 2
+    assert after_decisions == before_decisions
+    assert persisted_first_nodes == first_nodes
 
 
 def test_core_ml_stage_reuses_per_asset_inference_after_stage_cache_reset(

@@ -268,9 +268,11 @@ def test_native_progress_uses_fixed_stages_and_exposes_current_work() -> None:
     assert "private var stageOrder: [String]" in app
     codex_stages = (
         '["inventory", "previews", "metrics", "duplicates", "vision", '
-        '"models", "codex", "decisions"]'
+        '"models", "codex", "scene_shadow", "decisions"]'
     )
     assert codex_stages in app
+    assert '"scene_shadow": "Engine v3 строит эпизоды и сцены"' in app
+    assert "Все этапы завершены" in app
     assert "completed / Double(stageOrder.count)" in app
     assert "Этап \\(stage) из \\(stageOrder.count)" in app
     assert "operationMessage" in app

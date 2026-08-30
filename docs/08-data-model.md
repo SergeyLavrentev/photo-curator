@@ -24,6 +24,8 @@
   исчезают после повторного запуска алгоритма.
 - `album_snapshots` и append-only `album_snapshot_items` (schema v20) фиксируют точный
   source order/membership, fractional timestamps, media/edit state и revision fingerprints.
+- `engine_shadow_runs`, `engine_shadow_nodes` и `engine_shadow_members` (schema v21)
+  сохраняют immutable Engine v3 hierarchy и не имеют write path в product decisions.
 
 Manual decisions и safety protections остаются отдельными от learned preference state.
 
@@ -165,6 +167,15 @@ CREATE TABLE album_snapshot_items (
     PRIMARY KEY (snapshot_id, asset_uuid)
 );
 ```
+
+## Engine v3 shadow snapshots
+
+Каждый уникальный input fingerprint создаёт отдельный `engine_shadow_runs`. Узлы
+`episode`, `scene`, `moment_stack` образуют иерархию; `exact_duplicate` хранится отдельным
+album-wide safety layer. Для каждого member сохраняются album position, непрерывный rank,
+marginal novelty, advisory recommendation и раздельное evidence. Повторный запуск с тем же
+input переиспользует run, а изменение source/metrics/Vision создаёт новый и не перезаписывает
+предыдущий.
 
 ## `metrics`
 

@@ -62,6 +62,9 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "quality_preference_examples",
         "album_snapshots",
         "album_snapshot_items",
+        "engine_shadow_runs",
+        "engine_shadow_nodes",
+        "engine_shadow_members",
     } <= tables
     assert "destination_album_id" in publish_columns
     assert {
@@ -161,7 +164,7 @@ def test_schema_nine_database_upgrades_without_recreating_project_data(tmp_path:
             ).fetchone()[0]
             == 1
         )
-    backups = list((tmp_path / "backups").glob("*-before-schema-v9-to-v20.sqlite3"))
+    backups = list((tmp_path / "backups").glob("*-before-schema-v9-to-v21.sqlite3"))
     assert len(backups) == 1
     with database_connection(backups[0]) as backup_connection:
         assert backup_connection.execute("PRAGMA user_version").fetchone()[0] == 9
@@ -217,4 +220,4 @@ def test_migration_rolls_back_schema_and_version_when_post_verifier_fails(
         }
         assert "expected_disposition" not in columns
 
-    assert len(list((tmp_path / "backups").glob("*-before-schema-v18-to-v20.sqlite3"))) == 1
+    assert len(list((tmp_path / "backups").glob("*-before-schema-v18-to-v21.sqlite3"))) == 1

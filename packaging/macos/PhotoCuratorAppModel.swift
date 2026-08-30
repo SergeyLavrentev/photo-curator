@@ -204,8 +204,8 @@ final class AppModel: ObservableObject {
     private var stageOrder: [String] {
         let mode = project?.analysisMode ?? analysisMode
         return mode == "codex"
-            ? ["inventory", "previews", "metrics", "duplicates", "vision", "models", "codex", "decisions"]
-            : ["inventory", "previews", "metrics", "duplicates", "vision", "models", "decisions"]
+            ? ["inventory", "previews", "metrics", "duplicates", "vision", "models", "codex", "scene_shadow", "decisions"]
+            : ["inventory", "previews", "metrics", "duplicates", "vision", "models", "scene_shadow", "decisions"]
     }
     private var pollTask: Task<Void, Never>?
     private var permissionHelpTask: Task<Void, Never>?
@@ -264,7 +264,7 @@ final class AppModel: ObservableObject {
 
     var progressDetail: String {
         guard let activeJob else {
-            return project?.state == "ready" ? "Все 6 этапов завершены" : ""
+            return project?.state == "ready" ? "Все этапы завершены" : ""
         }
         let stage = (stageOrder.firstIndex(of: activeJob.stage) ?? 0) + 1
         guard activeJob.total > 0 else { return "Этап \(stage) из \(stageOrder.count)" }
@@ -1940,6 +1940,7 @@ final class AppModel: ObservableObject {
             "vision": "Apple Vision оценивает кадры",
             "models": "NIMA, MobileCLIP и MUSIQ оценивают кадры",
             "codex": "Codex понимает сюжет и сравнивает серии",
+            "scene_shadow": "Engine v3 строит эпизоды и сцены",
             "decisions": "Формируем подборку",
         ][stage] ?? "Анализируем"
     }

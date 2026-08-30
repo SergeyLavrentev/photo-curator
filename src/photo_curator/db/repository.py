@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from photo_curator.analysis.decision_engine import binary_disposition
 from photo_curator.db import gallery_repository
@@ -17,6 +18,9 @@ from photo_curator.photos.provider import (
 )
 from photo_curator.utils.identifiers import new_id
 from photo_curator.utils.timestamps import utc_now
+
+if TYPE_CHECKING:
+    from photo_curator.analysis.scene_engine import SceneShadowResult
 
 
 def mark_running_jobs_interrupted(connection: sqlite3.Connection) -> int:
@@ -625,6 +629,159 @@ def album_snapshot_items(
         (snapshot_id,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def save_engine_shadow_run(
+    connection: sqlite3.Connection,
+    project_id: str,
+    source_snapshot_id: str,
+    input_fingerprint: str,
+    result: SceneShadowResult,
+) -> dict[str, object]:
+    snapshot = connection.execute(
+        "SELECT project_id FROM album_snapshots WHERE id=?",
+        (source_snapshot_id,),
+    ).fetchone()
+    if not snapshot or str(snapshot["project_id"]) != project_id:
+        raise ValueError("Shadow analysis requires the project's current source snapshot")
+    existing = connection.execute(
+        """
+        SELECT * FROM engine_shadow_runs
+        WHERE project_id=? AND engine_name=? AND engine_version=? AND input_fingerprint=?
+        """,
+        (project_id, result.engine_name, result.engine_version, input_fingerprint),
+    ).fetchone()
+    if existing:
+        return _decode_shadow_run(dict(existing))
+    run_id = new_id()
+    created_at = utc_now()
+    connection.execute(
+        """
+        INSERT INTO engine_shadow_runs (
+            id, project_id, source_snapshot_id, engine_name, engine_version,
+            input_fingerprint, config_json, summary_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            project_id,
+            source_snapshot_id,
+            result.engine_name,
+            result.engine_version,
+            input_fingerprint,
+            json.dumps(result.config, sort_keys=True),
+            json.dumps(result.summary, sort_keys=True),
+            created_at,
+        ),
+    )
+    for node in result.nodes:
+        connection.execute(
+            """
+            INSERT INTO engine_shadow_nodes (
+                run_id, node_id, parent_node_id, kind, node_position,
+                member_count, selection_budget, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                node.node_id,
+                node.parent_node_id,
+                node.kind,
+                node.position,
+                len(node.members),
+                node.budget,
+                json.dumps(node.metadata, sort_keys=True),
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO engine_shadow_members (
+                run_id, node_id, project_id, asset_uuid, album_position,
+                rank_score, novelty_score, recommended, evidence_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run_id,
+                    node.node_id,
+                    project_id,
+                    member.asset_uuid,
+                    member.position,
+                    member.rank_score,
+                    member.novelty_score,
+                    int(member.recommended),
+                    json.dumps(member.evidence, sort_keys=True),
+                )
+                for member in node.members
+            ],
+        )
+    return {
+        "id": run_id,
+        "project_id": project_id,
+        "source_snapshot_id": source_snapshot_id,
+        "engine_name": result.engine_name,
+        "engine_version": result.engine_version,
+        "input_fingerprint": input_fingerprint,
+        "config": result.config,
+        "summary": result.summary,
+        "created_at": created_at,
+    }
+
+
+def latest_engine_shadow_run(
+    connection: sqlite3.Connection, project_id: str
+) -> dict[str, object] | None:
+    row = connection.execute(
+        """
+        SELECT * FROM engine_shadow_runs
+        WHERE project_id=? ORDER BY created_at DESC, id DESC LIMIT 1
+        """,
+        (project_id,),
+    ).fetchone()
+    return _decode_shadow_run(dict(row)) if row else None
+
+
+def engine_shadow_nodes(connection: sqlite3.Connection, run_id: str) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT * FROM engine_shadow_nodes
+        WHERE run_id=? ORDER BY
+            CASE kind
+                WHEN 'exact_duplicate' THEN 0
+                WHEN 'episode' THEN 1
+                WHEN 'scene' THEN 2
+                ELSE 3
+            END,
+            node_position,
+            node_id
+        """,
+        (run_id,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        node = dict(row)
+        node["metadata"] = json.loads(str(node.pop("metadata_json") or "{}"))
+        members = []
+        for member_row in connection.execute(
+            """
+            SELECT * FROM engine_shadow_members
+            WHERE run_id=? AND node_id=? ORDER BY album_position, asset_uuid
+            """,
+            (run_id, node["node_id"]),
+        ).fetchall():
+            member = dict(member_row)
+            member["recommended"] = bool(member["recommended"])
+            member["evidence"] = json.loads(str(member.pop("evidence_json") or "{}"))
+            members.append(member)
+        node["members"] = members
+        result.append(node)
+    return result
+
+
+def _decode_shadow_run(run: dict[str, object]) -> dict[str, object]:
+    run["config"] = json.loads(str(run.pop("config_json") or "{}"))
+    run["summary"] = json.loads(str(run.pop("summary_json") or "{}"))
+    return run
 
 
 def _normalized_burst_key(value: object) -> str | None:

@@ -42,6 +42,10 @@ from photo_curator.analysis.local_models import (
 )
 from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
 from photo_curator.analysis.normalization import percentile_ranks
+from photo_curator.analysis.scene_engine import (
+    SCENE_ENGINE_VERSION,
+    build_scene_shadow,
+)
 from photo_curator.analysis.swipe_score import (
     apple_score_percentiles,
     calculate_swipe_score,
@@ -81,6 +85,7 @@ STAGES = (
     "vision",
     "models",
     "codex",
+    "scene_shadow",
     "decisions",
 )
 PREVIEW_LIMIT = Semaphore(2)
@@ -288,6 +293,42 @@ class PipelineCoordinator:
                     settings.get("analysis_mode"),
                     [(row[0], row[9]) for row in assets],
                 )
+            elif stage == "scene_shadow":
+                snapshot = repository.latest_album_snapshot(connection, project_id)
+                signals = [
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT asset_uuid, signal_kind, status, engine_version,
+                            source_fingerprint, value_json, error_text
+                        FROM analysis_signals
+                        WHERE project_id=?
+                          AND signal_kind IN ('aesthetics', 'feature_print', 'faces')
+                        ORDER BY asset_uuid, signal_kind
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ]
+                metrics = [
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT asset_uuid, phash, dhash, normalized_pixel_hash,
+                            histogram_json, technical_quality
+                        FROM metrics WHERE project_id=? ORDER BY asset_uuid
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ]
+                payload = (
+                    SCENE_ENGINE_VERSION,
+                    _file_digest(Path(__file__).parents[1] / "analysis" / "scene_engine.py"),
+                    settings.get("selection_density"),
+                    snapshot.get("membership_hash") if snapshot else None,
+                    assets,
+                    metrics,
+                    signals,
+                )
             else:
                 signals = [
                     tuple(row)
@@ -335,11 +376,12 @@ class PipelineCoordinator:
         affected = {
             "inventory": STAGES,
             "previews": STAGES[1:],
-            "metrics": ("metrics", "duplicates", "decisions"),
+            "metrics": ("metrics", "duplicates", "scene_shadow", "decisions"),
             "duplicates": ("duplicates", "codex", "decisions"),
-            "vision": ("vision", "decisions"),
+            "vision": ("vision", "scene_shadow", "decisions"),
             "models": ("models", "decisions"),
             "codex": ("codex", "decisions"),
+            "scene_shadow": ("scene_shadow",),
             "decisions": ("decisions",),
         }[stage]
         with database_connection(self.database_path) as connection:
@@ -1271,6 +1313,66 @@ class PipelineCoordinator:
                     f"Codex Vision завершён; ошибок пакетов: {errors}"
                     if errors
                     else "Codex Vision завершён"
+                ),
+            )
+
+    def _stage_scene_shadow(self, project_id: str) -> None:
+        with database_connection(self.database_path) as connection:
+            project = repository.get_project(connection, project_id)
+            snapshot = repository.latest_album_snapshot(connection, project_id)
+            assets = [
+                asset
+                for asset in repository.list_assets(connection, project_id)
+                if not asset.get("no_longer_exists") and asset.get("media_type") == "image"
+            ]
+            job_id = repository.create_job(connection, project_id, "scene_shadow", len(assets))
+            if snapshot is None:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="warning",
+                    processed=0,
+                    warnings=1,
+                    message="Engine v3 пропущен: нет immutable source snapshot",
+                )
+                return
+            positions = {
+                str(item["asset_uuid"]): int(item["album_position"])
+                for item in repository.album_snapshot_items(connection, str(snapshot["id"]))
+                if item["media_type"] == "image"
+            }
+            ordered_assets = [
+                {**asset, "album_position": positions.get(str(asset["asset_uuid"]), index)}
+                for index, asset in enumerate(assets)
+            ]
+            signals = repository.analysis_signals_by_asset(connection, project_id)
+            settings = json.loads(str(project.get("settings_json") or "{}"))
+        self._check_cancelled(project_id)
+        result = build_scene_shadow(
+            ordered_assets,
+            signals,
+            selection_density=str(settings.get("selection_density") or "balanced"),
+        )
+        self._check_cancelled(project_id)
+        input_fingerprint = self._stage_input_fingerprint(project_id, "scene_shadow")
+        with database_connection(self.database_path) as connection:
+            run = repository.save_engine_shadow_run(
+                connection,
+                project_id,
+                str(snapshot["id"]),
+                input_fingerprint,
+                result,
+            )
+            summary = run["summary"]
+            repository.update_job(
+                connection,
+                job_id,
+                status="done",
+                processed=len(ordered_assets),
+                message=(
+                    f"Engine v3 shadow: {summary['episode_count']} эпизодов · "
+                    f"{summary['scene_count']} сцен · "
+                    f"{summary['recommended_count']} предложено"
                 ),
             )
 
