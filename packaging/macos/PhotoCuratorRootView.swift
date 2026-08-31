@@ -468,8 +468,14 @@ struct RootView: View {
 
     private var reviewSection: some View {
         ScrollViewReader { galleryProxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+            VStack(spacing: 0) {
+                galleryToolbar
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial)
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .bottom, spacing: 16) {
                     HStack(spacing: 4) {
                         ForEach(SelectionBucket.allCases) { bucket in
@@ -617,60 +623,6 @@ struct RootView: View {
                     .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 }
 
-                HStack(spacing: 10) {
-                    Picker("Режим", selection: $model.workspaceMode) {
-                        ForEach(WorkspaceMode.allCases) { mode in
-                            Label(mode.title, systemImage: mode.symbol).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 430)
-                    Divider().frame(height: 24)
-                    Toggle(isOn: $collapseSeries) {
-                        Label("Стеки серий", systemImage: "square.stack.3d.up")
-                    }
-                    .toggleStyle(.button)
-                    .disabled(model.workspaceMode != .grid)
-                    Label("Размер фото", systemImage: "rectangle.grid.3x2")
-                        .font(.subheadline)
-                    Button {
-                        galleryCardWidth = max(
-                            selectionCardMinimumWidth,
-                            galleryCardWidth - selectionCardZoomStep
-                        )
-                    } label: {
-                        Image(systemName: "minus.magnifyingglass")
-                    }
-                    .help("Уменьшить фотографии")
-                    .accessibilityLabel("Уменьшить фотографии")
-                    .disabled(galleryCardWidth <= selectionCardMinimumWidth)
-
-                    Slider(
-                        value: $galleryCardWidth,
-                        in: selectionCardMinimumWidth...selectionCardMaximumWidth,
-                        step: selectionCardZoomStep
-                    )
-                    .frame(width: 150)
-                    .accessibilityLabel("Размер фотографий в галерее")
-
-                    Button {
-                        galleryCardWidth = min(
-                            selectionCardMaximumWidth,
-                            galleryCardWidth + selectionCardZoomStep
-                        )
-                    } label: {
-                        Image(systemName: "plus.magnifyingglass")
-                    }
-                    .help("Увеличить фотографии")
-                    .accessibilityLabel("Увеличить фотографии")
-                    .disabled(galleryCardWidth >= selectionCardMaximumWidth)
-
-                    Text("\(Int(galleryCardWidth)) pt")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-
                 if model.workspaceMode == .grid {
                     LazyVGrid(
                     columns: [
@@ -778,15 +730,72 @@ struct RootView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                    }
+                    .padding(20)
+                    .frame(maxWidth: 1480, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
-                .padding(20)
-                .frame(maxWidth: 1480, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .top)
             }
             .onChange(of: model.selectedPhotoID) { photoID in
                 guard model.workspaceMode == .grid, let photoID else { return }
                 galleryProxy.scrollTo(photoID, anchor: .center)
             }
+        }
+    }
+
+    private var galleryToolbar: some View {
+        HStack(spacing: 10) {
+            Picker("Режим", selection: $model.workspaceMode) {
+                ForEach(WorkspaceMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.symbol).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 430)
+            Divider().frame(height: 24)
+            Toggle(isOn: $collapseSeries) {
+                Label("Стеки серий", systemImage: "square.stack.3d.up")
+            }
+            .toggleStyle(.button)
+            .disabled(model.workspaceMode != .grid)
+            Label("Размер фото", systemImage: "rectangle.grid.3x2")
+                .font(.subheadline)
+            Button {
+                galleryCardWidth = max(
+                    selectionCardMinimumWidth,
+                    galleryCardWidth - selectionCardZoomStep
+                )
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .help("Уменьшить фотографии")
+            .accessibilityLabel("Уменьшить фотографии")
+            .disabled(galleryCardWidth <= selectionCardMinimumWidth)
+
+            Slider(
+                value: $galleryCardWidth,
+                in: selectionCardMinimumWidth...selectionCardMaximumWidth,
+                step: selectionCardZoomStep
+            )
+            .frame(width: 150)
+            .accessibilityLabel("Размер фотографий в галерее")
+
+            Button {
+                galleryCardWidth = min(
+                    selectionCardMaximumWidth,
+                    galleryCardWidth + selectionCardZoomStep
+                )
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .help("Увеличить фотографии")
+            .accessibilityLabel("Увеличить фотографии")
+            .disabled(galleryCardWidth >= selectionCardMaximumWidth)
+
+            Text("\(Int(galleryCardWidth)) pt")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer()
         }
     }
 
