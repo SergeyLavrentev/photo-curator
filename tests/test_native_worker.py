@@ -53,6 +53,32 @@ def test_native_worker_exposes_projects_ranked_assets_and_decisions_without_http
     assert changed["manual_disposition"] == "keep"
     assert changed["mutation_generation"] == 7
     assert "source_path" not in changed
+    alternative = worker.dispatch(
+        "selection",
+        {
+            "project_id": project_id,
+            "asset_uuid": changed["asset_uuid"],
+            "selection": "alternative",
+            "mutation_generation": 8,
+        },
+    )
+    assert alternative["final_disposition"] == "keep"
+    assert alternative["manual_disposition"] == "keep"
+    assert alternative["final_selection"] == "alternative"
+    assert alternative["manual_selection"] == "alternative"
+    assert alternative["mutation_generation"] == 8
+    stale = worker.dispatch(
+        "decision",
+        {
+            "project_id": project_id,
+            "asset_uuid": changed["asset_uuid"],
+            "disposition": "reject",
+            "mutation_generation": 7,
+        },
+    )
+    assert stale["final_disposition"] == "keep"
+    assert stale["final_selection"] == "alternative"
+    assert stale["mutation_generation"] == 8
     details = worker.dispatch(
         "asset_details",
         {"project_id": project_id, "asset_uuid": changed["asset_uuid"]},

@@ -107,6 +107,7 @@ def asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "final_selection": asset.get("final_selection"),
         "manual_disposition": asset.get("manual_disposition"),
         "manual_rating": asset.get("manual_rating"),
+        "mutation_generation": asset.get("manual_mutation_generation"),
         "swipe_score": asset.get("swipe_score"),
         "generic_score": asset.get("swipe_generic_score"),
         "personal_delta": asset.get("swipe_personal_delta"),

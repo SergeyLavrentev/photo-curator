@@ -76,46 +76,71 @@ struct PhotoCuratorApplication: App {
         .commands {
             PhotoCuratorHelpCommands()
             CommandMenu("Проверка фото") {
-                Button("Предыдущее фото") { model.movePhotoSelection(-1) }
+                Button("Предыдущее фото") {
+                    model.performGalleryShortcut { model.movePhotoSelection(-1) }
+                }
                     .keyboardShortcut(.leftArrow, modifiers: [])
-                    .disabled(model.qualityWizardActive || model.photos.isEmpty)
-                Button("Следующее фото") { model.movePhotoSelection(1) }
+                    .disabled(!model.galleryShortcutsAllowed || model.photos.isEmpty)
+                Button("Следующее фото") {
+                    model.performGalleryShortcut { model.movePhotoSelection(1) }
+                }
                     .keyboardShortcut(.rightArrow, modifiers: [])
-                    .disabled(model.qualityWizardActive || model.photos.isEmpty)
-                Button("Быстрый просмотр") { model.previewSelected() }
+                    .disabled(!model.galleryShortcutsAllowed || model.photos.isEmpty)
+                Button("Быстрый просмотр") {
+                    model.performGalleryShortcut { model.previewSelected() }
+                }
                     .keyboardShortcut(.space, modifiers: [])
-                    .disabled(model.selectedPhotoID == nil)
+                    .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
                 Divider()
-                Button("Добавить в Best") { model.decideSelected("keep") }
+                Button("Добавить в Best") {
+                    model.performGalleryShortcut { model.decideSelected("keep") }
+                }
                     .keyboardShortcut("p", modifiers: [])
-                    .disabled(model.selectedPhotoID == nil)
-                Button("Снять ручной флаг") { model.decideSelected(nil) }
+                    .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
+                Button("Снять ручной флаг") {
+                    model.performGalleryShortcut { model.decideSelected(nil) }
+                }
                     .keyboardShortcut("u", modifiers: [])
-                    .disabled(model.selectedPhotoID == nil)
-                Button("Отклонить") { model.decideSelected("reject") }
+                    .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
+                Button("Отклонить") {
+                    model.performGalleryShortcut { model.decideSelected("reject") }
+                }
                     .keyboardShortcut("x", modifiers: [])
-                    .disabled(model.selectedPhotoID == nil)
+                    .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
                 Divider()
                 ForEach(1...5, id: \.self) { rating in
-                    Button("Оценка \(rating) ★") { model.rateSelected(rating) }
+                    Button("Оценка \(rating) ★") {
+                        model.performGalleryShortcut { model.rateSelected(rating) }
+                    }
                         .keyboardShortcut(KeyEquivalent(Character(String(rating))), modifiers: [])
-                        .disabled(model.selectedPhotoID == nil)
+                        .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
                 }
-                Button("Снять оценку") { model.rateSelected(nil) }
+                Button("Снять оценку") {
+                    model.performGalleryShortcut { model.rateSelected(nil) }
+                }
                     .keyboardShortcut("0", modifiers: [])
-                    .disabled(model.selectedPhotoID == nil)
+                    .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
                 Divider()
-                Button("Отменить решение") { model.undoLastDecision() }
+                Button("Отменить решение") {
+                    model.performGalleryShortcut { model.undoLastDecision() }
+                }
                     .keyboardShortcut("z", modifiers: .command)
+                    .disabled(!model.galleryShortcutsAllowed)
                 Divider()
-                Button("Grid") { model.workspaceMode = .grid }
+                Button("Grid") { model.performGalleryShortcut { model.workspaceMode = .grid } }
                     .keyboardShortcut("g", modifiers: [])
-                Button("Loupe") { model.workspaceMode = .loupe }
+                    .disabled(!model.galleryShortcutsAllowed)
+                Button("Loupe") { model.performGalleryShortcut { model.workspaceMode = .loupe } }
                     .keyboardShortcut("e", modifiers: [])
-                Button("Compare") { model.workspaceMode = .compare }
+                    .disabled(!model.galleryShortcutsAllowed)
+                Button("Compare") {
+                    model.performGalleryShortcut { model.workspaceMode = .compare }
+                }
                     .keyboardShortcut("c", modifiers: [])
-                Button("Survey") { model.workspaceMode = .survey }
+                    .disabled(!model.galleryShortcutsAllowed)
+                Button("Survey") { model.performGalleryShortcut { model.workspaceMode = .survey } }
                     .keyboardShortcut("n", modifiers: [])
+                    .disabled(!model.galleryShortcutsAllowed)
             }
         }
 

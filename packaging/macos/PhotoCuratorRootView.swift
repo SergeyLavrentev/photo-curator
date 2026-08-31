@@ -733,6 +733,9 @@ struct RootView: View {
                         decide: { photoID, disposition in
                             model.setDecision(photoID: photoID, disposition: disposition)
                         },
+                        markAlternative: { photoID in
+                            model.setSelection(photoID: photoID, selection: "alternative")
+                        },
                         rate: { photoID, rating in
                             model.setRating(photoID: photoID, rating: rating)
                         }

@@ -70,6 +70,7 @@ struct WorkspaceCanvas: View {
     let multiSelectedIDs: Set<String>
     let select: (String) -> Void
     let decide: (String, String?) -> Void
+    let markAlternative: (String) -> Void
     let rate: (String, Int?) -> Void
     private let canvasHeight: CGFloat = 450
 
@@ -101,8 +102,15 @@ struct WorkspaceCanvas: View {
         }
     }
 
+    private var columnCount: Int {
+        guard mode == .survey else { return max(1, displayed.count) }
+        return displayed.count > 4 ? 3 : min(2, max(1, displayed.count))
+    }
+
     private var cellHeight: CGFloat {
-        mode == .survey ? (canvasHeight - 2) / 2 : canvasHeight
+        guard mode == .survey else { return canvasHeight }
+        let rows = max(1, Int(ceil(Double(displayed.count) / Double(columnCount))))
+        return (canvasHeight - CGFloat(rows - 1) * 2) / CGFloat(rows)
     }
 
     var body: some View {
@@ -120,7 +128,7 @@ struct WorkspaceCanvas: View {
                         LazyVGrid(
                             columns: Array(
                                 repeating: GridItem(.flexible(), spacing: 2),
-                                count: mode == .survey ? 2 : displayed.count
+                                count: columnCount
                             ),
                             spacing: 2
                         ) {
@@ -152,7 +160,8 @@ struct WorkspaceCanvas: View {
                                         Spacer()
                                         DecisionPicker(
                                             selection: photo.selection ?? "alternative",
-                                            decide: { decide(photo.id, $0) }
+                                            decide: { decide(photo.id, $0) },
+                                            markAlternative: { markAlternative(photo.id) }
                                         )
                                     }
                                     .font(.caption)
@@ -710,9 +719,11 @@ private struct AlbumReferencesPopover: View {
 private struct DecisionPicker: View {
     let selection: String
     let decide: (String?) -> Void
+    let markAlternative: () -> Void
 
     private let options = [
         ("keep", "Добавить в Best", "flag.fill", Color.green),
+        ("alternative", "Оставить как альтернативу", "square.stack.3d.up", Color.blue),
         ("reject", "Отклонить", "xmark", Color.red),
     ]
 
@@ -725,7 +736,11 @@ private struct DecisionPicker: View {
                 let tint = option.3
                 let active = value == "keep" ? selection == "pick" : selection == value
                 Button {
-                    decide(value)
+                    if value == "alternative" {
+                        markAlternative()
+                    } else {
+                        decide(value)
+                    }
                 } label: {
                     Image(systemName: symbol)
                         .font(.caption.weight(.bold))

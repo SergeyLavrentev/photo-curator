@@ -505,6 +505,7 @@ def test_manual_override_survives_reanalysis(tmp_path: Path) -> None:
     coordinator.run(project_id)
     with database_connection(paths.database) as connection:
         repository.set_manual_decision(connection, project_id, "demo-002", "keep", "важный кадр")
+        repository.set_manual_selection(connection, project_id, "demo-002", "alternative")
 
     restarted = PipelineCoordinator(
         database_path=paths.database,
@@ -518,6 +519,8 @@ def test_manual_override_survives_reanalysis(tmp_path: Path) -> None:
     assert asset["auto_disposition"] == "reject"
     assert asset["manual_disposition"] == "keep"
     assert asset["final_disposition"] == "keep"
+    assert asset["manual_selection"] == "alternative"
+    assert asset["final_selection"] == "alternative"
     assert asset["manual_note"] == "важный кадр"
 
 

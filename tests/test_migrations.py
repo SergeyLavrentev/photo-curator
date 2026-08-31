@@ -72,6 +72,8 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "manual_selection",
         "final_selection",
         "manual_rating",
+        "manual_selection_override",
+        "manual_mutation_generation",
     } <= decision_columns
     assert {
         "defect_codes_json",
@@ -97,6 +99,40 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
         migrate(connection)
 
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_migration_22_preserves_existing_manual_selection_provenance(tmp_path: Path) -> None:
+    with database_connection(tmp_path / "v21.sqlite3") as connection:
+        create_schema_at(connection, 21)
+        connection.executescript(
+            """
+            INSERT INTO projects (
+                id, name, library_path, library_fingerprint, album_id, album_name,
+                album_full_path, state, created_at, updated_at
+            ) VALUES (
+                'project', 'Project', '/library', 'fingerprint', 'album', 'Album',
+                'Album', 'ready', 'now', 'now'
+            );
+            INSERT INTO assets (project_id, asset_uuid, created_at, updated_at)
+            VALUES ('project', 'asset', 'now', 'now');
+            INSERT INTO decisions (
+                project_id, asset_uuid, auto_disposition, final_disposition,
+                confidence, manual_override, auto_selection, manual_selection,
+                final_selection, updated_at
+            ) VALUES (
+                'project', 'asset', 'keep', 'keep', 1, 0,
+                'pick', 'alternative', 'alternative', 'now'
+            );
+            """
+        )
+
+        migrate(connection)
+
+        override = connection.execute("SELECT manual_selection_override FROM decisions").fetchone()[
+            0
+        ]
+
+    assert override == 1
 
 
 def test_migration_19_preserves_existing_quality_truth_without_erasing_decisions(
@@ -164,7 +200,7 @@ def test_schema_nine_database_upgrades_without_recreating_project_data(tmp_path:
             ).fetchone()[0]
             == 1
         )
-    backups = list((tmp_path / "backups").glob("*-before-schema-v9-to-v21.sqlite3"))
+    backups = list((tmp_path / "backups").glob(f"*-before-schema-v9-to-v{SCHEMA_VERSION}.sqlite3"))
     assert len(backups) == 1
     with database_connection(backups[0]) as backup_connection:
         assert backup_connection.execute("PRAGMA user_version").fetchone()[0] == 9
@@ -220,4 +256,7 @@ def test_migration_rolls_back_schema_and_version_when_post_verifier_fails(
         }
         assert "expected_disposition" not in columns
 
-    assert len(list((tmp_path / "backups").glob("*-before-schema-v18-to-v21.sqlite3"))) == 1
+    assert (
+        len(list((tmp_path / "backups").glob(f"*-before-schema-v18-to-v{SCHEMA_VERSION}.sqlite3")))
+        == 1
+    )

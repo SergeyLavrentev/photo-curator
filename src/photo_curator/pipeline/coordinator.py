@@ -410,7 +410,8 @@ class PipelineCoordinator:
             if "decisions" in affected:
                 connection.execute("DELETE FROM swipe_scores WHERE project_id=?", (project_id,))
                 connection.execute(
-                    "DELETE FROM decisions WHERE project_id=? AND manual_override=0",
+                    "DELETE FROM decisions WHERE project_id=? "
+                    "AND manual_override=0 AND manual_selection_override=0",
                     (project_id,),
                 )
 

@@ -485,15 +485,19 @@ class NativeWorker:
         ):
             raise NativeWorkerError("mutation_generation must be a positive integer")
         with database_connection(self.paths.database) as connection:
-            repository.set_manual_decision(connection, project_id, asset_uuid, disposition, note)
+            repository.set_manual_decision(
+                connection,
+                project_id,
+                asset_uuid,
+                disposition,
+                note,
+                mutation_generation=mutation_generation,
+            )
             asset = repository.get_asset(connection, project_id, asset_uuid)
             asset["duplicate_context"] = repository.duplicate_context(connection, project_id).get(
                 asset_uuid, {}
             )
-            payload = _asset_payload(asset)
-            if mutation_generation is not None:
-                payload["mutation_generation"] = mutation_generation
-            return payload
+            return _asset_payload(asset)
 
     def _handle_rating(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -507,6 +511,33 @@ class NativeWorker:
             raise NativeWorkerError("rating must be null or an integer between 1 and 5")
         with database_connection(self.paths.database) as connection:
             repository.set_manual_rating(connection, project_id, asset_uuid, raw_rating)
+            asset = repository.get_asset(connection, project_id, asset_uuid)
+            asset["duplicate_context"] = repository.duplicate_context(
+                connection, project_id, {asset_uuid}
+            ).get(asset_uuid, {})
+            return _asset_payload(asset)
+
+    def _handle_selection(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        asset_uuid = _required_string(params, "asset_uuid")
+        selection = params.get("selection")
+        if selection not in {None, "pick", "alternative", "review", "reject"}:
+            raise NativeWorkerError("Unknown selection")
+        mutation_generation = params.get("mutation_generation")
+        if mutation_generation is not None and (
+            not isinstance(mutation_generation, int)
+            or isinstance(mutation_generation, bool)
+            or mutation_generation < 1
+        ):
+            raise NativeWorkerError("mutation_generation must be a positive integer")
+        with database_connection(self.paths.database) as connection:
+            repository.set_manual_selection(
+                connection,
+                project_id,
+                asset_uuid,
+                selection,
+                mutation_generation=mutation_generation,
+            )
             asset = repository.get_asset(connection, project_id, asset_uuid)
             asset["duplicate_context"] = repository.duplicate_context(
                 connection, project_id, {asset_uuid}

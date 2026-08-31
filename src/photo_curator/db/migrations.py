@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -587,6 +587,18 @@ CREATE INDEX engine_shadow_members_project_asset
 ON engine_shadow_members(project_id, asset_uuid, run_id);
 """
 
+MIGRATION_22 = """
+ALTER TABLE decisions
+ADD COLUMN manual_selection_override INTEGER NOT NULL DEFAULT 0
+CHECK (manual_selection_override IN (0, 1));
+ALTER TABLE decisions
+ADD COLUMN manual_mutation_generation INTEGER NOT NULL DEFAULT 0
+CHECK (manual_mutation_generation >= 0);
+
+UPDATE decisions
+SET manual_selection_override = CASE WHEN manual_selection IS NULL THEN 0 ELSE 1 END;
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -621,6 +633,7 @@ MIGRATIONS = (
     MIGRATION_19,
     MIGRATION_20,
     MIGRATION_21,
+    MIGRATION_22,
 )
 
 _TABLES_BY_VERSION = {
@@ -735,6 +748,9 @@ _COLUMNS_BY_VERSION = {
             "recommended",
             "evidence_json",
         },
+    },
+    22: {
+        "decisions": {"manual_selection_override", "manual_mutation_generation"},
     },
 }
 

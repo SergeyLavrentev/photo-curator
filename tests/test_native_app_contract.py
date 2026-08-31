@@ -5,6 +5,7 @@ APP_SOURCES = (
     "PhotoCuratorApp.swift",
     "PhotoCuratorAppModel.swift",
     "PhotoCuratorSeriesModel.swift",
+    "PhotoCuratorSelectionModel.swift",
     "PhotoCuratorHelpViews.swift",
     "PhotoCuratorRootView.swift",
     "PhotoCuratorGalleryViews.swift",
@@ -23,6 +24,7 @@ def test_native_app_is_split_into_bounded_feature_modules() -> None:
         "PhotoCuratorApp.swift": 200,
         "PhotoCuratorAppModel.swift": 2_000,
         "PhotoCuratorSeriesModel.swift": 350,
+        "PhotoCuratorSelectionModel.swift": 250,
         "PhotoCuratorHelpViews.swift": 600,
         "PhotoCuratorQualityWizardView.swift": 900,
         "PhotoCuratorQualityModel.swift": 300,
@@ -218,7 +220,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "model.albums + model.sharedAlbums" in app
     assert 'Section("Общие альбомы")' in app
     assert "qualityWizardActive = true" in app
-    assert "model.qualityWizardActive || model.photos.isEmpty" in app
+    assert "!model.galleryShortcutsAllowed || model.photos.isEmpty" in app
     assert ".keyboardShortcut(.rightArrow, modifiers: [])" in app
     assert ".keyboardShortcut(.leftArrow, modifiers: [])" in app
     assert 'let codes = defectCodes.isEmpty ? ["other"]' in app
@@ -617,3 +619,16 @@ def test_gallery_paging_keeps_navigation_and_mutations_in_the_current_page_conte
     assert "let mutationBucket = selectionBucket" in app_model
     assert "let mutationGalleryGeneration = galleryRequestGeneration" in app_model
     assert "galleryRequestGeneration == mutationGalleryGeneration" in app_model
+
+
+def test_workspace_supports_alternatives_six_frame_survey_and_focus_safe_shortcuts() -> None:
+    app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
+    app_model = (ROOT / "packaging/macos/PhotoCuratorAppModel.swift").read_text()
+    gallery = (ROOT / "packaging/macos/PhotoCuratorGalleryViews.swift").read_text()
+    root = (ROOT / "packaging/macos/PhotoCuratorRootView.swift").read_text()
+
+    assert 'model.setSelection(photoID: photoID, selection: "alternative")' in root
+    assert '("alternative", "Оставить как альтернативу"' in gallery
+    assert "displayed.count > 4 ? 3" in gallery
+    assert "responder is NSTextView || responder is NSTextField" in app_model
+    assert "performGalleryShortcut" in app

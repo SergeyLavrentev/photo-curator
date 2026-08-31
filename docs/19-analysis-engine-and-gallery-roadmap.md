@@ -260,11 +260,15 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   - [x] Decision response изменяет только исходный bucket/generation; при смене вкладки или
     reload текущая page перечитывается и не принимает optimistic rollback/response старого
     page context.
-- [ ] Заменить gesture-only controls на `Button`/accessibility actions, добавить selected
+  - [x] Survey использует 3×2 для пяти-шести кадров; workspace имеет явный Alternative,
+    который меняет selection независимо от safety disposition. Schema v22 разносит manual
+    safety/selection overrides и отклоняет запоздалую mutation generation после restart.
+- [x] Заменить gesture-only controls на `Button`/accessibility actions, добавить selected
   traits и guards для bare-key shortcuts при TextField/Quality Wizard focus.
   - [x] Gallery card, workspace photo и filmstrip selection используют `Button`; selected state
     опубликован как accessibility trait.
-  - [ ] Добавить guards для bare-key shortcuts при TextField/Quality Wizard focus.
+  - [x] Gallery commands проверяют first responder и не выполняют bare-key/Command-Z action,
+    пока фокус находится в `NSTextField`/`NSTextView` либо открыт Quality Wizard.
 
 ### R6 performance acceptance
 

@@ -105,6 +105,20 @@ struct DecisionMutationParams: Encodable {
     }
 }
 
+struct SelectionMutationParams: Encodable {
+    let projectID: String
+    let assetUUID: String
+    let selection: String?
+    let mutationGeneration: Int
+
+    enum CodingKeys: String, CodingKey {
+        case projectID = "project_id"
+        case assetUUID = "asset_uuid"
+        case selection
+        case mutationGeneration = "mutation_generation"
+    }
+}
+
 struct RatingMutationParams: Encodable {
     let projectID: String
     let assetUUID: String

@@ -216,18 +216,23 @@ final class AppModel: ObservableObject {
     }
     private var pollTask: Task<Void, Never>?
     private var permissionHelpTask: Task<Void, Never>?
-    private var decisionHistory: [DecisionUndo] = []
-    private var decisionGenerations: [String: Int] = [:]
+    var decisionHistory: [DecisionUndo] = []
+    var decisionGenerations: [String: Int] = [:]
     var ratingGenerations: [String: Int] = [:]
     private var binaryProjects: Set<String> = []
     private var galleryCursor: GalleryCursor?
     private var projectRequestGeneration = 0
-    private var galleryRequestGeneration = 0
+    var galleryRequestGeneration = 0
     var seriesContextEpoch = 0
     var detailRequestGeneration = 0
     private var hasStarted = false
     private let galleryPageSize = 36
     var galleryPageLimit: Int { galleryPageSize }
+    var galleryShortcutsAllowed: Bool {
+        guard !qualityWizardActive else { return false }
+        let responder = NSApp.keyWindow?.firstResponder
+        return !(responder is NSTextView || responder is NSTextField)
+    }
     private let retainedProjectDefaultsKey = "retainedProjectID"
     private let pendingPhotoKitAcceptanceDefaultsKey = "pendingPhotoKitAcceptanceV1"
     private let currentDecisionModelVersion = 6
@@ -252,6 +257,11 @@ final class AppModel: ObservableObject {
                 PhotoKitAcceptancePreparedDTO.self, from: data
             )
         }
+    }
+
+    func performGalleryShortcut(_ action: () -> Void) {
+        guard galleryShortcutsAllowed else { return }
+        action()
     }
 
     private static func savedEngineSetting(_ key: String) -> Bool {
@@ -891,7 +901,10 @@ final class AppModel: ObservableObject {
         let projectID = project.id
         let mutationBucket = selectionBucket
         let mutationGalleryGeneration = galleryRequestGeneration
-        let generation = (decisionGenerations[photoID] ?? 0) + 1
+        let generation = max(
+            decisionGenerations[photoID] ?? 0,
+            previousPhoto.mutationGeneration ?? 0
+        ) + 1
         decisionGenerations[photoID] = generation
         let previousManual = previousPhoto.manualDisposition
         let previousSelection = previousPhoto.selection
@@ -968,7 +981,7 @@ final class AppModel: ObservableObject {
                     reconcilePage(updated, from: optimisticPhoto?.selection ?? previousSelection)
                     if recordUndo && previousManual != disposition {
                         decisionHistory.append(
-                            DecisionUndo(
+                            .disposition(
                                 photoID: photoID,
                                 previousManual: previousManual,
                                 previousFinal: previousPhoto.disposition,
@@ -1090,33 +1103,64 @@ final class AppModel: ObservableObject {
 
     func undoLastDecision() {
         guard let change = decisionHistory.popLast(), let project else { return }
-        let generation = (decisionGenerations[change.photoID] ?? 0) + 1
-        decisionGenerations[change.photoID] = generation
+        let photoID: String
+        switch change {
+        case let .disposition(id, _, _, _, _, _), let .selection(id, _, _, _):
+            photoID = id
+        }
+        let generation = max(
+            decisionGenerations[photoID] ?? 0,
+            photoItem(photoID: photoID)?.mutationGeneration ?? 0
+        ) + 1
+        decisionGenerations[photoID] = generation
         Task {
             do {
-                let restored: PhotoItem = try await callDTO(
-                    "decision",
-                    DecisionMutationParams(
-                        projectID: project.id,
-                        assetUUID: change.photoID,
-                        disposition: change.previousManual,
-                        mutationGeneration: generation
-                    ),
-                    as: PhotoItem.self
-                )
-                guard decisionGenerations[change.photoID] == generation,
-                      restored.mutationGeneration == generation
-                else {
-                    throw NativeWorkerClientError.invalidResponse
+                let restored: PhotoItem
+                switch change {
+                case let .disposition(
+                    _, previousManual, previousFinal, previousSelection,
+                    changedTo, changedSelection
+                ):
+                    restored = try await callDTO(
+                        "decision",
+                        DecisionMutationParams(
+                            projectID: project.id,
+                            assetUUID: photoID,
+                            disposition: previousManual,
+                            mutationGeneration: generation
+                        ),
+                        as: PhotoItem.self
+                    )
+                    guard decisionGenerations[photoID] == generation,
+                          restored.mutationGeneration == generation
+                    else { throw NativeWorkerClientError.invalidResponse }
+                    adjustDecisionCounts(
+                        from: changedTo,
+                        to: restored.disposition ?? previousFinal
+                    )
+                    adjustSelectionCounts(
+                        from: changedSelection,
+                        to: restored.selection ?? previousSelection
+                    )
+                case let .selection(_, previousManual, previousSelection, changedTo):
+                    restored = try await callDTO(
+                        "selection",
+                        SelectionMutationParams(
+                            projectID: project.id,
+                            assetUUID: photoID,
+                            selection: previousManual,
+                            mutationGeneration: generation
+                        ),
+                        as: PhotoItem.self
+                    )
+                    guard decisionGenerations[photoID] == generation,
+                          restored.mutationGeneration == generation
+                    else { throw NativeWorkerClientError.invalidResponse }
+                    adjustSelectionCounts(
+                        from: changedTo,
+                        to: restored.selection ?? previousSelection
+                    )
                 }
-                adjustDecisionCounts(
-                    from: change.changedTo,
-                    to: restored.disposition ?? change.previousFinal
-                )
-                adjustSelectionCounts(
-                    from: change.changedSelection,
-                    to: restored.selection ?? change.previousSelection
-                )
                 await loadPhotos(projectID: project.id)
                 selectedPhotoID = photos.contains(where: { $0.id == restored.id })
                     ? restored.id : photos.first?.id
@@ -1552,7 +1596,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func loadPhotos(
+    func loadPhotos(
         projectID: String,
         append: Bool = false,
         focusPhotoID: String? = nil
@@ -1803,7 +1847,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func adjustSelectionCounts(from previous: String?, to updated: String?) {
+    func adjustSelectionCounts(from previous: String?, to updated: String?) {
         guard previous != updated else { return }
         func adjust(_ value: String?, delta: Int) {
             switch value {
@@ -1918,11 +1962,19 @@ final class AppModel: ObservableObject {
     }
 }
 
-private struct DecisionUndo {
-    let photoID: String
-    let previousManual: String?
-    let previousFinal: String?
-    let previousSelection: String?
-    let changedTo: String?
-    let changedSelection: String?
+enum DecisionUndo {
+    case disposition(
+        photoID: String,
+        previousManual: String?,
+        previousFinal: String?,
+        previousSelection: String?,
+        changedTo: String?,
+        changedSelection: String?
+    )
+    case selection(
+        photoID: String,
+        previousManual: String?,
+        previousSelection: String?,
+        changedTo: String?
+    )
 }

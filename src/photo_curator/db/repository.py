@@ -854,7 +854,8 @@ def invalidate_asset_analysis(
         (project_id, asset_uuid),
     )
     connection.execute(
-        "DELETE FROM decisions WHERE project_id=? AND asset_uuid=? AND manual_override=0",
+        "DELETE FROM decisions WHERE project_id=? AND asset_uuid=? "
+        "AND manual_override=0 AND manual_selection_override=0",
         (project_id, asset_uuid),
     )
 
@@ -1606,7 +1607,8 @@ def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[st
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
             d.auto_selection, d.manual_selection, d.final_selection,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
-            d.manual_note, d.manual_rating, d.reviewed, s.score AS swipe_score,
+            d.manual_note, d.manual_rating, d.manual_mutation_generation,
+            d.reviewed, s.score AS swipe_score,
             s.generic_score AS swipe_generic_score, s.personal_delta AS swipe_personal_delta,
             s.confidence AS swipe_confidence, s.components_json AS swipe_components_json,
             s.reasons_json AS swipe_reasons_json, s.model_versions_json AS swipe_models_json,
@@ -1683,7 +1685,8 @@ def assets_by_uuid(
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
             d.auto_selection, d.manual_selection, d.final_selection,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
-            d.manual_note, d.manual_rating, d.reviewed, s.score AS swipe_score,
+            d.manual_note, d.manual_rating, d.manual_mutation_generation,
+            d.reviewed, s.score AS swipe_score,
             s.generic_score AS swipe_generic_score, s.personal_delta AS swipe_personal_delta,
             s.confidence AS swipe_confidence, s.components_json AS swipe_components_json,
             s.reasons_json AS swipe_reasons_json, s.model_versions_json AS swipe_models_json,
@@ -2157,7 +2160,7 @@ def upsert_decision(
                 ELSE excluded.auto_disposition END,
             auto_selection=excluded.auto_selection,
             final_selection=CASE
-                WHEN decisions.manual_override=1 THEN decisions.manual_selection
+                WHEN decisions.manual_selection_override=1 THEN decisions.manual_selection
                 ELSE excluded.auto_selection END,
             confidence=excluded.confidence,
             flags_json=excluded.flags_json,
@@ -2185,6 +2188,7 @@ def set_manual_decision(
     asset_uuid: str,
     disposition: str | None,
     note: str | None = None,
+    mutation_generation: int | None = None,
 ) -> None:
     if disposition not in {None, "keep", "review", "reject"}:
         raise ValueError("Invalid disposition")
@@ -2194,8 +2198,11 @@ def set_manual_decision(
         UPDATE decisions SET manual_disposition=?,
             final_disposition=COALESCE(?, auto_disposition),
             manual_selection=?, final_selection=COALESCE(?, auto_selection),
-            manual_override=?, manual_note=?, reviewed=1, updated_at=?
+            manual_override=?, manual_selection_override=?,
+            manual_mutation_generation=COALESCE(?, manual_mutation_generation),
+            manual_note=?, reviewed=1, updated_at=?
         WHERE project_id=? AND asset_uuid=?
+          AND (? IS NULL OR manual_mutation_generation < ?)
         """,
         (
             disposition,
@@ -2203,13 +2210,64 @@ def set_manual_decision(
             selection,
             selection,
             int(disposition is not None),
+            int(selection is not None),
+            mutation_generation,
             note,
             utc_now(),
             project_id,
             asset_uuid,
+            mutation_generation,
+            mutation_generation,
         ),
     )
-    if not cursor.rowcount:
+    if (
+        not cursor.rowcount
+        and not connection.execute(
+            "SELECT 1 FROM decisions WHERE project_id=? AND asset_uuid=?",
+            (project_id, asset_uuid),
+        ).fetchone()
+    ):
+        raise KeyError(asset_uuid)
+
+
+def set_manual_selection(
+    connection: sqlite3.Connection,
+    project_id: str,
+    asset_uuid: str,
+    selection: str | None,
+    mutation_generation: int | None = None,
+) -> None:
+    if selection not in {None, "pick", "alternative", "review", "reject"}:
+        raise ValueError("Invalid selection")
+    cursor = connection.execute(
+        """
+        UPDATE decisions SET manual_selection=?,
+            final_selection=COALESCE(?, auto_selection),
+            manual_selection_override=?,
+            manual_mutation_generation=COALESCE(?, manual_mutation_generation),
+            reviewed=1, updated_at=?
+        WHERE project_id=? AND asset_uuid=?
+          AND (? IS NULL OR manual_mutation_generation < ?)
+        """,
+        (
+            selection,
+            selection,
+            int(selection is not None),
+            mutation_generation,
+            utc_now(),
+            project_id,
+            asset_uuid,
+            mutation_generation,
+            mutation_generation,
+        ),
+    )
+    if (
+        not cursor.rowcount
+        and not connection.execute(
+            "SELECT 1 FROM decisions WHERE project_id=? AND asset_uuid=?",
+            (project_id, asset_uuid),
+        ).fetchone()
+    ):
         raise KeyError(asset_uuid)
 
 
