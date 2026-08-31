@@ -632,3 +632,12 @@ def test_workspace_supports_alternatives_six_frame_survey_and_focus_safe_shortcu
     assert "displayed.count > 4 ? 3" in gallery
     assert "responder is NSTextView || responder is NSTextField" in app_model
     assert "performGalleryShortcut" in app
+
+
+def test_album_picker_supports_shared_only_sources_and_reports_job_warnings() -> None:
+    root = (ROOT / "packaging/macos/PhotoCuratorRootView.swift").read_text()
+
+    assert "model.albums.isEmpty && model.sharedAlbums.isEmpty" in root
+    assert "if !model.albums.isEmpty {" in root
+    assert 'parts.append("предупреждений: \\(job.warnings)")' in root
+    assert 'parts.append("ошибок: \\(job.errors)")' in root

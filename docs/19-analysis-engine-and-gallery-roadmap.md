@@ -264,6 +264,8 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   - [x] Survey использует 3×2 для пяти-шести кадров; workspace имеет явный Alternative,
     который меняет selection независимо от safety disposition. Schema v22 разносит manual
     safety/selection overrides и отклоняет запоздалую mutation generation после restart.
+  - [x] Album picker показывает Shared-only источник даже при пустом regular list; stage detail
+    выводит реальные warning/error counts вместо безусловно нейтрального processed/total.
 - [x] Заменить gesture-only controls на `Button`/accessibility actions, добавить selected
   traits и guards для bare-key shortcuts при TextField/Quality Wizard focus.
   - [x] Gallery card, workspace photo и filmstrip selection используют `Button`; selected state

@@ -248,7 +248,7 @@ struct RootView: View {
 
     private var sourceSection: some View {
         StepCard(number: 2, title: "Выберите альбом", symbol: "photo.on.rectangle.angled") {
-            if model.albums.isEmpty {
+            if model.albums.isEmpty && model.sharedAlbums.isEmpty {
                 if model.photoAccessNeedsAction {
                     Label(
                         "Разрешите доступ в системном запросе или настройках macOS.",
@@ -271,9 +271,11 @@ struct RootView: View {
                 }
             } else {
                 Picker("Альбом", selection: $model.selectedAlbumID) {
-                    Section("Мои альбомы") {
-                        ForEach(model.albums) { album in
-                            Text("\(album.name) · \(album.photoCount) фото").tag(album.id)
+                    if !model.albums.isEmpty {
+                        Section("Мои альбомы") {
+                            ForEach(model.albums) { album in
+                                Text("\(album.name) · \(album.photoCount) фото").tag(album.id)
+                            }
                         }
                     }
                     if !model.sharedAlbums.isEmpty {
@@ -413,7 +415,7 @@ struct RootView: View {
                                 .foregroundStyle(jobStatusColor(job.status))
                             Text(model.stageTitle(job.stage))
                             Spacer()
-                            Text(job.total > 0 ? "\(job.processed) / \(job.total)" : job.status)
+                            Text(jobProgressText(job))
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -464,6 +466,13 @@ struct RootView: View {
                 .buttonStyle(.bordered)
             }
         }
+    }
+
+    private func jobProgressText(_ job: JobItem) -> String {
+        var parts = [job.total > 0 ? "\(job.processed) / \(job.total)" : job.status]
+        if job.warnings > 0 { parts.append("предупреждений: \(job.warnings)") }
+        if job.errors > 0 { parts.append("ошибок: \(job.errors)") }
+        return parts.joined(separator: " · ")
     }
 
     private var reviewSection: some View {
