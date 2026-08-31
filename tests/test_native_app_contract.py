@@ -612,11 +612,14 @@ def test_gallery_paging_keeps_navigation_and_mutations_in_the_current_page_conte
     series_model = (ROOT / "packaging/macos/PhotoCuratorSeriesModel.swift").read_text()
     root_view = (ROOT / "packaging/macos/PhotoCuratorRootView.swift").read_text()
 
-    assert "func loadMorePhotosIfNeeded(currentPhotoID: String)" in app_model
+    assert "func loadMorePhotosAutomatically()" in app_model
+    assert "func retryGalleryLoad()" in app_model
     assert "loadMorePhotos(selectFirstNewPhoto: true)" in series_model
     assert "ScrollViewReader { galleryProxy in" in root_view
     assert "galleryProxy.scrollTo(photoID, anchor: .center)" in root_view
-    assert "model.loadMorePhotosIfNeeded(currentPhotoID: photo.id)" in root_view
+    assert ".onAppear { model.loadMorePhotosAutomatically() }" in root_view
+    assert 'Button("Повторить загрузку")' in root_view
+    assert "Показать ещё" not in root_view
     assert "let mutationBucket = selectionBucket" in app_model
     assert "let mutationGalleryGeneration = galleryRequestGeneration" in app_model
     assert "galleryRequestGeneration == mutationGalleryGeneration" in app_model

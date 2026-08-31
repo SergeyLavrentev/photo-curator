@@ -252,11 +252,12 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
 - [x] Identity image task включает `(path, maxPixelSize)` и очищает stale image при смене.
   Evidence: SwiftUI task identity также включает cache epoch; loader очищает старый image до
   cache/decode lookup, а repair атомарно инвалидирует cache, in-flight work и active views.
-- [x] Реализовать auto-pagination near end, переход стрелкой через page boundary,
-  scroll-to-selection, pinned toolbar и честный текст размера страницы.
-  - [x] Near-end card автоматически загружает следующую 36-item keyset page; стрелка вправо
-    на последнем загруженном кадре выбирает первый новый кадр, selection прокручивается в
-    видимую область, а footer честно показывает page limit и loaded/total.
+- [x] Реализовать бесконечную автоподгрузку, переход стрелкой через внутреннюю batch boundary,
+  scroll-to-selection, pinned toolbar и честный loaded/total.
+  - [x] Нижний sentinel автоматически загружает следующий 36-item keyset batch без кнопки
+    пагинации; стрелка вправо на последнем загруженном кадре выбирает первый новый кадр,
+    selection прокручивается в видимую область, а footer показывает loaded/total. При ошибке
+    отдельная кнопка повторяет именно неудавшийся запрос и не служит обычной пагинацией.
   - [x] Toolbar режимов и размера карточек находится вне gallery `ScrollView`, сохраняет
     положение при длинной прокрутке и отделён material background/divider.
 - [ ] Исправить Survey для 5–6 кадров, workspace Alternative action, stale detail/page races,

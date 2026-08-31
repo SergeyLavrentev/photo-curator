@@ -140,6 +140,7 @@ final class AppModel: ObservableObject {
     @Published var codexReady = 0
     @Published var codexErrors = 0
     @Published var isLoadingPhotos = false
+    @Published var galleryLoadError: String?
     @Published var unavailablePreviewFiles = 0
     @Published var errorMessage: String?
     @Published var isBusy = false
@@ -227,7 +228,6 @@ final class AppModel: ObservableObject {
     var detailRequestGeneration = 0
     private var hasStarted = false
     private let galleryPageSize = 36
-    var galleryPageLimit: Int { galleryPageSize }
     var galleryShortcutsAllowed: Bool {
         guard !qualityWizardActive else { return false }
         let responder = NSApp.keyWindow?.firstResponder
@@ -1618,6 +1618,7 @@ final class AppModel: ObservableObject {
         do {
             if !append {
                 galleryCursor = nil
+                galleryLoadError = nil
                 resetSeriesContexts()
             }
             if !binaryProjects.contains(projectID) {
@@ -1649,6 +1650,7 @@ final class AppModel: ObservableObject {
             let page = response.items
             galleryCursor = response.nextCursor
             photosTotal = response.total
+            galleryLoadError = nil
             if append {
                 let known = Set(photos.map(\.id))
                 photos.append(contentsOf: page.filter { !known.contains($0.id) })
@@ -1674,7 +1676,11 @@ final class AppModel: ObservableObject {
         } catch {
             guard requestGeneration == galleryRequestGeneration,
                   project?.id == projectID else { return }
-            errorMessage = error.localizedDescription
+            if append {
+                galleryLoadError = error.localizedDescription
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -1692,10 +1698,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func loadMorePhotosIfNeeded(currentPhotoID: String) {
-        guard let index = photos.firstIndex(where: { $0.id == currentPhotoID }),
-              index >= max(0, photos.count - 8)
-        else { return }
+    func loadMorePhotosAutomatically() {
+        guard galleryLoadError == nil else { return }
+        loadMorePhotos()
+    }
+
+    func retryGalleryLoad() {
+        galleryLoadError = nil
         loadMorePhotos()
     }
 

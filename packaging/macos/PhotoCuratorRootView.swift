@@ -679,9 +679,6 @@ struct RootView: View {
                         }
                         .equatable()
                         .id(photo.id)
-                        .onAppear {
-                            model.loadMorePhotosIfNeeded(currentPhotoID: photo.id)
-                        }
                         }
                     }
                 } else {
@@ -714,28 +711,31 @@ struct RootView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 240)
                 }
-                if model.workspaceMode == .grid, model.photos.count < model.photosTotal {
-                    Color.clear
-                        .frame(height: 1)
-                        .onAppear { model.loadMorePhotos() }
-                }
                 if model.photos.count < model.photosTotal {
-                    Button {
-                        model.loadMorePhotos()
-                    } label: {
-                        Label(
-                            model.isLoadingPhotos
-                                ? "Загружаем…"
-                                : "Показать ещё \(min(model.galleryPageLimit, model.photosTotal - model.photos.count))",
-                            systemImage: "square.grid.3x3.fill"
-                        )
-                        .frame(maxWidth: .infinity)
+                    Group {
+                        if let galleryLoadError = model.galleryLoadError {
+                            VStack(spacing: 8) {
+                                Text("Не удалось автоматически загрузить продолжение")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(galleryLoadError)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                Button("Повторить загрузку") { model.retryGalleryLoad() }
+                                    .buttonStyle(.bordered)
+                            }
+                        } else {
+                            ProgressView("Загружаем следующие фотографии…")
+                                .controlSize(.small)
+                                .onAppear { model.loadMorePhotosAutomatically() }
+                        }
                     }
-                    .disabled(model.isLoadingPhotos)
+                    .id("gallery-continuation-\(model.photos.count)")
+                    .frame(maxWidth: .infinity, minHeight: 64)
                 }
                 Text(
-                    "Показано \(model.photos.count) из \(model.photosTotal) · "
-                        + "страницы до \(model.galleryPageLimit) фото подгружаются автоматически"
+                    "Загружено \(model.photos.count) из \(model.photosTotal) · "
+                        + "остальные фотографии появятся автоматически"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
