@@ -129,6 +129,13 @@ def build_scene_shadow(
                 for stack_index, stack in enumerate(stacks)
                 for asset in stack
             }
+            stack_leaders = {
+                stack_index: max(
+                    (str(asset["asset_uuid"]) for asset in stack),
+                    key=lambda asset_uuid: (rank_scores[asset_uuid], asset_uuid),
+                )
+                for stack_index, stack in enumerate(stacks)
+            }
             budget = _scene_budget(len(scene_assets), selection_density)
             selected, novelty = _ranked_subset(
                 scene_assets,
@@ -146,12 +153,24 @@ def build_scene_shadow(
                     novelty_score=novelty[str(asset["asset_uuid"])],
                     recommended=str(asset["asset_uuid"]) in selected,
                     evidence={
+                        "objective_defect": {"status": "not_confirmed"},
                         "technical_quality": _technical_quality(asset),
                         "aesthetic_appeal": _aesthetic_appeal(
                             signals.get(str(asset["asset_uuid"]), {})
                         ),
+                        "personal_taste": None,
+                        "leader_quality": rank_scores[str(asset["asset_uuid"])],
+                        "marginal_novelty": novelty[str(asset["asset_uuid"])],
                         "protected": _is_protected(asset),
                         "stack_position": stack_by_asset[str(asset["asset_uuid"])],
+                        "series_role": _series_role(
+                            asset,
+                            selected=selected,
+                            stack_leader_uuid=stack_leaders[
+                                stack_by_asset[str(asset["asset_uuid"])]
+                            ],
+                        ),
+                        "safety_disposition": "keep",
                     },
                 )
                 for asset in scene_assets
@@ -196,6 +215,14 @@ def build_scene_shadow(
                                 rank_score=rank_scores[str(asset["asset_uuid"])],
                                 novelty_score=novelty[str(asset["asset_uuid"])],
                                 recommended=str(asset["asset_uuid"]) in selected,
+                                evidence={
+                                    "series_role": _series_role(
+                                        asset,
+                                        selected=selected,
+                                        stack_leader_uuid=stack_leaders[stack_position],
+                                    ),
+                                    "safety_disposition": "keep",
+                                },
                             )
                             for asset in stack_assets
                         ),
@@ -527,6 +554,22 @@ def _exact_duplicate_nodes(
 def _scene_budget(member_count: int, density: str) -> int:
     multiplier = {"compact": 0.8, "balanced": 1.0, "broad": 1.35}.get(density, 1.0)
     return min(member_count, max(1, math.ceil(math.sqrt(member_count) * multiplier)))
+
+
+def _series_role(
+    asset: dict[str, object],
+    *,
+    selected: set[str],
+    stack_leader_uuid: str,
+) -> str:
+    asset_uuid = str(asset["asset_uuid"])
+    if _is_protected(asset):
+        return "protected"
+    if asset_uuid == stack_leader_uuid:
+        return "best_in_stack"
+    if asset_uuid in selected:
+        return "alternative"
+    return "redundant_but_good"
 
 
 def _leader_quality(asset: dict[str, object], signals: dict[str, dict[str, object]]) -> float:

@@ -162,25 +162,36 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   Evidence: Engine v3.1 сохраняет PhotoKit coordinates в versioned immutable snapshot,
   включает location drift в revision/invalidation, использует расстояние только как episode
   change point и продолжает visual scene/stack matching при отсутствующих timestamp/GPS.
-- [ ] Semantic scenes строить внутри/между соседними episodes по validated embeddings и
+- [x] Semantic scenes строить внутри/между соседними episodes по validated embeddings и
   change-point detection, а не по жёсткому окну 120 секунд.
-- [ ] Near-duplicate stacks формировать только для реально сравнимых поз, моментов и
+  Evidence: Engine v3 строит scene boundaries по adaptive median/MAD change point соседних
+  visual feature prints с fallback на image metrics; фиксированного scene window нет.
+- [x] Near-duplicate stacks формировать только для реально сравнимых поз, моментов и
   ракурсов; исключить star-clustering fragmentation и произвольный hard max=3.
+  Evidence: stack membership требует complete-link совместимости с каждым участником,
+  проверяет aspect/embedding/hash/histogram/burst и не имеет member limit; A-B-C regression
+  не объединяет визуально несовместимые края через общий B.
 - [x] Удалить blind temporal demotion. Время является candidate signal, но не доказательством
   визуальной избыточности.
   Evidence: diversity v2 больше не применяет fallback `3 кадра / 120 секунд`; при отсутствии
   валидного feature print все технически хорошие кадры остаются без demotion. Время продолжает
   только расширять candidate retrieval для последующей визуальной проверки.
-- [ ] Разделить objective defect, technical quality, aesthetic appeal, personal taste,
+- [x] Разделить objective defect, technical quality, aesthetic appeal, personal taste,
   leader quality и marginal novelty; не начислять один штраф несколько раз.
+  Evidence: каждый scene member хранит эти каналы отдельно; personal taste остаётся `null`,
+  пока не валидирован, objective defect — `not_confirmed`, а общий rank не используется как
+  safety disposition.
 - [x] Сохранить непрерывный rank signal без массового clamp в 0/100.
   Evidence: shadow members хранят непрерывный weighted rank и отдельный marginal novelty.
 - [x] Ввести variable per-scene budget: минимум один representative essential scene,
   дополнительные кадры только за новый момент, человека, выражение, ракурс или coverage.
   Evidence: budget зависит от `sqrt(scene size)` и density, protected assets сохраняются,
   остальные выбираются greedy quality+novelty; synthetic 100-frame scene даёт 10 picks.
-- [ ] Отдельно объяснять `безопасно оставить`, `лучший в серии`, `альтернатива` и
+- [x] Отдельно объяснять `безопасно оставить`, `лучший в серии`, `альтернатива` и
   `подтверждённый брак`; низкая привлекательность сама по себе не является delete evidence.
+  Evidence: immutable member evidence содержит `safety_disposition=keep` и независимый
+  `series_role` (`best_in_stack`, `alternative`, `redundant_but_good`, `protected`);
+  неподтверждённый defect никогда не превращается в Reject в shadow.
 - [x] Запускать Engine v1/V2 и v3 параллельно в immutable shadow snapshots.
   Evidence: отдельный pipeline stage сохраняет versioned `engine_shadow_runs/nodes/members`,
   повторный идентичный input переиспользует run, изменённый создаёт новый; regression

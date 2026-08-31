@@ -1,4 +1,5 @@
 import base64
+import math
 import struct
 
 from photo_curator.analysis.scene_engine import build_scene_shadow
@@ -144,3 +145,37 @@ def test_exact_duplicates_are_an_independent_album_wide_safety_layer() -> None:
     assert exact.metadata["leader_uuid"] == "asset-002"
     assert exact.metadata["safety_layer"] is True
     assert sum(member.recommended for member in exact.members) == 1
+
+
+def test_moment_stacks_use_complete_link_and_do_not_form_star_chains() -> None:
+    assets = [_asset(index) for index in range(3)]
+    angle = math.radians(12)
+    vectors = [
+        (1.0, 0.0),
+        (math.cos(angle), math.sin(angle)),
+        (math.cos(angle * 2), math.sin(angle * 2)),
+    ]
+
+    result = build_scene_shadow(assets, _signals(assets, vectors))
+
+    stacks = [node for node in result.nodes if node.kind == "moment_stack"]
+    assert [len(stack.members) for stack in stacks] == [2, 1]
+    assert all(stack.metadata["complete_link"] is True for stack in stacks)
+
+
+def test_shadow_explains_independent_quality_novelty_and_series_roles() -> None:
+    assets = [_asset(index) for index in range(4)]
+    result = build_scene_shadow(assets, _signals(assets, [(1.0, 0.0)] * len(assets)))
+
+    scene = next(node for node in result.nodes if node.kind == "scene")
+    roles = {str(member.evidence["series_role"]) for member in scene.members}
+    assert "best_in_stack" in roles
+    assert "redundant_but_good" in roles
+    for member in scene.members:
+        assert member.evidence["objective_defect"] == {"status": "not_confirmed"}
+        assert member.evidence["safety_disposition"] == "keep"
+        assert member.evidence["technical_quality"] is not None
+        assert member.evidence["aesthetic_appeal"] is not None
+        assert member.evidence["leader_quality"] == member.rank_score
+        assert member.evidence["marginal_novelty"] == member.novelty_score
+        assert member.evidence["personal_taste"] is None
