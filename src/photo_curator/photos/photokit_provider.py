@@ -275,6 +275,8 @@ class PhotoKitProvider:
                     if item.get("modification_timestamp") is not None
                     else None
                 ),
+                latitude=(float(item["latitude"]) if item.get("latitude") is not None else None),
+                longitude=(float(item["longitude"]) if item.get("longitude") is not None else None),
                 width=int(item.get("width") or 0),
                 height=int(item.get("height") or 0),
                 orientation=(

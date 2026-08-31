@@ -17,6 +17,8 @@ struct AssetPayload: Encodable {
     let taken_at: String?
     let creation_timestamp: Double?
     let modification_timestamp: Double?
+    let latitude: Double?
+    let longitude: Double?
     let width: Int
     let height: Int
     let orientation: Int?
@@ -180,6 +182,8 @@ func sourceRevision(_ asset: PHAsset) -> String {
     let created = asset.creationDate?.timeIntervalSince1970 ?? 0
     let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
     let adjusted = hasAdjustments(asset) ? 1 : 0
+    let latitude = asset.location?.coordinate.latitude
+    let longitude = asset.location?.coordinate.longitude
     return [
         asset.localIdentifier,
         String(created),
@@ -188,6 +192,8 @@ func sourceRevision(_ asset: PHAsset) -> String {
         String(asset.mediaSubtypes.rawValue),
         "\(asset.pixelWidth)x\(asset.pixelHeight)",
         String(adjusted),
+        latitude.map { String($0) } ?? "",
+        longitude.map { String($0) } ?? "",
     ].joined(separator: "|")
 }
 
@@ -306,6 +312,8 @@ func payload(
         taken_at: asset.creationDate.map { ISO8601DateFormatter().string(from: $0) },
         creation_timestamp: asset.creationDate?.timeIntervalSince1970,
         modification_timestamp: asset.modificationDate?.timeIntervalSince1970,
+        latitude: asset.location?.coordinate.latitude,
+        longitude: asset.location?.coordinate.longitude,
         width: asset.pixelWidth,
         height: asset.pixelHeight,
         orientation: nil,

@@ -124,6 +124,7 @@ class OSXPhotosProvider:
         )
         score = getattr(photo, "score", None)
         scores = _score_dict(score)
+        latitude, longitude = _coordinates(getattr(photo, "location", None))
         return PhotoAsset(
             uuid=str(photo.uuid),
             original_filename=photo.original_filename,
@@ -132,6 +133,8 @@ class OSXPhotosProvider:
             date_added=_iso(getattr(photo, "date_added", None)),
             creation_timestamp=_timestamp(getattr(photo, "date", None)),
             modification_timestamp=_timestamp(getattr(photo, "date_modified", None)),
+            latitude=latitude,
+            longitude=longitude,
             width=getattr(photo, "width", None),
             height=getattr(photo, "height", None),
             original_width=getattr(photo, "original_width", None),
@@ -172,6 +175,17 @@ def _iso(value: datetime | None) -> str | None:
 
 def _timestamp(value: datetime | None) -> float | None:
     return value.timestamp() if value else None
+
+
+def _coordinates(value: Any) -> tuple[float | None, float | None]:
+    if not isinstance(value, (tuple, list)) or len(value) < 2:
+        return None, None
+    latitude, longitude = value[:2]
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        return None, None
+    if not (-90.0 <= float(latitude) <= 90.0 and -180.0 <= float(longitude) <= 180.0):
+        return None, None
+    return float(latitude), float(longitude)
 
 
 def _score_dict(score: Any) -> dict[str, float] | None:

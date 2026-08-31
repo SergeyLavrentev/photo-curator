@@ -348,7 +348,7 @@ def upsert_assets(
             """
             SELECT asset_uuid, taken_at, width, height, orientation, media_type,
                 media_subtypes, creation_timestamp, modification_timestamp,
-                edit_state, source_revision
+                latitude, longitude, edit_state, source_revision
             FROM assets WHERE project_id=?
             """,
             (project_id,),
@@ -371,6 +371,8 @@ def upsert_assets(
             int(asset.media_subtypes),
             asset.creation_timestamp,
             asset.modification_timestamp,
+            asset.latitude,
+            asset.longitude,
             asset.edit_state,
             revision,
         )
@@ -386,6 +388,8 @@ def upsert_assets(
                     "media_subtypes",
                     "creation_timestamp",
                     "modification_timestamp",
+                    "latitude",
+                    "longitude",
                     "edit_state",
                     "source_revision",
                 )
@@ -426,6 +430,8 @@ def upsert_assets(
                         "media_subtypes": int(asset.media_subtypes),
                         "creation_timestamp": asset.creation_timestamp,
                         "modification_timestamp": asset.modification_timestamp,
+                        "latitude": asset.latitude,
+                        "longitude": asset.longitude,
                         "edit_state": asset.edit_state,
                     },
                     sort_keys=True,
@@ -435,6 +441,8 @@ def upsert_assets(
                 int(asset.media_subtypes),
                 asset.creation_timestamp,
                 asset.modification_timestamp,
+                asset.latitude,
+                asset.longitude,
                 asset.edit_state,
                 revision,
                 now,
@@ -450,8 +458,9 @@ def upsert_assets(
             favorite, hidden, has_adjustments, is_live_photo, is_burst, burst_key,
             burst_default_pick, is_missing, no_longer_exists, source_path, metadata_json,
             apple_scores_json, media_type, media_subtypes, creation_timestamp,
-            modification_timestamp, edit_state, source_revision, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            modification_timestamp, latitude, longitude, edit_state, source_revision,
+            created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(project_id, asset_uuid) DO UPDATE SET
             original_filename=excluded.original_filename,
             current_filename=excluded.current_filename,
@@ -478,6 +487,8 @@ def upsert_assets(
             media_subtypes=excluded.media_subtypes,
             creation_timestamp=excluded.creation_timestamp,
             modification_timestamp=excluded.modification_timestamp,
+            latitude=excluded.latitude,
+            longitude=excluded.longitude,
             edit_state=excluded.edit_state,
             source_revision=excluded.source_revision,
             updated_at=excluded.updated_at
@@ -523,6 +534,8 @@ def create_album_snapshot(
             "creation_date": asset.taken_at,
             "creation_timestamp": asset.creation_timestamp,
             "modification_timestamp": asset.modification_timestamp,
+            "latitude": asset.latitude,
+            "longitude": asset.longitude,
             "media_type": media_type,
             "media_subtypes": int(asset.media_subtypes),
             "edit_state": edit_state,
@@ -543,6 +556,8 @@ def create_album_snapshot(
                 asset.taken_at,
                 asset.creation_timestamp,
                 asset.modification_timestamp,
+                asset.latitude,
+                asset.longitude,
                 media_type,
                 int(asset.media_subtypes),
                 edit_state,
@@ -577,10 +592,10 @@ def create_album_snapshot(
         """
         INSERT INTO album_snapshot_items (
             snapshot_id, project_id, asset_uuid, album_position, source_membership,
-            creation_date, creation_timestamp, modification_timestamp, media_type,
-            media_subtypes, edit_state, width, height, orientation,
+            creation_date, creation_timestamp, modification_timestamp, latitude,
+            longitude, media_type, media_subtypes, edit_state, width, height, orientation,
             revision_fingerprint, render_fingerprint
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         items,
     )

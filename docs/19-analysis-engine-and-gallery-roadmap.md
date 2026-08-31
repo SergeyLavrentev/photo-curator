@@ -157,8 +157,11 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   Evidence: Engine v3 shadow создаёт album-wide `exact_duplicate` nodes только по
   render-equivalence hash; эстетика не участвует в membership, а protected/quality выбирают
   лишь advisory leader.
-- [ ] Capture episodes строить по album order, fractional time, gap/change points и GPS,
+- [x] Capture episodes строить по album order, fractional time, gap/change points и GPS,
   если location доступна; отсутствие timestamp не должно отключать visual matching.
+  Evidence: Engine v3.1 сохраняет PhotoKit coordinates в versioned immutable snapshot,
+  включает location drift в revision/invalidation, использует расстояние только как episode
+  change point и продолжает visual scene/stack matching при отсутствующих timestamp/GPS.
 - [ ] Semantic scenes строить внутри/между соседними episodes по validated embeddings и
   change-point detection, а не по жёсткому окну 120 секунд.
 - [ ] Near-duplicate stacks формировать только для реально сравнимых поз, моментов и

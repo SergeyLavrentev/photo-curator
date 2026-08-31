@@ -67,6 +67,8 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
                         "taken_at": "2026-01-01T00:00:00Z",
                         "creation_timestamp": 1767225600.125,
                         "modification_timestamp": 1767225601.5,
+                        "latitude": 55.7558,
+                        "longitude": 37.6173,
                         "width": 4032,
                         "height": 3024,
                         "orientation": 1,
@@ -106,6 +108,7 @@ def test_photokit_provider_maps_native_albums_assets_and_capability(tmp_path: Pa
     assert asset.media_type == "image" and asset.media_subtypes == 8
     assert asset.creation_timestamp == 1767225600.125
     assert asset.modification_timestamp == 1767225601.5
+    assert (asset.latitude, asset.longitude) == (55.7558, 37.6173)
     assert asset.source_revision == "photokit-revision-1"
     refreshed = provider.refresh_assets([asset.uuid])
     assert [item.uuid for item in refreshed] == [asset.uuid]

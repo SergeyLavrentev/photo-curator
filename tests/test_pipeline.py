@@ -178,7 +178,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     assert all(asset["swipe_score"] is not None for asset in assets)
     assert all(asset["swipe_personal_delta"] == 0 for asset in assets)
     assert shadow is not None
-    assert shadow["engine_version"] == "3.0.0-shadow"
+    assert shadow["engine_version"] == "3.1.0-shadow"
     assert shadow["config"]["mutates_product_decisions"] is False
     assert shadow["summary"]["asset_count"] == 12
     assert {job["stage"] for job in jobs} == {
@@ -716,6 +716,8 @@ def test_source_revision_change_invalidates_only_affected_asset_analysis(tmp_pat
         replace(
             asset,
             modification_timestamp=1781249999.25,
+            latitude=55.7558,
+            longitude=37.6173,
             source_revision="edited-revision-2",
             has_adjustments=True,
             edit_state="adjusted",
@@ -752,6 +754,8 @@ def test_source_revision_change_invalidates_only_affected_asset_analysis(tmp_pat
         item["revision_fingerprint"] for item in second_items if item["asset_uuid"] == "demo-010"
     )
     assert first_revision != second_revision
+    changed_item = next(item for item in second_items if item["asset_uuid"] == "demo-010")
+    assert (changed_item["latitude"], changed_item["longitude"]) == (55.7558, 37.6173)
 
 
 def test_startup_interruption_updates_both_job_and_project_state(tmp_path: Path) -> None:

@@ -39,6 +39,10 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         asset_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(assets)").fetchall()
         }
+        snapshot_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(album_snapshot_items)").fetchall()
+        }
 
     assert version == SCHEMA_VERSION
     assert {
@@ -90,7 +94,34 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "modification_timestamp",
         "edit_state",
         "source_revision",
+        "latitude",
+        "longitude",
     } <= asset_columns
+    assert {"latitude", "longitude"} <= snapshot_columns
+
+
+def test_migration_23_adds_optional_location_without_rewriting_assets(tmp_path: Path) -> None:
+    with database_connection(tmp_path / "v22.sqlite3") as connection:
+        create_schema_at(connection, 22)
+        connection.executescript(
+            """
+            INSERT INTO projects (
+                id, name, library_path, library_fingerprint, album_id, album_name,
+                album_full_path, state, settings_json, created_at, updated_at
+            ) VALUES ('p', 'P', '/library', 'fingerprint', 'album', 'Album',
+                      'Album', 'ready', '{}', 'now', 'now');
+            INSERT INTO assets (
+                project_id, asset_uuid, cache_state, media_type, created_at, updated_at
+            ) VALUES ('p', 'a', 'ready', 'image', 'now', 'now');
+            """
+        )
+
+        migrate(connection)
+
+        row = connection.execute(
+            "SELECT asset_uuid, latitude, longitude FROM assets WHERE project_id='p'"
+        ).fetchone()
+        assert tuple(row) == ("a", None, None)
 
 
 def test_migration_is_idempotent(tmp_path: Path) -> None:

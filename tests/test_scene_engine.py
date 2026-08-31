@@ -97,6 +97,26 @@ def test_missing_timestamps_do_not_disable_visual_scene_and_stack_matching() -> 
     assert len(stack.members) == 8
 
 
+def test_location_change_splits_capture_episodes_without_becoming_quality_evidence() -> None:
+    assets = [_asset(index, timestamp=1_780_000_000.5 + index * 150) for index in range(4)]
+    for asset in assets[:2]:
+        asset["latitude"], asset["longitude"] = 55.7558, 37.6173
+    for asset in assets[2:]:
+        asset["latitude"], asset["longitude"] = 59.9343, 30.3351
+
+    result = build_scene_shadow(assets, _signals(assets, [(1.0, 0.0)] * len(assets)))
+
+    episodes = [node for node in result.nodes if node.kind == "episode"]
+    assert [[member.asset_uuid for member in episode.members] for episode in episodes] == [
+        ["asset-000", "asset-001"],
+        ["asset-002", "asset-003"],
+    ]
+    assert result.config["episode_location_change_km"] == 2.0
+    assert all(
+        "latitude" not in member.evidence for episode in episodes for member in episode.members
+    )
+
+
 def test_incompatible_feature_dimensions_fall_back_to_visual_metrics() -> None:
     assets = [_asset(0), _asset(1)]
     signals = _signals(assets, [(1.0, 0.0), (1.0, 0.0)])

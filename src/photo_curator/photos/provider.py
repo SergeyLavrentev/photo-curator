@@ -55,6 +55,8 @@ class PhotoAsset:
     media_subtypes: int = 0
     creation_timestamp: float | None = None
     modification_timestamp: float | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     edit_state: str = "original"
     source_revision: str | None = None
     source_path: Path | None = None
@@ -96,6 +98,8 @@ def photo_asset_revision(asset: PhotoAsset) -> str:
         "uuid": asset.uuid,
         "creation_timestamp": asset.creation_timestamp,
         "modification_timestamp": asset.modification_timestamp,
+        "latitude": asset.latitude,
+        "longitude": asset.longitude,
         "taken_at": asset.taken_at,
         "media_type": normalized_media_type(asset),
         "media_subtypes": int(asset.media_subtypes),

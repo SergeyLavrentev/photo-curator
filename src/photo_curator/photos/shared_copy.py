@@ -269,6 +269,8 @@ def _local_asset(asset: PhotoAsset, path: Path) -> PhotoAsset:
         media_subtypes=asset.media_subtypes,
         creation_timestamp=asset.creation_timestamp,
         modification_timestamp=asset.modification_timestamp,
+        latitude=asset.latitude,
+        longitude=asset.longitude,
         edit_state=asset.edit_state,
         source_revision=None,
         source_path=path,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -599,6 +599,17 @@ UPDATE decisions
 SET manual_selection_override = CASE WHEN manual_selection IS NULL THEN 0 ELSE 1 END;
 """
 
+MIGRATION_23 = """
+ALTER TABLE assets ADD COLUMN latitude REAL
+CHECK (latitude IS NULL OR latitude BETWEEN -90.0 AND 90.0);
+ALTER TABLE assets ADD COLUMN longitude REAL
+CHECK (longitude IS NULL OR longitude BETWEEN -180.0 AND 180.0);
+ALTER TABLE album_snapshot_items ADD COLUMN latitude REAL
+CHECK (latitude IS NULL OR latitude BETWEEN -90.0 AND 90.0);
+ALTER TABLE album_snapshot_items ADD COLUMN longitude REAL
+CHECK (longitude IS NULL OR longitude BETWEEN -180.0 AND 180.0);
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -634,6 +645,7 @@ MIGRATIONS = (
     MIGRATION_20,
     MIGRATION_21,
     MIGRATION_22,
+    MIGRATION_23,
 )
 
 _TABLES_BY_VERSION = {
@@ -751,6 +763,10 @@ _COLUMNS_BY_VERSION = {
     },
     22: {
         "decisions": {"manual_selection_override", "manual_mutation_generation"},
+    },
+    23: {
+        "assets": {"latitude", "longitude"},
+        "album_snapshot_items": {"latitude", "longitude"},
     },
 }
 

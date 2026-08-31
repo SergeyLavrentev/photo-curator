@@ -14,12 +14,13 @@ from photo_curator.analysis.similarity import histogram_similarity
 from photo_curator.analysis.taste import TasteProfileError, feature_vector
 
 SCENE_ENGINE_NAME = "scene-aware-shadow"
-SCENE_ENGINE_VERSION = "3.0.0-shadow"
+SCENE_ENGINE_VERSION = "3.1.0-shadow"
 
 _EPISODE_MIN_GAP_SECONDS = 300.0
 _EPISODE_MAX_GAP_SECONDS = 1_800.0
 _SEMANTIC_MIN_THRESHOLD = 0.72
 _SEMANTIC_MAX_THRESHOLD = 0.93
+_EPISODE_LOCATION_CHANGE_KM = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +110,9 @@ def build_scene_shadow(
                     "end_timestamp": _asset_timestamp(episode_assets[-1]),
                     "timestamped_members": sum(
                         _asset_timestamp(asset) is not None for asset in episode_assets
+                    ),
+                    "located_members": sum(
+                        _asset_location(asset) is not None for asset in episode_assets
                     ),
                 },
                 members=episode_members,
@@ -203,6 +207,7 @@ def build_scene_shadow(
         "selection_density": selection_density,
         "episode_gap_policy": "album-order-adaptive",
         "episode_gap_seconds": episode_threshold,
+        "episode_location_change_km": _EPISODE_LOCATION_CHANGE_KM,
         "semantic_change_policy": "adjacent-adaptive-mad",
         "semantic_threshold_bounds": [_SEMANTIC_MIN_THRESHOLD, _SEMANTIC_MAX_THRESHOLD],
         "stack_policy": "complete-link-visual-semantic",
@@ -257,11 +262,18 @@ def _capture_episodes(
         previous = episodes[-1][-1]
         previous_timestamp = _asset_timestamp(previous)
         timestamp = _asset_timestamp(asset)
-        if (
+        time_change = (
             previous_timestamp is not None
             and timestamp is not None
             and timestamp - previous_timestamp > threshold
-        ):
+        )
+        location_change = _is_location_change_point(
+            previous,
+            asset,
+            previous_timestamp=previous_timestamp,
+            timestamp=timestamp,
+        )
+        if time_change or location_change:
             episodes.append([])
         episodes[-1].append(asset)
     return episodes, round(threshold, 6)
@@ -600,6 +612,48 @@ def _asset_timestamp(asset: dict[str, object]) -> float | None:
         return datetime.fromisoformat(str(taken_at)).timestamp()
     except ValueError:
         return None
+
+
+def _asset_location(asset: dict[str, object]) -> tuple[float, float] | None:
+    latitude = asset.get("latitude")
+    longitude = asset.get("longitude")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        return None
+    if not (-90.0 <= float(latitude) <= 90.0 and -180.0 <= float(longitude) <= 180.0):
+        return None
+    return float(latitude), float(longitude)
+
+
+def _is_location_change_point(
+    left: dict[str, object],
+    right: dict[str, object],
+    *,
+    previous_timestamp: float | None,
+    timestamp: float | None,
+) -> bool:
+    left_location = _asset_location(left)
+    right_location = _asset_location(right)
+    if left_location is None or right_location is None:
+        return False
+    distance = _haversine_km(left_location, right_location)
+    if distance < _EPISODE_LOCATION_CHANGE_KM:
+        return False
+    if previous_timestamp is None or timestamp is None:
+        return True
+    elapsed = max(0.0, timestamp - previous_timestamp)
+    return distance >= 25.0 or elapsed >= 120.0
+
+
+def _haversine_km(left: tuple[float, float], right: tuple[float, float]) -> float:
+    left_latitude, left_longitude = map(math.radians, left)
+    right_latitude, right_longitude = map(math.radians, right)
+    latitude_delta = right_latitude - left_latitude
+    longitude_delta = right_longitude - left_longitude
+    value = (
+        math.sin(latitude_delta / 2.0) ** 2
+        + math.cos(left_latitude) * math.cos(right_latitude) * math.sin(longitude_delta / 2.0) ** 2
+    )
+    return 6_371.0088 * 2.0 * math.asin(min(1.0, math.sqrt(value)))
 
 
 def _is_protected(asset: dict[str, object]) -> bool:
