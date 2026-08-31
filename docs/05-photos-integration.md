@@ -109,12 +109,19 @@ Unedited:
 - Обычный `PHAssetMediaType.video` сохраняется только в immutable source snapshot для счётчика
   и provenance. Он не попадает в `assets`, preview/decode, Vision/Core ML/Codex, decisions,
   gallery или publish candidates.
-- Live Photo считается фотографией: анализируется только текущий still render; motion resource
-  не декодируется и не публикуется отдельно.
+- Live Photo и animated image считаются фотографией: анализируется только текущий still render;
+  motion/animation resource не декодируется и не публикуется отдельно. UI и snapshot сохраняют
+  `media_subtypes`, поэтому этот предел не маскируется под анализ движения.
+- Regular album inventory явно использует `includeAllBurstAssets=true`: каждый доступный burst
+  member получает собственный source UUID/snapshot item и может сравниваться внутри серии;
+  representative/default pick остаётся только сигналом, а не готовым решением.
+- Hidden image, если PhotoKit вернул его внутри явно выбранного пользователем source album,
+  обрабатывается как image, но `hidden` сохраняется в project asset metadata. Сам флаг hidden
+  не является доказательством брака и не разрешает automatic Reject.
 - Edited image анализируется по текущему PhotoKit render. `modificationDate`, adjustment state,
   media subtype и revision входят в snapshot/cache identity; изменение требует нового анализа.
-- Animated image, burst coverage, hidden и iCloud-only остаются отдельными policy/acceptance
-  пунктами roadmap; отсутствие такого evidence нельзя трактовать как готовность.
+- Реальный mixed-media corpus для animated/burst/hidden/iCloud-only остаётся отдельным
+  acceptance-пунктом roadmap; реализованную policy нельзя трактовать как пройденную приемку.
 - Повторный preview repair не доверяет in-memory tiny render: только UUID со статусом
   `degraded`/`missing` повторно проходят PhotoKit helper с network access. Если analysis-grade
   render всё ещё недоступен, asset остаётся честно degraded и не попадает в модели.

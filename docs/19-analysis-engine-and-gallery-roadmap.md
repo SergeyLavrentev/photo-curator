@@ -119,15 +119,20 @@ Quality Lab и нативной галереи в последовательну
   Evidence: preview stage адресно вызывает `repair_assets` только для degraded/missing UUID;
   PhotoKit source v3 удаляет tiny cache и повторяет request с network access. Same-process
   regression восстанавливает analysis-grade renders и запускает ранее пропущенные models.
-- [ ] Описать и реализовать явную policy для video, Live Photo, animated image, burst,
+- [x] Описать и реализовать явную policy для video, Live Photo, animated image, burst,
   hidden, edited и iCloud-only assets.
+  Evidence: `docs/05-photos-integration.md` разделяет provenance и model eligibility; motion/
+  animation не выдаются за проанализированные, hidden не является reject evidence, degraded
+  iCloud fail-closed исключается из моделей, edited revision инвалидирует analysis.
 - [x] Для обычного PhotoKit album полностью исключать видео до render/model pipeline и
   показывать в UI `N видео пропущено`.
   Evidence: metadata snapshot сохраняет video provenance/count, но source helper фильтрует
   `.image` до render, а coordinator повторно фильтрует до active assets; mixed synthetic
   regression подтверждает отсутствие video UUID в assets/signals.
-- [ ] Включить все разрешённые burst members в source snapshot, если это не нарушает
+- [x] Включить все разрешённые burst members в source snapshot, если это не нарушает
   пользовательскую Photos boundary.
+  Evidence: read-only PhotoKit fetch задаёт `includeAllBurstAssets=true`; каждый member остаётся
+  исходным `PHAsset` с собственным UUID и попадает в общий immutable snapshot path.
 - [ ] Временно скрыть Shared Album intake либо завершить immutable local snapshot с safe
   filenames, reference counting и честной Live Photo motion policy.
 

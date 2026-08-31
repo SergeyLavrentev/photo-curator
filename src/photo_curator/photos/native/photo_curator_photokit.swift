@@ -329,7 +329,11 @@ func payload(
 }
 
 func albumAssets(_ album: PHAssetCollection) -> [PHAsset] {
-    let result = PHAsset.fetchAssets(in: album, options: nil)
+    let options = PHFetchOptions()
+    // A burst representative is not enough for best-in-series ranking. This is
+    // read-only and keeps every member addressable by its original PHAsset id.
+    options.includeAllBurstAssets = true
+    let result = PHAsset.fetchAssets(in: album, options: options)
     var values: [PHAsset] = []
     values.reserveCapacity(result.count)
     result.enumerateObjects { asset, _, _ in values.append(asset) }

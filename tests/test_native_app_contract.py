@@ -368,6 +368,7 @@ def test_native_bundle_compiles_public_photokit_source_helper() -> None:
     publisher = (ROOT / "src/photo_curator/photos/native/photo_curator_publish.swift").read_text()
 
     assert "photo_curator_photokit.swift" in build
+    assert "options.includeAllBurstAssets = true" in helper
     assert "-framework Photos" in build
     assert "PhotoCuratorSource-Info.plist" not in build
     assert "PhotoCuratorPublish-Info.plist" not in build
