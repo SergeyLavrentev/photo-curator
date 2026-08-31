@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -610,6 +610,21 @@ ALTER TABLE album_snapshot_items ADD COLUMN longitude REAL
 CHECK (longitude IS NULL OR longitude BETWEEN -180.0 AND 180.0);
 """
 
+MIGRATION_24 = """
+CREATE TABLE quality_series_labels (
+    project_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    source_snapshot_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('predicted_group', 'manual_album_order')),
+    coherence_status TEXT NOT NULL CHECK (coherence_status IN ('verified', 'unverified')),
+    member_fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, group_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_snapshot_id) REFERENCES album_snapshots(id) ON DELETE CASCADE
+);
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -646,6 +661,7 @@ MIGRATIONS = (
     MIGRATION_21,
     MIGRATION_22,
     MIGRATION_23,
+    MIGRATION_24,
 )
 
 _TABLES_BY_VERSION = {
@@ -670,6 +686,7 @@ _TABLES_BY_VERSION = {
     18: {"quality_preference_examples"},
     20: {"album_snapshots", "album_snapshot_items"},
     21: {"engine_shadow_runs", "engine_shadow_nodes", "engine_shadow_members"},
+    24: {"quality_series_labels"},
 }
 
 _COLUMNS_BY_VERSION = {
@@ -767,6 +784,17 @@ _COLUMNS_BY_VERSION = {
     23: {
         "assets": {"latitude", "longitude"},
         "album_snapshot_items": {"latitude", "longitude"},
+    },
+    24: {
+        "quality_series_labels": {
+            "project_id",
+            "group_id",
+            "source_snapshot_id",
+            "source_kind",
+            "coherence_status",
+            "member_fingerprint",
+            "created_at",
+        },
     },
 }
 

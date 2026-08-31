@@ -244,8 +244,11 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
 - [x] Top-K сравнивать в одном universe: human и model ранжируют один и тот же frozen sample.
   Evidence: manifest schema v3 хранит sorted active UUID universe и SHA-256 fingerprint;
   evaluator fail-closed при membership drift либо score snapshot с неполным/чужим universe.
-- [ ] Human series должна иметь source provenance и temporal/semantic coherence; случайный
+- [x] Human series должна иметь source provenance и temporal/semantic coherence; случайный
   набор из двух UUID не закрывает gate.
+  Evidence: schema v24 хранит source snapshot, origin, member fingerprint и coherence status;
+  predicted groups считаются coherent, manual groups проходят bounded album-order check,
+  а evaluator исключает legacy/unverified/mismatched groups из complete human evidence.
 - [ ] Разрешить разметку scene budget, essential moment, redundant-but-good и причины
   относительного выбора между технически нормальными кадрами.
 - [ ] Taste calibration и holdout брать из разных albums/episodes; correlated pairs из

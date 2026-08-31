@@ -160,13 +160,29 @@ def build_native_quality_evidence(
         group = asset.get("quality_duplicate_group")
         if isinstance(group, str) and group:
             annotated_groups[group].append(asset)
-    complete_groups = {
-        group
-        for group, members in annotated_groups.items()
-        if len(members) >= 2
-        and {str(member["asset_uuid"]) for member in members} <= quality_labelled_ids
-        and sum(bool(member.get("quality_expected_leader")) for member in members) == 1
-    }
+    complete_groups = set()
+    for group, members in annotated_groups.items():
+        member_ids = sorted(str(member["asset_uuid"]) for member in members)
+        fingerprint = hashlib.sha256("\0".join(member_ids).encode()).hexdigest()
+        provenance_rows = {
+            (
+                member.get("quality_series_source_snapshot_id"),
+                member.get("quality_series_source_kind"),
+                member.get("quality_series_coherence_status"),
+                member.get("quality_series_member_fingerprint"),
+            )
+            for member in members
+        }
+        if (
+            len(members) >= 2
+            and set(member_ids) <= quality_labelled_ids
+            and sum(bool(member.get("quality_expected_leader")) for member in members) == 1
+            and len(provenance_rows) == 1
+            and next(iter(provenance_rows))[0]
+            and next(iter(provenance_rows))[2] == "verified"
+            and next(iter(provenance_rows))[3] == fingerprint
+        ):
+            complete_groups.add(group)
     top_k = [
         str(asset["asset_uuid"])
         for asset in sorted(
@@ -212,6 +228,16 @@ def build_native_quality_evidence(
                 "expected_leader": bool(asset.get("quality_expected_leader"))
                 if asset.get("quality_duplicate_group") in complete_groups
                 else False,
+                "series_provenance": (
+                    {
+                        "source_snapshot_id": asset.get("quality_series_source_snapshot_id"),
+                        "source_kind": asset.get("quality_series_source_kind"),
+                        "coherence_status": asset.get("quality_series_coherence_status"),
+                        "member_fingerprint": asset.get("quality_series_member_fingerprint"),
+                    }
+                    if asset.get("quality_duplicate_group") in complete_groups
+                    else None
+                ),
                 "defect_codes": _quality_defect_codes(asset),
                 "defect_severity": asset.get("quality_defect_severity"),
                 "defect_confidence": asset.get("quality_defect_confidence"),

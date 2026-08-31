@@ -69,6 +69,7 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "engine_shadow_runs",
         "engine_shadow_nodes",
         "engine_shadow_members",
+        "quality_series_labels",
     } <= tables
     assert "destination_album_id" in publish_columns
     assert {

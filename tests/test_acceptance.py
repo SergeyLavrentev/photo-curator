@@ -1,3 +1,4 @@
+import hashlib
 import json
 from argparse import Namespace
 from pathlib import Path
@@ -283,6 +284,7 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
             "expected_disposition": "review",
             "duplicate_group": None,
             "expected_leader": False,
+            "series_provenance": None,
             "defect_codes": [],
             "defect_severity": None,
             "defect_confidence": None,
@@ -346,8 +348,29 @@ def test_manifest_v3_rejects_album_or_score_universe_drift() -> None:
         )
 
 
+def test_random_human_pair_without_series_provenance_does_not_close_gate() -> None:
+    assets = _assets(2)
+    for index, asset in enumerate(assets):
+        asset.update(
+            swipe_score=90 - index,
+            swipe_schema_version=2,
+            swipe_model_versions={"generic": "vision-v2"},
+            quality_expected_disposition="keep",
+            quality_lab_sampled=True,
+            quality_duplicate_group="random-pair",
+            quality_expected_leader=index == 0,
+        )
+
+    evidence = build_native_quality_evidence("trip", assets, [])
+
+    assert evidence["summary"]["human_duplicate_groups"] == 0
+    assert evidence["summary"]["incomplete_human_duplicate_groups"] == 1
+    assert all(asset["duplicate_group"] is None for asset in evidence["manifest"]["assets"])
+
+
 def test_native_quality_export_becomes_ready_only_from_complete_human_annotations() -> None:
     assets = _assets(50)
+    series_fingerprint = hashlib.sha256(b"asset-00\0asset-01").hexdigest()
     for index, asset in enumerate(assets):
         asset.update(
             swipe_score=100 - index,
@@ -358,6 +381,10 @@ def test_native_quality_export_becomes_ready_only_from_complete_human_annotation
             quality_top_k_rank=index + 1 if index < 5 else None,
             quality_duplicate_group="human-series" if index < 2 else None,
             quality_expected_leader=index == 0,
+            quality_series_source_snapshot_id="snapshot-1" if index < 2 else None,
+            quality_series_source_kind="manual_album_order" if index < 2 else None,
+            quality_series_coherence_status="verified" if index < 2 else None,
+            quality_series_member_fingerprint=series_fingerprint if index < 2 else None,
         )
     examples = [
         {

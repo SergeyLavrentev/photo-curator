@@ -956,6 +956,8 @@ def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Pa
     )
     assert labelled["leader_uuid"] == grouped["asset_uuid"]
     assert sorted(labelled["members"]) == sorted(asset["asset_uuid"] for asset in same_group)
+    assert labelled["source_kind"] == "predicted_group"
+    assert labelled["coherence_status"] == "verified"
     after_series = worker.dispatch("assets", {"project_id": project_id})["items"]
     labelled_assets = [
         asset
@@ -977,6 +979,8 @@ def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Pa
     )
     assert custom["leader_uuid"] == ungrouped[1]["asset_uuid"]
     assert custom["duplicate_group"].startswith("human-")
+    assert custom["source_snapshot_id"]
+    assert custom["source_kind"] == "manual_album_order"
     status = worker.dispatch("quality_status", {"project_id": project_id})
     assert status["manual_labels"] == 0
     assert status["expected_top_k"] == 2

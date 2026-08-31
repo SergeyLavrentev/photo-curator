@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterable
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 from photo_curator.analysis.decision_engine import binary_disposition
@@ -1636,12 +1637,18 @@ def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[st
             q.defect_severity AS quality_defect_severity,
             q.defect_confidence AS quality_defect_confidence,
             q.quality_note AS quality_note
-            , q.lab_sampled AS quality_lab_sampled
+            , q.lab_sampled AS quality_lab_sampled,
+            qs.source_snapshot_id AS quality_series_source_snapshot_id,
+            qs.source_kind AS quality_series_source_kind,
+            qs.coherence_status AS quality_series_coherence_status,
+            qs.member_fingerprint AS quality_series_member_fingerprint
         FROM assets a
         LEFT JOIN metrics m USING (project_id, asset_uuid)
         LEFT JOIN decisions d USING (project_id, asset_uuid)
         LEFT JOIN swipe_scores s USING (project_id, asset_uuid)
         LEFT JOIN quality_asset_labels q USING (project_id, asset_uuid)
+        LEFT JOIN quality_series_labels qs
+          ON qs.project_id=q.project_id AND qs.group_id=q.duplicate_group
         WHERE a.project_id = ?
         ORDER BY a.taken_at, a.asset_uuid
         """,
@@ -1874,7 +1881,13 @@ def label_quality_duplicate_group(
             (project_id, predicted_group_id),
         ).fetchall()
     ]
-    return label_quality_custom_group(connection, project_id, members, leader_uuid)
+    return label_quality_custom_group(
+        connection,
+        project_id,
+        members,
+        leader_uuid,
+        source_kind="predicted_group",
+    )
 
 
 def label_quality_custom_group(
@@ -1882,6 +1895,8 @@ def label_quality_custom_group(
     project_id: str,
     member_uuids: list[str],
     leader_uuid: str,
+    *,
+    source_kind: str = "manual_album_order",
 ) -> dict[str, object]:
     members = sorted(set(member_uuids))
     if len(members) < 2:
@@ -1900,6 +1915,24 @@ def label_quality_custom_group(
     }
     if known != set(members):
         raise ValueError("Серия содержит фото из другого или удалённого проекта")
+    snapshot = latest_album_snapshot(connection, project_id)
+    if snapshot is None:
+        raise ValueError("Для human series отсутствует immutable source snapshot")
+    snapshot_rows = {
+        str(row["asset_uuid"]): row
+        for row in album_snapshot_items(connection, str(snapshot["id"]))
+        if row["media_type"] == "image"
+    }
+    if not set(members) <= set(snapshot_rows):
+        raise ValueError("Серия содержит фото вне текущего source snapshot")
+    positions = sorted(int(snapshot_rows[member]["album_position"]) for member in members)
+    adjacent_gaps = [right - left for left, right in pairwise(positions)]
+    album_order_coherent = max(adjacent_gaps, default=0) <= 25 and positions[-1] - positions[
+        0
+    ] <= max(50, len(positions) * 5)
+    coherence_status = (
+        "verified" if source_kind == "predicted_group" or album_order_coherent else "unverified"
+    )
     digest = hashlib.sha256("\n".join(members).encode()).hexdigest()[:16]
     human_group = f"human-{digest}"
     now = utc_now()
@@ -1922,6 +1955,10 @@ def label_quality_custom_group(
             """,
             (now, project_id, previous_group),
         )
+        connection.execute(
+            "DELETE FROM quality_series_labels WHERE project_id=? AND group_id=?",
+            (project_id, previous_group),
+        )
     for member_uuid in members:
         connection.execute(
             """
@@ -1935,7 +1972,37 @@ def label_quality_custom_group(
             """,
             (project_id, member_uuid, human_group, int(member_uuid == leader_uuid), now),
         )
-    return {"duplicate_group": human_group, "leader_uuid": leader_uuid, "members": members}
+    connection.execute(
+        """
+        INSERT INTO quality_series_labels (
+            project_id, group_id, source_snapshot_id, source_kind,
+            coherence_status, member_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, group_id) DO UPDATE SET
+            source_snapshot_id=excluded.source_snapshot_id,
+            source_kind=excluded.source_kind,
+            coherence_status=excluded.coherence_status,
+            member_fingerprint=excluded.member_fingerprint,
+            created_at=excluded.created_at
+        """,
+        (
+            project_id,
+            human_group,
+            str(snapshot["id"]),
+            source_kind,
+            coherence_status,
+            hashlib.sha256("\0".join(members).encode()).hexdigest(),
+            now,
+        ),
+    )
+    return {
+        "duplicate_group": human_group,
+        "leader_uuid": leader_uuid,
+        "members": members,
+        "source_snapshot_id": str(snapshot["id"]),
+        "source_kind": source_kind,
+        "coherence_status": coherence_status,
+    }
 
 
 def get_asset(
