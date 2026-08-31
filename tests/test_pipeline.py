@@ -712,20 +712,24 @@ def test_inventory_snapshots_video_but_never_sends_it_to_analysis(tmp_path: Path
 def test_source_revision_change_invalidates_only_affected_asset_analysis(tmp_path: Path) -> None:
     paths, provider, coordinator, project_id = build_pipeline(tmp_path)
     coordinator.run(project_id)
-    provider._assets = [
-        replace(
-            asset,
-            modification_timestamp=1781249999.25,
-            latitude=55.7558,
-            longitude=37.6173,
-            source_revision="edited-revision-2",
-            has_adjustments=True,
-            edit_state="adjusted",
+    provider._assets = list(
+        reversed(
+            [
+                replace(
+                    asset,
+                    modification_timestamp=1781249999.25,
+                    latitude=55.7558,
+                    longitude=37.6173,
+                    source_revision="edited-revision-2",
+                    has_adjustments=True,
+                    edit_state="adjusted",
+                )
+                if asset.uuid == "demo-010"
+                else asset
+                for asset in provider._assets
+            ]
         )
-        if asset.uuid == "demo-010"
-        else asset
-        for asset in provider._assets
-    ]
+    )
 
     with database_connection(paths.database) as connection:
         repository.create_album_snapshot(connection, project_id, provider._assets)
@@ -738,6 +742,22 @@ def test_source_revision_change_invalidates_only_affected_asset_analysis(tmp_pat
             "SELECT 1 FROM metrics WHERE project_id=? AND asset_uuid='demo-011'",
             (project_id,),
         ).fetchone()
+        changed_signals = connection.execute(
+            "SELECT COUNT(*) FROM analysis_signals WHERE project_id=? AND asset_uuid='demo-010'",
+            (project_id,),
+        ).fetchone()[0]
+        unchanged_signals = connection.execute(
+            "SELECT COUNT(*) FROM analysis_signals WHERE project_id=? AND asset_uuid='demo-011'",
+            (project_id,),
+        ).fetchone()[0]
+        changed_swipe = connection.execute(
+            "SELECT 1 FROM swipe_scores WHERE project_id=? AND asset_uuid='demo-010'",
+            (project_id,),
+        ).fetchone()
+        unchanged_swipe = connection.execute(
+            "SELECT 1 FROM swipe_scores WHERE project_id=? AND asset_uuid='demo-011'",
+            (project_id,),
+        ).fetchone()
         snapshots = connection.execute(
             "SELECT id FROM album_snapshots WHERE project_id=? ORDER BY captured_at, id",
             (project_id,),
@@ -747,6 +767,13 @@ def test_source_revision_change_invalidates_only_affected_asset_analysis(tmp_pat
 
     assert changed_metric is None
     assert unchanged_metric is not None
+    assert changed_signals == 0
+    assert unchanged_signals > 0
+    assert changed_swipe is None
+    assert unchanged_swipe is not None
+    assert [item["asset_uuid"] for item in second_items] == [
+        asset.uuid for asset in provider._assets
+    ]
     first_revision = next(
         item["revision_fingerprint"] for item in first_items if item["asset_uuid"] == "demo-010"
     )

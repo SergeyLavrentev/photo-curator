@@ -142,8 +142,14 @@ Quality Lab и нативной галереи в последовательну
   в analysis signals/gallery candidates.
 - [ ] Mixed-media corpus: photo, full video, Live Photo, animated image, burst, hidden,
   edited и iCloud-only; model-call audit содержит только разрешённые media types.
-- [ ] Повторный inventory сохраняет исходный album order и инвалидирует затронутые stages.
-- [ ] Migration проходит с чистой, старой, частичной и аварийно прерванной SQLite.
+- [x] Повторный inventory сохраняет исходный album order и инвалидирует затронутые stages.
+  Evidence: повторный immutable snapshot сохраняет точный изменённый provider order;
+  revision drift одного asset удаляет только его metrics/signals/swipe score, сохраняя
+  derived evidence неизменившегося соседа.
+- [x] Migration проходит с чистой, старой, частичной и аварийно прерванной SQLite.
+  Evidence: clean/idempotent schema, upgrades v9/v18/v21/v22, partial-schema fail-closed,
+  pre-migration backup и injected post-verifier rollback сохраняют старый `user_version`
+  и не оставляют частично добавленные columns.
 
 ## R3 — Engine v3: правильная декомпозиция задачи
 
