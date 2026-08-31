@@ -8,8 +8,8 @@ from pathlib import Path
 from photo_curator import __version__
 from photo_curator.acceptance import (
     AcceptanceManifestError,
+    build_database_quality_evidence,
     build_manifest_template,
-    build_native_quality_evidence,
     build_score_snapshot,
     compare_acceptance_scores,
     evaluate_acceptance,
@@ -36,7 +36,6 @@ from photo_curator.analysis.performance_benchmark import (
     DEFAULT_MODES,
     run_local_model_performance_benchmark,
 )
-from photo_curator.db import repository
 from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
 from photo_curator.db.repository import get_project, list_assets, list_duplicate_groups
@@ -347,12 +346,7 @@ def run_acceptance_evidence_export_command(args: argparse.Namespace) -> int:
             get_project(connection, args.project_id)
         except KeyError as error:
             raise AcceptanceManifestError(f"Проект не найден: {args.project_id}") from error
-        evidence = build_native_quality_evidence(
-            args.project_id,
-            repository.list_assets(connection, args.project_id),
-            repository.list_preference_examples(connection),
-            repository.analysis_signals_by_asset(connection, args.project_id),
-        )
+        evidence = build_database_quality_evidence(connection, args.project_id)
     rendered = json.dumps(evidence, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

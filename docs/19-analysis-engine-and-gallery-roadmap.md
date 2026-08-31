@@ -236,8 +236,11 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
 
 ## R5 — независимый Quality Lab и human truth
 
-- [ ] Хранить defect labels, ranking preferences, Top-K и human series отдельно от product
+- [x] Хранить defect labels, ranking preferences, Top-K и human series отдельно от product
   manual decisions и prediction-conditioned review.
+  Evidence: Quality Lab использует только `quality_asset_labels` и
+  `quality_preference_examples`; product decisions и taste onboarding pairs не входят в
+  human quality export.
 - [ ] Top-K сравнивать в одном universe: human и model ранжируют один и тот же frozen sample.
 - [ ] Human series должна иметь source provenance и temporal/semantic coherence; случайный
   набор из двух UUID не закрывает gate.
@@ -246,7 +249,9 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
 - [ ] Taste calibration и holdout брать из разных albums/episodes; correlated pairs из
   шести кадров не считать независимым evidence.
 - [ ] Structural readiness отделить от evaluator pass и release eligibility.
-- [ ] Устранить расхождение CLI/native export источников held-out preference pairs.
+- [x] Устранить расхождение CLI/native export источников held-out preference pairs.
+  Evidence: CLI и native worker вызывают один database-backed exporter; оба читают только
+  project-scoped `quality_preference_examples`, никогда global taste preferences.
 
 ## R6 — series-first Gallery и UX
 

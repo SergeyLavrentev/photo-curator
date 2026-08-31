@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import Lock, local
 from typing import TextIO
 
-from photo_curator.acceptance import build_native_quality_evidence, evaluate_acceptance
+from photo_curator.acceptance import build_database_quality_evidence, evaluate_acceptance
 from photo_curator.analysis.codex_vision import codex_status
 from photo_curator.analysis.local_models import LocalModelEngine
 from photo_curator.analysis.native_vision import NativeVisionEngine
@@ -924,18 +924,7 @@ class NativeWorker:
     def _handle_quality_export(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         with database_connection(self.paths.database) as connection:
-            repository.get_project(connection, project_id)
-            assets = repository.list_assets(connection, project_id)
-            examples = [
-                *(
-                    example
-                    for example in repository.list_preference_examples(connection)
-                    if example.get("project_id") == project_id
-                ),
-                *repository.list_quality_preference_examples(connection, project_id),
-            ]
-            signals = repository.analysis_signals_by_asset(connection, project_id)
-        return build_native_quality_evidence(project_id, assets, examples, signals)
+            return build_database_quality_evidence(connection, project_id)
 
     def _handle_quality_status(self, params: dict[str, object]) -> dict[str, object]:
         evidence = self._handle_quality_export(params)

@@ -695,9 +695,9 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
         "apple_only",
     }
     assert len(quality["baseline_snapshots"]["apple_only"]["scores"]) == 12
-    assert len(quality["manifest"]["preference_pairs"]) == 4
+    assert quality["manifest"]["preference_pairs"] == []
     assert quality["summary"]["manual_labels"] == 1
-    assert quality["summary"]["held_out_pairs"] == 1
+    assert quality["summary"]["held_out_pairs"] == 0
     assert len(quality["score_snapshot"]["scores"]) == 12
     report = worker.dispatch(
         "quality_evaluate",

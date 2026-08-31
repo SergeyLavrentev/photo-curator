@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sqlite3
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
 from typing import Any
+
+from photo_curator.db import repository
 
 ALLOWED_DISPOSITIONS = {"keep", "review", "reject"}
 DEFAULT_THRESHOLDS = {
@@ -300,6 +303,19 @@ def build_native_quality_evidence(
             "release_ready": release_ready,
         },
     }
+
+
+def build_database_quality_evidence(
+    connection: sqlite3.Connection, project_id: str
+) -> dict[str, object]:
+    """Use one independent truth source for both native and CLI quality exports."""
+    repository.get_project(connection, project_id)
+    return build_native_quality_evidence(
+        project_id,
+        repository.list_assets(connection, project_id),
+        repository.list_quality_preference_examples(connection, project_id),
+        repository.analysis_signals_by_asset(connection, project_id),
+    )
 
 
 def _quality_defect_codes(asset: dict[str, object]) -> list[str]:
