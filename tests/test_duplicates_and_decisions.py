@@ -480,7 +480,7 @@ def test_large_same_phash_bucket_stays_bounded() -> None:
     assert len(list(_candidate_pairs(assets))) < 50_000
 
 
-def test_temporal_diversity_keeps_only_three_unprotected_frames_per_scene() -> None:
+def test_capture_time_alone_never_demotes_technically_good_frames() -> None:
     assets = []
     decisions = []
     for index in range(5):
@@ -493,4 +493,4 @@ def test_temporal_diversity_keeps_only_three_unprotected_frames_per_scene() -> N
 
     demoted = _diversity_demotions(assets, decisions)
 
-    assert demoted == {"frame-3", "frame-4"}
+    assert demoted == set()

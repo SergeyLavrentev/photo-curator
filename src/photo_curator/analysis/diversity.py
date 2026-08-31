@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 import numpy as np
 
 from photo_curator.analysis.decision_engine import DecisionResult
 from photo_curator.analysis.taste import TasteProfileError, feature_vector
 
-DIVERSITY_MODEL_VERSION = "vision-feature-diversity-v1"
+DIVERSITY_MODEL_VERSION = "vision-feature-diversity-v2"
 SEMANTIC_SIMILARITY_THRESHOLD = 0.94
 MAX_SIMILAR_FRAMES = 3
-TEMPORAL_SCENE_SECONDS = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,9 +29,9 @@ def diversity_evidence(
 ) -> dict[str, DiversityEvidence]:
     """Explain and limit scene dominance without changing the aesthetic score.
 
-    The function only demotes unprotected automatic Keep decisions. It uses the already
-    persisted Vision feature print and falls back to the previous temporal scene guard
-    when semantic features are unavailable.
+    The function only demotes unprotected automatic Keep decisions and only when an
+    already-persisted Vision feature print provides direct visual evidence. Capture time
+    may retrieve candidates elsewhere, but is never evidence of redundancy by itself.
     """
     result = {str(asset["asset_uuid"]): DiversityEvidence(value=50.0) for asset in assets}
     candidates: list[tuple[dict[str, object], DecisionResult]] = []
@@ -48,20 +46,9 @@ def diversity_evidence(
             continue
         candidates.append((asset, decision))
 
-    temporal_demoted = _temporal_demotions(candidates)
-    for asset_uuid in temporal_demoted:
-        result[asset_uuid] = DiversityEvidence(
-            value=10.0,
-            demoted=True,
-            reason="temporal_scene_limit",
-            model_version=DIVERSITY_MODEL_VERSION,
-        )
-
     vectors: dict[str, np.ndarray] = {}
     for asset, _ in candidates:
         asset_uuid = str(asset["asset_uuid"])
-        if asset_uuid in temporal_demoted:
-            continue
         signal = signals.get(asset_uuid, {}).get("feature_print")
         if not signal:
             continue
@@ -74,11 +61,7 @@ def diversity_evidence(
             vectors[asset_uuid] = vector / norm
 
     ranked = sorted(
-        (
-            (asset, decision)
-            for asset, decision in candidates
-            if str(asset["asset_uuid"]) not in temporal_demoted
-        ),
+        candidates,
         key=lambda item: (
             int(item[1].score),
             int(item[0].get("width") or 0) * int(item[0].get("height") or 0),
@@ -123,38 +106,6 @@ def diversity_evidence(
         if not demoted:
             selected_vectors.append((asset_uuid, vector))
     return result
-
-
-def _temporal_demotions(
-    candidates: list[tuple[dict[str, object], DecisionResult]],
-) -> set[str]:
-    timestamped = []
-    for asset, decision in candidates:
-        try:
-            taken_at = datetime.fromisoformat(str(asset.get("taken_at")))
-        except (TypeError, ValueError):
-            continue
-        timestamped.append((taken_at, asset, decision))
-    timestamped.sort(key=lambda item: item[0])
-    scenes: list[list[tuple[datetime, dict[str, object], DecisionResult]]] = []
-    for candidate in timestamped:
-        if not scenes or (candidate[0] - scenes[-1][0][0]).total_seconds() > TEMPORAL_SCENE_SECONDS:
-            scenes.append([candidate])
-        else:
-            scenes[-1].append(candidate)
-    demoted = set()
-    for scene in scenes:
-        ranked = sorted(
-            scene,
-            key=lambda item: (
-                int(item[2].score),
-                int(item[1].get("width") or 0) * int(item[1].get("height") or 0),
-                str(item[1]["asset_uuid"]),
-            ),
-            reverse=True,
-        )
-        demoted.update(str(item[1]["asset_uuid"]) for item in ranked[MAX_SIMILAR_FRAMES:])
-    return demoted
 
 
 def _is_protected(asset: dict[str, object], decision: DecisionResult) -> bool:

@@ -166,8 +166,11 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   change-point detection, а не по жёсткому окну 120 секунд.
 - [ ] Near-duplicate stacks формировать только для реально сравнимых поз, моментов и
   ракурсов; исключить star-clustering fragmentation и произвольный hard max=3.
-- [ ] Удалить blind temporal demotion. Время является candidate signal, но не доказательством
+- [x] Удалить blind temporal demotion. Время является candidate signal, но не доказательством
   визуальной избыточности.
+  Evidence: diversity v2 больше не применяет fallback `3 кадра / 120 секунд`; при отсутствии
+  валидного feature print все технически хорошие кадры остаются без demotion. Время продолжает
+  только расширять candidate retrieval для последующей визуальной проверки.
 - [ ] Разделить objective defect, technical quality, aesthetic appeal, personal taste,
   leader quality и marginal novelty; не начислять один штраф несколько раз.
 - [x] Сохранить непрерывный rank signal без массового clamp в 0/100.

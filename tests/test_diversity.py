@@ -66,7 +66,7 @@ def test_semantic_diversity_demotes_only_the_fourth_similar_unprotected_keep() -
     )
 
 
-def test_favorite_is_never_demoted_by_semantic_or_temporal_diversity() -> None:
+def test_favorite_is_never_demoted_by_semantic_diversity() -> None:
     assets = [_asset(f"normal-{index}", minute=index * 3) for index in range(4)]
     assets.append(_asset("favorite", favorite=True, minute=12))
     decisions = [decide_asset(asset, None) for asset in assets]
@@ -77,3 +77,13 @@ def test_favorite_is_never_demoted_by_semantic_or_temporal_diversity() -> None:
     assert not evidence["favorite"].demoted
     assert evidence["favorite"].reason == "protected"
     assert evidence["favorite"].value == 100
+
+
+def test_missing_embeddings_do_not_fall_back_to_blind_temporal_demotion() -> None:
+    assets = [_asset(f"frame-{index}") for index in range(8)]
+    decisions = [decide_asset(asset, None) for asset in assets]
+
+    evidence = diversity_evidence(assets, decisions, {})
+
+    assert not any(item.demoted for item in evidence.values())
+    assert {item.reason for item in evidence.values()} == {"feature_unavailable"}
