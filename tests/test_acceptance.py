@@ -291,6 +291,12 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
     ]
     assert len(evidence["manifest"]["preference_pairs"]) == 1
     assert evidence["manifest"]["expected_top_k"] == []
+    assert evidence["manifest"]["schema_version"] == 3
+    assert evidence["manifest"]["universe"]["asset_uuids"] == [
+        "asset-00",
+        "asset-01",
+        "asset-02",
+    ]
     assert evidence["score_snapshot"]["scores"]["asset-01"] == 89.0
     assert evidence["score_snapshot"]["engine"]["version"].startswith("native-")
     assert evidence["summary"]["manual_labels"] == 1
@@ -305,6 +311,39 @@ def test_native_quality_export_never_promotes_predictions_to_human_truth() -> No
     assert report["labelled_assets"] == 1
     assert report["metrics"]["pairwise_accuracy"] == 1.0
     assert report["release_eligible"] is False
+
+
+def test_manifest_v3_rejects_album_or_score_universe_drift() -> None:
+    assets = _assets(3)
+    for index, asset in enumerate(assets):
+        asset.update(
+            swipe_score=90 - index,
+            swipe_schema_version=2,
+            swipe_model_versions={"generic": "vision-v2"},
+            quality_expected_disposition="keep",
+            quality_lab_sampled=True,
+        )
+    evidence = build_native_quality_evidence("trip", assets, [])
+
+    with pytest.raises(AcceptanceManifestError, match="активным проектом"):
+        evaluate_acceptance(
+            evidence["manifest"],
+            [*assets, {**_assets(1)[0], "asset_uuid": "new-asset"}],
+            [],
+            project_id="trip",
+            score_snapshot=evidence["score_snapshot"],
+        )
+
+    incomplete_scores = dict(evidence["score_snapshot"])
+    incomplete_scores["scores"] = {"asset-00": 90.0, "asset-01": 89.0}
+    with pytest.raises(AcceptanceManifestError, match="другого frozen universe"):
+        evaluate_acceptance(
+            evidence["manifest"],
+            assets,
+            [],
+            project_id="trip",
+            score_snapshot=incomplete_scores,
+        )
 
 
 def test_native_quality_export_becomes_ready_only_from_complete_human_annotations() -> None:

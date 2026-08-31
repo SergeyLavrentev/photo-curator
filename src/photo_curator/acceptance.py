@@ -29,9 +29,13 @@ class AcceptanceManifestError(ValueError):
 
 
 def build_manifest_template(project_id: str, assets: list[dict[str, object]]) -> dict[str, object]:
+    universe = sorted(
+        str(asset["asset_uuid"]) for asset in assets if not asset.get("no_longer_exists")
+    )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "project_id": project_id,
+        "universe": _frozen_universe(universe),
         "thresholds": DEFAULT_THRESHOLDS.copy(),
         "preference_pairs": [],
         "expected_top_k": [],
@@ -189,8 +193,9 @@ def build_native_quality_evidence(
         and example.get("right_uuid") in project_ids
     ]
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "project_id": project_id,
+        "universe": _frozen_universe(sorted(project_ids)),
         "thresholds": DEFAULT_THRESHOLDS.copy(),
         "preference_pairs": pairs,
         "expected_top_k": top_k,
@@ -333,6 +338,14 @@ def _quality_defect_codes(asset: dict[str, object]) -> list[str]:
     )
 
 
+def _frozen_universe(asset_uuids: list[str]) -> dict[str, object]:
+    encoded = json.dumps(asset_uuids, separators=(",", ":"))
+    return {
+        "asset_uuids": asset_uuids,
+        "fingerprint": hashlib.sha256(encoded.encode()).hexdigest(),
+    }
+
+
 def load_manifest(path: Path) -> dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -402,7 +415,11 @@ def evaluate_acceptance(
     scorer: dict[str, str] | None = None
     if preferences is not None:
         score_map, scorer = _validated_score_map(
-            score_snapshot, asset_by_uuid, labelled_ids, project_id
+            score_snapshot,
+            asset_by_uuid,
+            labelled_ids,
+            project_id,
+            required_universe=preferences.get("universe"),
         )
         preference_metrics, preference_counts, preference_details = _preference_metrics(
             preferences, score_map
@@ -543,14 +560,16 @@ def _validate_manifest(
     dict[str, object] | None,
 ]:
     schema_version = manifest.get("schema_version")
-    if schema_version not in {1, 2}:
-        raise AcceptanceManifestError("Поддерживаются schema_version=1 и schema_version=2")
+    if schema_version not in {1, 2, 3}:
+        raise AcceptanceManifestError("Поддерживаются schema_version=1, 2 и 3")
     if manifest.get("project_id") != project_id:
         raise AcceptanceManifestError("project_id manifest не совпадает с проектом")
     raw_assets = manifest.get("assets")
     if not isinstance(raw_assets, list) or not raw_assets:
         raise AcceptanceManifestError("Manifest должен содержать непустой массив assets")
-    project_ids = {str(asset["asset_uuid"]) for asset in assets}
+    project_ids = {
+        str(asset["asset_uuid"]) for asset in assets if not asset.get("no_longer_exists")
+    }
     labels: dict[str, dict[str, object]] = {}
     for index, raw_label in enumerate(raw_assets):
         if not isinstance(raw_label, dict):
@@ -608,11 +627,17 @@ def _validate_manifest(
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value <= 1:
             raise AcceptanceManifestError(f"thresholds.{key} должен быть числом от 0 до 1")
         thresholds[key] = float(value)
-    preferences = _validate_preferences(manifest, project_ids) if schema_version == 2 else None
+    preferences = (
+        _validate_preferences(manifest, project_ids, require_universe=schema_version == 3)
+        if schema_version in {2, 3}
+        else None
+    )
     return labels, thresholds, preferences
 
 
-def _validate_preferences(manifest: dict[str, object], project_ids: set[str]) -> dict[str, object]:
+def _validate_preferences(
+    manifest: dict[str, object], project_ids: set[str], *, require_universe: bool
+) -> dict[str, object]:
     raw_pairs = manifest.get("preference_pairs")
     if not isinstance(raw_pairs, list):
         raise AcceptanceManifestError("preference_pairs должен быть массивом")
@@ -664,7 +689,26 @@ def _validate_preferences(manifest: dict[str, object], project_ids: set[str]) ->
         if value in top_k:
             raise AcceptanceManifestError(f"Повтор в expected_top_k: {value}")
         top_k.append(value)
-    return {"pairs": pairs, "expected_top_k": top_k}
+    universe: set[str] | None = None
+    if require_universe:
+        raw_universe = manifest.get("universe")
+        if not isinstance(raw_universe, dict):
+            raise AcceptanceManifestError("schema_version=3 требует frozen universe")
+        raw_uuids = raw_universe.get("asset_uuids")
+        fingerprint = raw_universe.get("fingerprint")
+        if not isinstance(raw_uuids, list) or not all(
+            isinstance(value, str) and value for value in raw_uuids
+        ):
+            raise AcceptanceManifestError("universe.asset_uuids должен быть массивом UUID")
+        if raw_uuids != sorted(set(raw_uuids)):
+            raise AcceptanceManifestError("universe.asset_uuids должен быть sorted и unique")
+        expected = _frozen_universe(raw_uuids)
+        if fingerprint != expected["fingerprint"]:
+            raise AcceptanceManifestError("universe fingerprint не совпадает с asset_uuids")
+        universe = set(raw_uuids)
+        if universe != project_ids:
+            raise AcceptanceManifestError("Frozen universe не совпадает с активным проектом")
+    return {"pairs": pairs, "expected_top_k": top_k, "universe": universe}
 
 
 def _validated_score_map(
@@ -672,6 +716,7 @@ def _validated_score_map(
     asset_by_uuid: dict[str, dict[str, object]],
     labelled_ids: set[str],
     project_id: str,
+    required_universe: set[str] | None = None,
 ) -> tuple[dict[str, float], dict[str, str]]:
     if snapshot is None:
         raw_scores = {
@@ -694,6 +739,8 @@ def _validated_score_map(
     unknown = set(raw_scores) - set(asset_by_uuid)
     if unknown:
         raise AcceptanceManifestError(f"Score snapshot содержит неизвестное фото: {min(unknown)}")
+    if required_universe is not None and set(raw_scores) != required_universe:
+        raise AcceptanceManifestError("Score snapshot рассчитан для другого frozen universe")
     missing_labels = labelled_ids - set(raw_scores)
     if missing_labels:
         raise AcceptanceManifestError(f"Нет числового score для {min(missing_labels)}")

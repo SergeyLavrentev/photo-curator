@@ -241,14 +241,19 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   Evidence: Quality Lab использует только `quality_asset_labels` и
   `quality_preference_examples`; product decisions и taste onboarding pairs не входят в
   human quality export.
-- [ ] Top-K сравнивать в одном universe: human и model ранжируют один и тот же frozen sample.
+- [x] Top-K сравнивать в одном universe: human и model ранжируют один и тот же frozen sample.
+  Evidence: manifest schema v3 хранит sorted active UUID universe и SHA-256 fingerprint;
+  evaluator fail-closed при membership drift либо score snapshot с неполным/чужим universe.
 - [ ] Human series должна иметь source provenance и temporal/semantic coherence; случайный
   набор из двух UUID не закрывает gate.
 - [ ] Разрешить разметку scene budget, essential moment, redundant-but-good и причины
   относительного выбора между технически нормальными кадрами.
 - [ ] Taste calibration и holdout брать из разных albums/episodes; correlated pairs из
   шести кадров не считать независимым evidence.
-- [ ] Structural readiness отделить от evaluator pass и release eligibility.
+- [x] Structural readiness отделить от evaluator pass и release eligibility.
+  Evidence: native summary публикует `release_ready` только по полноте human corpus, тогда как
+  evaluator отдельно возвращает absolute checks, `release_eligible` и итоговый `passed`;
+  frozen-universe validation выполняется до метрик.
 - [x] Устранить расхождение CLI/native export источников held-out preference pairs.
   Evidence: CLI и native worker вызывают один database-backed exporter; оба читают только
   project-scoped `quality_preference_examples`, никогда global taste preferences.
