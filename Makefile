@@ -12,7 +12,7 @@ NOTARY_KEY ?=
 NOTARY_KEY_ID ?=
 NOTARY_ISSUER_ID ?=
 
-.PHONY: help sync test lint vision-helper coreml-helper local-model-helper gallery-benchmark app build pkg install run stop verify-app verify-dmg verify-pkg notarize uninstall clean
+.PHONY: help sync test lint vision-helper coreml-helper local-model-helper gallery-benchmark image-pipeline-test app build pkg install run stop verify-app verify-dmg verify-pkg notarize uninstall clean
 
 help:
 	@echo "Photo Curator"
@@ -22,6 +22,7 @@ help:
 	@echo "  make coreml-helper собрать optional Core ML benchmark"
 	@echo "  make local-model-helper собрать движок NIMA, MobileCLIP и MUSIQ"
 	@echo "  make gallery-benchmark измерить SwiftUI-галерею на 2k/5k карточек"
+	@echo "  make image-pipeline-test проверить native cache/decode concurrency"
 	@echo "  make app         собрать .app и стандартный PhotoCurator.dmg"
 	@echo "  make install     установить из DMG без прав администратора и запустить"
 	@echo "  make pkg         собрать optional admin/corporate .pkg"
@@ -91,6 +92,17 @@ gallery-benchmark:
 	"$(CURDIR)/build/evidence/gallery-benchmark" \
 	  > "$(CURDIR)/build/evidence/gallery-benchmark.json"
 	@echo "$(CURDIR)/build/evidence/gallery-benchmark.json"
+
+image-pipeline-test:
+	mkdir -p "$(CURDIR)/build/evidence"
+	xcrun swiftc -swift-version 5 -parse-as-library -O \
+	  -D IMAGE_PIPELINE_TESTING \
+	  -target "$$(uname -m)-apple-macosx13.0" \
+	  -framework SwiftUI -framework AppKit -framework ImageIO \
+	  packaging/macos/PhotoCuratorImagePipeline.swift \
+	  packaging/macos/ImagePipelineBehavior.swift \
+	  -o "$(CURDIR)/build/evidence/image-pipeline-behavior"
+	"$(CURDIR)/build/evidence/image-pipeline-behavior"
 
 app build:
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" packaging/macos/build_app.sh

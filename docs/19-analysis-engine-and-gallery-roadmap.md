@@ -339,8 +339,11 @@ page-swap p95 159/185 ms, scroll p95 7.6/7.7 ms. Это подтверждает
   series pagination, Compare/Survey, arrow pagination, stale responses и accessibility.
   - [x] Native worker behavioral regression покрывает полный series payload через page/bucket
     boundary и fail-closed фильтрацию inactive/video members.
-- [ ] Добавить image pipeline tests для coalescing, cancellation, priority inversion и
+- [x] Добавить image pipeline tests для coalescing, cancellation, priority inversion и
   cache separation.
+  Evidence: `make image-pipeline-test` компилирует production loader с test-only counters и
+  реально проверяет один decode для двух consumers, сохранение второго после cancellation,
+  replacement utility decode видимым request и разные thumbnail/review keys.
 - [ ] Source-string contract tests оставить только как smoke и не использовать как UX proof.
 
 ## R8 — staged rollout и финальная приемка

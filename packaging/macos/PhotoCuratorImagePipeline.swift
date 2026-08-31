@@ -94,6 +94,16 @@ final class ThumbnailLoader: ObservableObject {
     }()
     private static var inFlight: [String: InFlightDecode] = [:]
     private static var prefetchWork: [String: PrefetchWork] = [:]
+#if IMAGE_PIPELINE_TESTING
+    private(set) static var testDecodeStarts = 0
+    static var testDecodeDelayNanoseconds: UInt64 = 0
+
+    static func resetTestState() {
+        invalidateAll()
+        testDecodeStarts = 0
+        testDecodeDelayNanoseconds = 0
+    }
+#endif
     @Published var image: NSImage?
     @Published var failed = false
     private var currentRequestKey: String?
@@ -158,7 +168,16 @@ final class ThumbnailLoader: ObservableObject {
             return existing
         }
         inFlight[requestKey]?.task.cancel()
+#if IMAGE_PIPELINE_TESTING
+        testDecodeStarts += 1
+        let testDelayNanoseconds = testDecodeDelayNanoseconds
+#endif
         let task = Task.detached(priority: priority) { () -> CGImage? in
+#if IMAGE_PIPELINE_TESTING
+            if testDelayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: testDelayNanoseconds)
+            }
+#endif
             guard await thumbnailDecodeLimiter.acquire() else { return nil }
             guard !Task.isCancelled else {
                 await thumbnailDecodeLimiter.release()
