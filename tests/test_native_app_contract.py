@@ -602,3 +602,18 @@ def test_thumbnail_decode_work_is_cancelled_and_repair_invalidates_cache() -> No
     assert "ThumbnailLoader.invalidateAll()" in app_model
     assert "candidates[$0].reviewPath ?? candidates[$0].thumbnailPath" in series_model
     assert "func selectPhoto(photoID: String)" in series_model
+
+
+def test_gallery_paging_keeps_navigation_and_mutations_in_the_current_page_context() -> None:
+    app_model = (ROOT / "packaging/macos/PhotoCuratorAppModel.swift").read_text()
+    series_model = (ROOT / "packaging/macos/PhotoCuratorSeriesModel.swift").read_text()
+    root_view = (ROOT / "packaging/macos/PhotoCuratorRootView.swift").read_text()
+
+    assert "func loadMorePhotosIfNeeded(currentPhotoID: String)" in app_model
+    assert "loadMorePhotos(selectFirstNewPhoto: true)" in series_model
+    assert "ScrollViewReader { galleryProxy in" in root_view
+    assert "galleryProxy.scrollTo(photoID, anchor: .center)" in root_view
+    assert "model.loadMorePhotosIfNeeded(currentPhotoID: photo.id)" in root_view
+    assert "let mutationBucket = selectionBucket" in app_model
+    assert "let mutationGalleryGeneration = galleryRequestGeneration" in app_model
+    assert "galleryRequestGeneration == mutationGalleryGeneration" in app_model

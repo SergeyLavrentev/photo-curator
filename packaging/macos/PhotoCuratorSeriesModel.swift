@@ -32,8 +32,8 @@ extension AppModel {
         return nil
     }
 
-    func updateCachedPhoto(_ updated: PhotoItem) {
-        if let index = photos.firstIndex(where: { $0.id == updated.id }) {
+    func updateCachedPhoto(_ updated: PhotoItem, updateGallery: Bool = true) {
+        if updateGallery, let index = photos.firstIndex(where: { $0.id == updated.id }) {
             photos[index] = updated
         }
         var contexts = seriesContexts
@@ -109,6 +109,14 @@ extension AppModel {
         let current = selectedPhotoID.flatMap { id in
             candidates.firstIndex(where: { $0.id == id })
         } ?? 0
+        if offset > 0,
+           workspaceMode != .compare,
+           workspaceMode != .survey,
+           current == candidates.count - 1
+        {
+            loadMorePhotos(selectFirstNewPhoto: true)
+            return
+        }
         let next = min(max(0, current + offset), candidates.count - 1)
         selectPhoto(photoID: candidates[next].id)
     }

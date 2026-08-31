@@ -249,10 +249,17 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   cache/decode lookup, а repair атомарно инвалидирует cache, in-flight work и active views.
 - [ ] Реализовать auto-pagination near end, переход стрелкой через page boundary,
   scroll-to-selection, pinned toolbar и честный текст размера страницы.
+  - [x] Near-end card автоматически загружает следующую 36-item keyset page; стрелка вправо
+    на последнем загруженном кадре выбирает первый новый кадр, selection прокручивается в
+    видимую область, а footer честно показывает page limit и loaded/total.
+  - [ ] Закрепить toolbar режимов и размера карточек при длинной прокрутке.
 - [ ] Исправить Survey для 5–6 кадров, workspace Alternative action, stale detail/page races,
   empty shared-only picker и неверные progress/warning тексты.
   - [x] Detail response имеет generation/project/selection guards и не может открыть ранее
     выбранную фотографию поверх более нового запроса.
+  - [x] Decision response изменяет только исходный bucket/generation; при смене вкладки или
+    reload текущая page перечитывается и не принимает optimistic rollback/response старого
+    page context.
 - [ ] Заменить gesture-only controls на `Button`/accessibility actions, добавить selected
   traits и guards для bare-key shortcuts при TextField/Quality Wizard focus.
   - [x] Gallery card, workspace photo и filmstrip selection используют `Button`; selected state

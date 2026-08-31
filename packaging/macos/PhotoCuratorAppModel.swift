@@ -227,6 +227,7 @@ final class AppModel: ObservableObject {
     var detailRequestGeneration = 0
     private var hasStarted = false
     private let galleryPageSize = 36
+    var galleryPageLimit: Int { galleryPageSize }
     private let retainedProjectDefaultsKey = "retainedProjectID"
     private let pendingPhotoKitAcceptanceDefaultsKey = "pendingPhotoKitAcceptanceV1"
     private let currentDecisionModelVersion = 6
@@ -887,6 +888,9 @@ final class AppModel: ObservableObject {
 
     func setDecision(photoID: String, disposition: String?, recordUndo: Bool = true) {
         guard let project, let previousPhoto = photoItem(photoID: photoID) else { return }
+        let projectID = project.id
+        let mutationBucket = selectionBucket
+        let mutationGalleryGeneration = galleryRequestGeneration
         let generation = (decisionGenerations[photoID] ?? 0) + 1
         decisionGenerations[photoID] = generation
         let previousManual = previousPhoto.manualDisposition
@@ -895,8 +899,11 @@ final class AppModel: ObservableObject {
             ["keep": "pick", "review": "review", "reject": "reject"][$0]
         }
         func reconcilePage(_ updated: PhotoItem, from priorSelection: String?) {
-            let wasInBucket = priorSelection == selectionBucket.rawValue
-            let isInBucket = updated.selection == selectionBucket.rawValue
+            guard selectionBucket == mutationBucket,
+                  galleryRequestGeneration == mutationGalleryGeneration
+            else { return }
+            let wasInBucket = priorSelection == mutationBucket.rawValue
+            let isInBucket = updated.selection == mutationBucket.rawValue
             if wasInBucket != isInBucket {
                 photosTotal = max(0, photosTotal + (isInBucket ? 1 : -1))
             }
@@ -936,7 +943,7 @@ final class AppModel: ObservableObject {
                 let updated: PhotoItem = try await callDTO(
                     "decision",
                     DecisionMutationParams(
-                        projectID: project.id,
+                        projectID: projectID,
                         assetUUID: photoID,
                         disposition: disposition,
                         mutationGeneration: generation
@@ -955,7 +962,9 @@ final class AppModel: ObservableObject {
                             to: updated.selection
                         )
                     }
-                    updateCachedPhoto(updated)
+                    let pageContextMatches = selectionBucket == mutationBucket
+                        && galleryRequestGeneration == mutationGalleryGeneration
+                    updateCachedPhoto(updated, updateGallery: pageContextMatches)
                     reconcilePage(updated, from: optimisticPhoto?.selection ?? previousSelection)
                     if recordUndo && previousManual != disposition {
                         decisionHistory.append(
@@ -970,7 +979,12 @@ final class AppModel: ObservableObject {
                         )
                     }
                 }
-                await loadQualityStatus(projectID: project.id)
+                if selectionBucket != mutationBucket
+                    || galleryRequestGeneration != mutationGalleryGeneration
+                {
+                    await loadPhotos(projectID: projectID)
+                }
+                await loadQualityStatus(projectID: projectID)
             } catch {
                 guard decisionGenerations[photoID] == generation else { return }
                 if let disposition {
@@ -978,8 +992,15 @@ final class AppModel: ObservableObject {
                     adjustSelectionCounts(from: updatedSelection, to: previousSelection)
                 }
                 if let optimisticPhoto {
-                    updateCachedPhoto(previousPhoto)
+                    let pageContextMatches = selectionBucket == mutationBucket
+                        && galleryRequestGeneration == mutationGalleryGeneration
+                    updateCachedPhoto(previousPhoto, updateGallery: pageContextMatches)
                     reconcilePage(previousPhoto, from: optimisticPhoto.selection)
+                }
+                if selectionBucket != mutationBucket
+                    || galleryRequestGeneration != mutationGalleryGeneration
+                {
+                    await loadPhotos(projectID: projectID)
                 }
                 errorMessage = error.localizedDescription
             }
@@ -1613,11 +1634,25 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func loadMorePhotos() {
+    func loadMorePhotos(selectFirstNewPhoto: Bool = false) {
         guard let project, galleryCursor != nil, photos.count < photosTotal, !isLoadingPhotos else {
             return
         }
-        Task { await loadPhotos(projectID: project.id, append: true) }
+        let previousIDs = Set(photos.map(\.id))
+        Task {
+            await loadPhotos(projectID: project.id, append: true)
+            guard selectFirstNewPhoto,
+                  let firstNewPhoto = photos.first(where: { !previousIDs.contains($0.id) })
+            else { return }
+            selectPhoto(photoID: firstNewPhoto.id)
+        }
+    }
+
+    func loadMorePhotosIfNeeded(currentPhotoID: String) {
+        guard let index = photos.firstIndex(where: { $0.id == currentPhotoID }),
+              index >= max(0, photos.count - 8)
+        else { return }
+        loadMorePhotos()
     }
 
     private func refreshUnavailablePreviewCount(

@@ -467,8 +467,9 @@ struct RootView: View {
     }
 
     private var reviewSection: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+        ScrollViewReader { galleryProxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .bottom, spacing: 16) {
                     HStack(spacing: 4) {
                         ForEach(SelectionBucket.allCases) { bucket in
@@ -716,6 +717,10 @@ struct RootView: View {
                             model.setDecision(photoID: photo.id, disposition: disposition)
                         }
                         .equatable()
+                        .id(photo.id)
+                        .onAppear {
+                            model.loadMorePhotosIfNeeded(currentPhotoID: photo.id)
+                        }
                         }
                     }
                 } else {
@@ -745,6 +750,11 @@ struct RootView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 240)
                 }
+                if model.workspaceMode == .grid, model.photos.count < model.photosTotal {
+                    Color.clear
+                        .frame(height: 1)
+                        .onAppear { model.loadMorePhotos() }
+                }
                 if model.photos.count < model.photosTotal {
                     Button {
                         model.loadMorePhotos()
@@ -752,20 +762,28 @@ struct RootView: View {
                         Label(
                             model.isLoadingPhotos
                                 ? "Загружаем…"
-                                : "Показать ещё \(min(100, model.photosTotal - model.photos.count))",
+                                : "Показать ещё \(min(model.galleryPageLimit, model.photosTotal - model.photos.count))",
                             systemImage: "square.grid.3x3.fill"
                         )
                         .frame(maxWidth: .infinity)
                     }
                     .disabled(model.isLoadingPhotos)
-                    Text("Показано \(model.photos.count) из \(model.photosTotal)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+                Text(
+                    "Показано \(model.photos.count) из \(model.photosTotal) · "
+                        + "страницы до \(model.galleryPageLimit) фото подгружаются автоматически"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .frame(maxWidth: 1480, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(20)
-            .frame(maxWidth: 1480, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .onChange(of: model.selectedPhotoID) { photoID in
+                guard model.workspaceMode == .grid, let photoID else { return }
+                galleryProxy.scrollTo(photoID, anchor: .center)
+            }
         }
     }
 
