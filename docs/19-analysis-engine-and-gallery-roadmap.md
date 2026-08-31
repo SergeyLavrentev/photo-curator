@@ -280,6 +280,8 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   analysis progress, image pipeline и Quality Lab state.
   - [x] Series cache, selection, rating, detail generation guards и neighbour prefetch вынесены
     в отдельный `PhotoCuratorSeriesModel.swift`; основной state owner сохранён.
+  - [x] Gallery fetch, keyset continuation, automatic loading/error recovery и bucket switch
+    вынесены в `PhotoCuratorGalleryModel.swift`; `AppModel` больше не содержит paging workflow.
 - [x] Prefetch декодирует настоящий `reviewPath`, имеет in-flight coalescing, cancellation,
   visible priority и отдельные thumbnail/review caches.
   Evidence: selection prefetch использует `reviewPath`, пять соседей отменяются при смене окна;

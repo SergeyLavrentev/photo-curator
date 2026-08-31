@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_SOURCES = (
     "PhotoCuratorApp.swift",
     "PhotoCuratorAppModel.swift",
+    "PhotoCuratorGalleryModel.swift",
     "PhotoCuratorSeriesModel.swift",
     "PhotoCuratorSelectionModel.swift",
     "PhotoCuratorHelpViews.swift",
@@ -23,6 +24,7 @@ def test_native_app_is_split_into_bounded_feature_modules() -> None:
     limits = {
         "PhotoCuratorApp.swift": 200,
         "PhotoCuratorAppModel.swift": 2_000,
+        "PhotoCuratorGalleryModel.swift": 250,
         "PhotoCuratorSeriesModel.swift": 350,
         "PhotoCuratorSelectionModel.swift": 250,
         "PhotoCuratorHelpViews.swift": 600,
@@ -99,7 +101,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'model.project?.state == "interrupted" || model.project?.state == "error"' in app
     assert "Остановить и сохранить прогресс" in app
     assert "Удалить анализ и его локальный кэш" in app
-    assert 'private let retainedProjectDefaultsKey = "retainedProjectID"' in app
+    assert 'let retainedProjectDefaultsKey = "retainedProjectID"' in app
     assert 'DisclosureGroup("Детали этапов", isExpanded: $analysisDetailsExpanded)' in app
     assert "Размер итогового Best‑альбома" in app
     assert "Исходный альбом анализируется целиком" in app
@@ -609,11 +611,13 @@ def test_thumbnail_decode_work_is_cancelled_and_repair_invalidates_cache() -> No
 
 def test_gallery_paging_keeps_navigation_and_mutations_in_the_current_page_context() -> None:
     app_model = (ROOT / "packaging/macos/PhotoCuratorAppModel.swift").read_text()
+    gallery_model = (ROOT / "packaging/macos/PhotoCuratorGalleryModel.swift").read_text()
     series_model = (ROOT / "packaging/macos/PhotoCuratorSeriesModel.swift").read_text()
     root_view = (ROOT / "packaging/macos/PhotoCuratorRootView.swift").read_text()
 
-    assert "func loadMorePhotosAutomatically()" in app_model
-    assert "func retryGalleryLoad()" in app_model
+    assert "func loadMorePhotosAutomatically()" in gallery_model
+    assert "func retryGalleryLoad()" in gallery_model
+    assert "func loadPhotos(" not in app_model
     assert "loadMorePhotos(selectFirstNewPhoto: true)" in series_model
     assert "ScrollViewReader { galleryProxy in" in root_view
     assert "galleryProxy.scrollTo(photoID, anchor: .center)" in root_view

@@ -79,6 +79,7 @@ gallery-benchmark:
 	  packaging/macos/PhotoCuratorQualityWizardView.swift \
 	  packaging/macos/PhotoCuratorQualityModel.swift \
 	  packaging/macos/PhotoCuratorAppModel.swift \
+	  packaging/macos/PhotoCuratorGalleryModel.swift \
 	  packaging/macos/PhotoCuratorSeriesModel.swift \
 	  packaging/macos/PhotoCuratorSelectionModel.swift \
 	  packaging/macos/PhotoCuratorHelpViews.swift \
