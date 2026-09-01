@@ -31,7 +31,10 @@ for resource in \
   fi
 done
 
-/bin/rm -rf "$BUILD_ROOT"
+mkdir -p "$BUILD_ROOT"
+/bin/rm -rf \
+  "$APP" "$BACKEND_DIST" "$BACKEND_WORK" "$ICON_WORK" "$SWIFT_MODULES" \
+  "$BUILD_ROOT/PhotoCurator.dmg"
 mkdir -p \
   "$CONTENTS/MacOS" "$RESOURCES/backend" "$BACKEND_DIST" "$BACKEND_WORK" \
   "$ICON_WORK" "$SWIFT_MODULES"

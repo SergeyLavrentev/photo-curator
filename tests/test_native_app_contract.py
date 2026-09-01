@@ -41,6 +41,8 @@ def test_native_app_is_split_into_bounded_feature_modules() -> None:
         assert len(source.splitlines()) <= maximum_lines
         assert filename in makefile
         assert filename in build_script
+    assert '/bin/rm -rf "$BUILD_ROOT"' not in build_script
+    assert '"$BUILD_ROOT/PhotoCurator.dmg"' in build_script
 
 
 def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> None:
