@@ -234,6 +234,10 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   novelty, а не как абсолютную эстетику.
 - [ ] Исправить horizon detector: отличать реальный горизонт от архитектурных/контрастных
   линий и измерить false-positive rate.
+  - [x] Локальный detector v4 использует orientation-aware line voting и снижает confidence
+    при повторяющихся параллельных и сильных ортогональных архитектурных рёбрах. Synthetic
+    regressions покрывают grid и одиночную vertical contrast boundary; пункт остаётся открытым
+    до измерения false-positive rate на album-separated human-labelled корпусе.
 - [ ] Сделать ensemble/calibrator реальным versioned product pipeline с provenance,
   уникальными парами и независимыми calibration/held-out albums.
 - [ ] Codex использовать как budgeted sparse teacher/auditor на disagreement/uncertainty.

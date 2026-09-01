@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
-TECHNICAL_ENGINE_VERSION = "3-horizon-subject-boundary"
+TECHNICAL_ENGINE_VERSION = "4-architecture-aware-horizon"
 
 
 def technical_metrics(image: Image.Image) -> dict[str, float]:
@@ -28,7 +28,12 @@ def technical_metrics(image: Image.Image) -> dict[str, float]:
     probabilities = histogram.astype(np.float64) / max(1, histogram.sum())
     nonzero = probabilities[probabilities > 0]
     entropy = float(-(nonzero * np.log2(nonzero)).sum())
-    horizon_angle, horizon_support = _dominant_horizon(gradient)
+    horizon_stride = max(1, int(np.ceil(max(gradient.shape) / 320.0)))
+    horizon_angle, horizon_support = _dominant_horizon(
+        gx_aligned[::horizon_stride, ::horizon_stride],
+        gy_aligned[::horizon_stride, ::horizon_stride],
+        gradient[::horizon_stride, ::horizon_stride],
+    )
     return {
         "laplacian_variance": float(np.var(laplacian)),
         "gradient_energy": float(np.mean(gradient**2)),
@@ -116,8 +121,10 @@ def subject_quality_metrics(
     }
 
 
-def _dominant_horizon(magnitude: np.ndarray) -> tuple[float | None, float]:
-    """Estimate a supported near-horizontal edge angle; absence remains explicit."""
+def _dominant_horizon(
+    gx: np.ndarray, gy: np.ndarray, magnitude: np.ndarray
+) -> tuple[float | None, float]:
+    """Estimate one long horizon while discounting architectural edge fields."""
     height = magnitude.shape[0]
     top, bottom = int(height * 0.2), max(int(height * 0.8), 1)
     central_magnitude = magnitude[top:bottom]
@@ -126,25 +133,68 @@ def _dominant_horizon(magnitude: np.ndarray) -> tuple[float | None, float]:
     nonzero_magnitude = central_magnitude[central_magnitude > 1e-6]
     if nonzero_magnitude.size < 32:
         return None, 0.0
-    threshold = float(np.percentile(nonzero_magnitude, 70))
-    mask = central_magnitude >= threshold
+    threshold = max(0.025, float(np.percentile(nonzero_magnitude, 75)))
+    central_gx = gx[top:bottom]
+    central_gy = gy[top:bottom]
+    strong = central_magnitude >= threshold
+    # Rasterized diagonal lines contain alternating horizontal and vertical steps,
+    # so their per-pixel gradient direction is not a reliable line angle. Keep
+    # horizontal-facing edge pixels, then vote across the complete angle range.
+    mask = strong & (np.abs(central_gy) >= np.abs(central_gx) * 0.5)
     y, x = np.where(mask)
+    if x.size < 32:
+        return None, 0.0
     weights = central_magnitude[mask]
-    if x.size < 32 or int(x.max()) - int(x.min()) < magnitude.shape[1] * 0.4:
+    center_x = (magnitude.shape[1] - 1) / 2.0
+    intercept_size = max(2.0, height / 80.0)
+    intercept_count = max(1, int(np.ceil(height / intercept_size)) + 1)
+    candidate_angles = np.arange(-29.0, 30.0, 2.0)
+    vote_rows = []
+    for candidate_angle in candidate_angles:
+        candidate_slope = np.tan(np.radians(candidate_angle))
+        intercepts = y + top - candidate_slope * (x - center_x)
+        intercept_bin = np.floor(intercepts / intercept_size).astype(np.int32)
+        valid = (intercept_bin >= 0) & (intercept_bin < intercept_count)
+        vote_rows.append(
+            np.bincount(intercept_bin[valid], weights=weights[valid], minlength=intercept_count)
+        )
+    votes = np.asarray(vote_rows)
+    winner = int(np.argmax(votes))
+    winner_angle = winner // intercept_count
+    winner_intercept = winner % intercept_count
+    angle = float(candidate_angles[winner_angle])
+    slope = float(np.tan(np.radians(angle)))
+    intercept = (winner_intercept + 0.5) * intercept_size
+    predicted = intercept + slope * (x - center_x)
+    inlier = np.abs((y + top) - predicted) <= intercept_size
+    if int(np.count_nonzero(inlier)) < 24:
         return None, 0.0
-    x_mean = float(np.average(x, weights=weights))
-    y_mean = float(np.average(y, weights=weights))
-    centered_x = x - x_mean
-    denominator = float(np.sum(weights * centered_x**2))
-    if denominator <= 1e-9:
-        return None, 0.0
-    slope = float(np.sum(weights * centered_x * (y - y_mean)) / denominator)
-    predicted = y_mean + slope * centered_x
-    total_variance = float(np.sum(weights * (y - y_mean) ** 2))
-    residual = float(np.sum(weights * (y - predicted) ** 2))
-    fit = max(0.0, 1.0 - residual / total_variance) if total_variance > 1e-9 else 0.0
-    coverage = (int(x.max()) - int(x.min())) / max(1, magnitude.shape[1] - 1)
-    support = fit * coverage
+
+    x_inlier = x[inlier]
+    width = magnitude.shape[1]
+    x_bins = np.clip((x_inlier * 16 // max(1, width)).astype(np.int32), 0, 15)
+    coverage = len(np.unique(x_bins)) / 16.0
+    horizontal_weight = float(np.sum(weights))
+    dominance = float(votes.flat[winner]) / max(horizontal_weight, 1e-9)
+
+    # Repeated floor/window/brick lines and strong orthogonal structure are common
+    # architectural false positives. They reduce confidence, without claiming a
+    # semantic sky/ground detector that this local metric cannot provide.
+    same_angle_votes = votes[winner_angle]
+    strong_intercepts = np.where(same_angle_votes >= votes.flat[winner] * 0.35)[0]
+    parallel_lines = 0
+    previous = -10
+    for value in strong_intercepts:
+        if int(value) - previous > 2:
+            parallel_lines += 1
+        previous = int(value)
+    vertical_weight = float(
+        np.sum(central_magnitude[strong & (np.abs(central_gx) > np.abs(central_gy) * 1.5)])
+    )
+    orthogonal_ratio = vertical_weight / max(horizontal_weight + vertical_weight, 1e-9)
+    architecture_discount = 1.0 / (1.0 + 0.65 * max(0, parallel_lines - 1))
+    architecture_discount *= max(0.25, 1.0 - orthogonal_ratio)
+    support = coverage * min(1.0, dominance * 2.5) * architecture_discount
     angle = float(np.degrees(np.arctan(slope)))
     if abs(angle) > 30.0:
         return None, round(support, 4)

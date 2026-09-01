@@ -85,6 +85,30 @@ def test_horizon_and_face_boundary_evidence_are_explicit() -> None:
     assert boundary["subject_boundary_source"] == "faces"
 
 
+def test_architectural_grid_is_not_misclassified_as_one_dominant_horizon() -> None:
+    image = Image.new("RGB", (480, 320), "#333333")
+    draw = ImageDraw.Draw(image)
+    for x in range(30, 480, 45):
+        draw.line((x, 0, x, 320), fill="white", width=5)
+    for y in range(30, 320, 40):
+        draw.line((0, y, 480, y), fill="white", width=5)
+
+    result = technical_metrics(image)
+
+    assert result["dominant_horizon_degrees"] is None
+    assert result["horizon_support"] < 0.25
+
+
+def test_single_high_contrast_vertical_edge_is_not_horizon_evidence() -> None:
+    image = Image.new("RGB", (480, 320), "#222222")
+    ImageDraw.Draw(image).rectangle((235, 0, 245, 320), fill="white")
+
+    result = technical_metrics(image)
+
+    assert result["dominant_horizon_degrees"] is None
+    assert result["horizon_support"] == 0.0
+
+
 def test_robust_normalization_handles_missing_values() -> None:
     assert percentile_ranks([1.0, None, 3.0]) == [0.0, None, 1.0]
     stats = robust_stats([1.0, 2.0, 100.0])
