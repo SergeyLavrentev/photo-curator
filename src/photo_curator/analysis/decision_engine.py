@@ -469,8 +469,6 @@ def _selection_score(
     face_quality = asset.get("face_capture_quality")
     if face_quality is not None:
         bonus += round(float(face_quality) * 8)
-    if int(asset.get("face_count") or 0) and not int(asset.get("eyes_detected") or 0):
-        penalty += 4
     series_rank = 0
     selection_confidence = 70
     if duplicate:
@@ -573,7 +571,6 @@ def _metric_flags(asset: dict[str, object]) -> set[str]:
     face_quality = asset.get("face_capture_quality")
     if (
         int(asset.get("face_count") or 0) > 0
-        and int(asset.get("eyes_detected") or 0) == 0
         and face_quality is not None
         and float(face_quality) <= 0.20
     ):

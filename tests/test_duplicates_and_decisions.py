@@ -305,6 +305,22 @@ def test_low_quality_portrait_flag_needs_a_confirmed_near_duplicate() -> None:
     assert "poor_face_capture" in decision.flags
 
 
+def test_eye_landmark_availability_is_not_treated_as_open_eye_quality() -> None:
+    base = {
+        "favorite": False,
+        "has_adjustments": False,
+        "cache_state": "ready",
+        "face_count": 1,
+        "face_capture_quality": 0.75,
+    }
+
+    without_landmarks = decide_asset({**base, "eyes_detected": 0}, None)
+    with_landmarks = decide_asset({**base, "eyes_detected": 1}, None)
+
+    assert without_landmarks.score == with_landmarks.score
+    assert without_landmarks.flags == with_landmarks.flags
+
+
 def test_local_horizon_and_cropped_face_evidence_remain_review_only() -> None:
     decision = decide_asset(
         {

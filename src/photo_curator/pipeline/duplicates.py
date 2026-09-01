@@ -766,15 +766,9 @@ def _series_quality(
     faces = signals.get("faces")
     face_value = faces.get("value") if faces and faces.get("status") == "ready" else None
     if isinstance(face_value, dict) and int(face_value.get("face_count") or 0) > 0:
-        face_count = max(1, int(face_value.get("face_count") or 0))
         capture = face_value.get("best_capture_quality")
-        eyes_ratio = min(1.0, int(face_value.get("eyes_detected") or 0) / face_count)
-        face_score = (
-            float(capture) * 70.0 + eyes_ratio * 30.0
-            if isinstance(capture, (int, float))
-            else eyes_ratio * 30.0 + 35.0
-        )
-        values.append((max(0.0, min(100.0, face_score)), 0.20))
+        if isinstance(capture, (int, float)):
+            values.append((max(0.0, min(100.0, float(capture) * 100.0)), 0.20))
     codex = signals.get("codex_vision")
     codex_value = codex.get("value") if codex and codex.get("status") == "ready" else None
     if isinstance(codex_value, dict):

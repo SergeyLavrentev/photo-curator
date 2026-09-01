@@ -218,6 +218,9 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
 
 - [ ] Заменить `eyesDetected` на реальную оценку eyes-open/blink/occlusion и сопоставлять
   качество каждому важному лицу, а не брать максимум по группе.
+  - [x] Landmark availability больше не трактуется как открытые глаза: она не штрафует
+    Swipe Score и не участвует в series leader quality. Help явно оставляет blink/open-eye
+    отдельным невалидированным gate; regression фиксирует одинаковый результат при 0/1 landmarks.
 - [ ] Для shortlisted/ambiguous stacks выполнять high-resolution ROI pass: лица, глаза,
   subject sharpness и motion blur; полный альбом не декодировать повторно без необходимости.
 - [ ] Перед допуском NIMA, MobileCLIP, MUSIQ, taste или Codex к leader/final ranking требовать
