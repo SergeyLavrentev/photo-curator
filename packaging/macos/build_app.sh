@@ -11,7 +11,7 @@ BACKEND_DIST="$BUILD_ROOT/pyinstaller-dist"
 BACKEND_WORK="$BUILD_ROOT/pyinstaller-work"
 ICON_WORK="$BUILD_ROOT/icon-work"
 SWIFT_MODULES="$BUILD_ROOT/swift-modules"
-MODEL_SOURCE="$PROJECT_ROOT/.model-cache"
+MODEL_SOURCE="${PHOTO_CURATOR_MODEL_CACHE:-$PROJECT_ROOT/.model-cache}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$PROJECT_ROOT/pyproject.toml" | head -1)"
 

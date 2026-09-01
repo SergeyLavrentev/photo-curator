@@ -539,6 +539,7 @@ def test_every_native_build_produces_and_installs_a_verified_dmg_without_privile
     package_verifier = (ROOT / "packaging/macos/verify_installer.sh").read_text()
 
     assert 'bash "$SCRIPT_DIR/build_dmg.sh"' in build
+    assert "PHOTO_CURATOR_MODEL_CACHE:-$PROJECT_ROOT/.model-cache" in build
     assert "/usr/bin/hdiutil create" in dmg_builder
     assert 'ln -s /Applications "$STAGING/Applications"' in dmg_builder
     assert "/usr/bin/hdiutil attach" in dmg_verifier
