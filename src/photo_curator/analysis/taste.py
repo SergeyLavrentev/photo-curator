@@ -9,7 +9,7 @@ import numpy as np
 from photo_curator.db import repository
 
 TASTE_PROFILE_SCHEMA_VERSION = 1
-TASTE_MODEL_VERSION = "pairwise-linear-v4-context-separated-holdout"
+TASTE_MODEL_VERSION = "pairwise-linear-v5-durable-quality-corpus"
 MIN_CALIBRATION_PAIRS = 3
 
 

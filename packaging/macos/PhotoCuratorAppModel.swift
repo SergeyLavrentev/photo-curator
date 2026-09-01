@@ -182,6 +182,12 @@ final class AppModel: ObservableObject {
     @Published var qualityBudgetSeriesCount = 0
     @Published var qualityDefectLabels = 0
     @Published var qualityReleaseReady = false
+    @Published var qualityTrainingContexts = 0
+    @Published var qualityHeldOutContexts = 0
+    @Published var qualityActiveRound: QualityLearningRoundDTO?
+    @Published var qualityRankerVersion: String?
+    @Published var qualityRankerStatus = "collecting"
+    @Published var qualityTrainingExamples = 0
     @Published var qualityCandidates: [PhotoItem] = []
     @Published var qualityCandidateIndex = 0
     @Published var qualityCandidateRequested = 75
@@ -692,6 +698,7 @@ final class AppModel: ObservableObject {
         qualityBudgetSeriesCount = 0
         qualityDefectLabels = 0
         qualityReleaseReady = false
+        qualityActiveRound = nil
         publishPlan = nil
         currentStep = .analysis
         UserDefaults.standard.removeObject(forKey: retainedProjectDefaultsKey)
@@ -1808,10 +1815,16 @@ final class AppModel: ObservableObject {
             qualityBudgetSeriesCount = value.budgetAnnotatedSeries
             qualityDefectLabels = value.defectLabels
             qualityReleaseReady = value.releaseReady
+            qualityTrainingContexts = value.learning.trainingContexts
+            qualityHeldOutContexts = value.learning.heldOutContexts
+            qualityActiveRound = value.learning.activeRound
+            qualityRankerVersion = value.learning.rankerVersion
+            qualityRankerStatus = value.learning.rankerStatus
+            qualityTrainingExamples = value.learning.trainingExamples
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func refreshDecisionsForTaste() async {
+    func refreshDecisionsForTaste() async {
         guard let project, project.state == "ready" else { return }
         do {
             _ = try await callDTO(

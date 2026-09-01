@@ -14,6 +14,9 @@ struct QualityWizardView: View {
     @State private var seriesEssential: Set<String> = []
     @State private var seriesRedundantGood: Set<String> = []
     @State private var seriesLeaderReasons: Set<String> = []
+    @State private var newRoundSplit = "training"
+    @State private var confirmsRoundRestart = false
+    @State private var confirmsLearningDeletion = false
 
     private let steps = [
         ("Источник", "folder"),
@@ -70,11 +73,39 @@ struct QualityWizardView: View {
         .onAppear {
             model.qualityLabEnabled = true
             model.qualityWizardActive = true
+            if let project = model.project {
+                Task { await model.loadQualityStatus(projectID: project.id) }
+            }
         }
         .onDisappear { model.qualityWizardActive = false }
         .onChange(of: model.qualityCandidateIndex) { _ in resetDefectForm() }
         .onChange(of: model.qualitySeriesCandidates.map(\.id)) { _ in
             if step == 4 { prepareSeriesCandidate() }
+        }
+        .confirmationDialog(
+            "Начать текущий раунд заново?",
+            isPresented: $confirmsRoundRestart,
+            titleVisibility: .visible
+        ) {
+            Button("Сохранить прежний attempt и начать новый") {
+                model.startQualityRound(split: model.qualityActiveRound?.split ?? newRoundSplit)
+                step = 1
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Прежний attempt останется в накопленном corpus. Будет очищена только рабочая разметка текущего анализа.")
+        }
+        .confirmationDialog(
+            "Полностью удалить накопленное обучение?",
+            isPresented: $confirmsLearningDeletion,
+            titleVisibility: .visible
+        ) {
+            Button("Удалить corpus и локальный ранкер", role: .destructive) {
+                model.deleteAllLearningData()
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Будут удалены все обучающие и замороженные контексты, versioned attempts и активный локальный ранкер. Проекты и Apple Photos не изменятся; перед удалением создаётся проверенный backup.")
         }
     }
 
@@ -138,9 +169,35 @@ struct QualityWizardView: View {
                             .buttonStyle(.borderedProminent)
                             .disabled(model.isBusy)
                         } else {
+                            learningOverview
                             sampleControls
-                            Button("Начать слепую разметку") { openStep(1) }
+                            if let round = model.qualityActiveRound {
+                                HStack {
+                                    Button("Продолжить текущий раунд") { openStep(1) }
+                                        .buttonStyle(.borderedProminent)
+                                    Button("Начать этот раунд заново") {
+                                        confirmsRoundRestart = true
+                                    }
+                                }
+                                Text(
+                                    round.split == "training"
+                                        ? "Раунд №\(round.attemptIndex) добавляет принятые human choices в обучение."
+                                        : "Раунд №\(round.attemptIndex) — замороженная проверка и никогда не участвует в fit."
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            } else {
+                                Picker("Назначение нового раунда", selection: $newRoundSplit) {
+                                    Text("Обучение").tag("training")
+                                    Text("Замороженная проверка").tag("held_out")
+                                }
+                                .pickerStyle(.segmented)
+                                Button("Начать новый слепой раунд") {
+                                    model.startQualityRound(split: newRoundSplit)
+                                    step = 1
+                                }
                                 .buttonStyle(.borderedProminent)
+                            }
                         }
                     }
                     if project.state != "running" {
@@ -206,9 +263,40 @@ struct QualityWizardView: View {
                     Text("75 — рекомендуется").tag(75)
                     Text("100").tag(100)
                 }.pickerStyle(.segmented)
-                Text("Выборка фиксирована для проекта и не зависит от прогнозов движка.")
+                Text("Выборка фиксирована для versioned attempt и не зависит от прогнозов движка.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(8)
+        }
+    }
+
+    private var learningOverview: some View {
+        GroupBox("Накопленное локальное обучение") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 20) {
+                    LabeledContent("Train contexts", value: "\(model.qualityTrainingContexts)")
+                    LabeledContent("Held-out contexts", value: "\(model.qualityHeldOutContexts)")
+                }
+                LabeledContent(
+                    "Активный selection ranker",
+                    value: model.qualityRankerVersion ?? "ещё не обучен"
+                )
+                LabeledContent(
+                    "Обучающих сравнений",
+                    value: "\(model.qualityTrainingExamples)"
+                )
+                Text("Ранкер использует сохранённые Apple Vision/Core ML feature snapshots. Foundation-модели не переобучаются; delete/reject safety не меняется.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Экспортировать corpus…") { model.exportLearningCorpus() }
+                    Button("Импортировать corpus…") { model.importLearningCorpus() }
+                    Spacer()
+                    Button("Удалить всё обучение…", role: .destructive) {
+                        confirmsLearningDeletion = true
+                    }
+                }
+            }
+            .padding(8)
         }
     }
 
@@ -286,7 +374,13 @@ struct QualityWizardView: View {
 
     private var pairStep: some View {
         VStack(alignment: .leading, spacing: 18) {
-            wizardTitle("3. Проверочные A/B-сравнения", "Выберите более удачный кадр в 10 независимых парах. Эти ответы не обучают профиль вкуса.")
+            wizardTitle(
+                model.qualityActiveRound?.split == "training"
+                    ? "3. Обучающие A/B-сравнения" : "3. Замороженные A/B-сравнения",
+                model.qualityActiveRound?.split == "training"
+                    ? "Выберите более удачный кадр. Принятые human choices обучают только versioned локальный selection ranker."
+                    : "Выберите более удачный кадр в 10 независимых парах. Эти ответы locked и никогда не участвуют в fit."
+            )
             Text("Готово: \(model.qualityPairCompleted) / 10+")
             if let pair = model.qualityPair {
                 HStack(spacing: 14) {

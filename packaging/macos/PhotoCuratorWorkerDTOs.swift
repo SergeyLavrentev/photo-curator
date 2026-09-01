@@ -248,6 +248,23 @@ struct QualityEvaluateParams: Encodable {
     }
 }
 
+struct QualityRoundStartParams: Encodable {
+    let projectID: String
+    let split: String
+    enum CodingKeys: String, CodingKey {
+        case projectID = "project_id"
+        case split
+    }
+}
+
+struct QualityLearningImportParams: Encodable {
+    let corpus: JSONValue
+}
+
+struct ConfirmedWorkerParams: Encodable {
+    let confirmed: Bool
+}
+
 struct PublishDryRunParams: Encodable {
     let projectID: String
     let kind: String
@@ -401,6 +418,7 @@ struct QualityStatusDTO: Decodable {
     let budgetAnnotatedSeries: Int
     let defectLabels: Int
     let releaseReady: Bool
+    let learning: QualityLearningStatusDTO
 
     enum CodingKeys: String, CodingKey {
         case manualLabels = "manual_labels"
@@ -410,6 +428,52 @@ struct QualityStatusDTO: Decodable {
         case budgetAnnotatedSeries = "budget_annotated_series"
         case defectLabels = "defect_labels"
         case releaseReady = "release_ready"
+        case learning
+    }
+}
+
+struct QualityLearningRoundDTO: Decodable {
+    let id: String
+    let attemptIndex: Int
+    let split: String
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, split, status
+        case attemptIndex = "attempt_index"
+    }
+}
+
+struct QualityLearningStatusDTO: Decodable {
+    let schemaVersion: Int
+    let trainingContexts: Int
+    let heldOutContexts: Int
+    let activeRound: QualityLearningRoundDTO?
+    let rankerVersion: String?
+    let rankerStatus: String
+    let trainingExamples: Int
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case trainingContexts = "training_contexts"
+        case heldOutContexts = "held_out_contexts"
+        case activeRound = "active_round"
+        case rankerVersion = "ranker_version"
+        case rankerStatus = "ranker_status"
+        case trainingExamples = "training_examples"
+    }
+}
+
+struct QualityRoundStartDTO: Decodable {
+    let status: String
+    let roundID: String
+    let attemptIndex: Int
+    let split: String
+
+    enum CodingKeys: String, CodingKey {
+        case status, split
+        case roundID = "round_id"
+        case attemptIndex = "attempt_index"
     }
 }
 

@@ -256,13 +256,13 @@ def _derived_pairs(
     labels = rows["labels"]
     preferences = rows["preferences"]
     assert isinstance(labels, list) and isinstance(preferences, list)
-    result: set[tuple[str, str, str]] = set()
+    result: dict[tuple[str, str], str] = {}
     for row in preferences:
         left = snapshots[str(row["left_uuid"])].asset_key
         right = snapshots[str(row["right_uuid"])].asset_key
         preferred = snapshots[str(row["preferred_uuid"])].asset_key
         ordered = tuple(sorted((left, right)))
-        result.add((ordered[0], ordered[1], preferred))
+        result[(ordered[0], ordered[1])] = preferred
     top_k = sorted(
         (row for row in labels if row.get("top_k_rank") is not None),
         key=lambda row: int(row["top_k_rank"]),
@@ -271,7 +271,7 @@ def _derived_pairs(
         left = snapshots[str(better["asset_uuid"])].asset_key
         right = snapshots[str(worse["asset_uuid"])].asset_key
         ordered = tuple(sorted((left, right)))
-        result.add((ordered[0], ordered[1], left))
+        result.setdefault((ordered[0], ordered[1]), left)
     groups: dict[str, list[dict[str, object]]] = {}
     for row in labels:
         if row.get("duplicate_group"):
@@ -286,8 +286,8 @@ def _derived_pairs(
             if candidate == leader:
                 continue
             ordered = tuple(sorted((leader, candidate)))
-            result.add((ordered[0], ordered[1], leader))
-    return sorted(result)
+            result.setdefault((ordered[0], ordered[1]), leader)
+    return sorted((left, right, preferred) for (left, right), preferred in result.items())
 
 
 def _replace_round_projection(
@@ -303,6 +303,19 @@ def _replace_round_projection(
     series = rows["series"]
     assert isinstance(labels, list) and isinstance(series, list)
     now = repository.utc_now()
+    old_pair_ids = [
+        str(row["id"])
+        for row in connection.execute(
+            "SELECT id FROM learning_preferences WHERE round_id=?", (round_value["id"],)
+        ).fetchall()
+    ]
+    if old_pair_ids:
+        connection.execute(
+            "DELETE FROM preference_examples WHERE id IN ({})".format(
+                ",".join("?" for _ in old_pair_ids)
+            ),
+            old_pair_ids,
+        )
     connection.execute("DELETE FROM learning_preferences WHERE round_id=?", (round_value["id"],))
     connection.execute("DELETE FROM learning_series WHERE round_id=?", (round_value["id"],))
     connection.execute("DELETE FROM learning_assets WHERE round_id=?", (round_value["id"],))
@@ -705,21 +718,8 @@ def import_learning_corpus(
         ):
             raise LearningCorpusError("Predictions cannot be imported as human truth")
     repository.ensure_taste_profile(connection)
-    for context in contexts:
-        if not isinstance(context, dict):
-            raise LearningCorpusError("Invalid learning context")
-        existing = connection.execute(
-            """
-            SELECT split FROM learning_contexts
-            WHERE profile_id='default' AND album_context_hash=? AND episode_context_hash=?
-            """,
-            (context.get("album_context_hash"), context.get("episode_context_hash")),
-        ).fetchone()
-        if existing and existing["split"] != context.get("split"):
-            raise LearningCorpusError("Import would leak one context across training and held_out")
-    inserted = {"contexts": 0, "rounds": 0, "assets": 0, "preferences": 0, "series": 0}
-    for context in contexts:
-        columns = (
+    expected_columns = {
+        "learning_contexts": (
             "id",
             "profile_id",
             "album_context_hash",
@@ -729,7 +729,96 @@ def import_learning_corpus(
             "provenance_json",
             "created_at",
             "updated_at",
-        )
+        ),
+        "learning_rounds": (
+            "id",
+            "profile_id",
+            "context_id",
+            "attempt_index",
+            "status",
+            "source_project_hash",
+            "source_snapshot_hash",
+            "feature_schema",
+            "model_provenance_json",
+            "human_origin",
+            "created_at",
+            "updated_at",
+        ),
+        "learning_assets": (
+            "round_id",
+            "asset_key",
+            "feature_schema",
+            "feature_base64",
+            "feature_provenance_json",
+            "source_revision_hash",
+            "expected_disposition",
+            "defect_codes_json",
+            "defect_severity",
+            "defect_confidence",
+            "top_k_rank",
+            "human_origin",
+            "created_at",
+            "updated_at",
+        ),
+        "learning_preferences": (
+            "id",
+            "round_id",
+            "left_asset_key",
+            "right_asset_key",
+            "preferred_asset_key",
+            "split",
+            "human_origin",
+            "created_at",
+        ),
+        "learning_series": (
+            "round_id",
+            "group_key",
+            "member_asset_keys_json",
+            "leader_asset_key",
+            "target_budget",
+            "essential_asset_keys_json",
+            "redundant_good_asset_keys_json",
+            "leader_reason_codes_json",
+            "provenance_json",
+            "human_origin",
+            "created_at",
+        ),
+    }
+
+    def validate_columns(table: str, row: dict[str, object]) -> None:
+        expected = set(expected_columns[table])
+        if set(row) != expected:
+            raise LearningCorpusError(f"Imported {table} row has unexpected schema")
+
+    for context in contexts:
+        if not isinstance(context, dict):
+            raise LearningCorpusError("Invalid learning context")
+        validate_columns("learning_contexts", context)
+        existing = connection.execute(
+            """
+            SELECT id, split FROM learning_contexts
+            WHERE profile_id='default' AND album_context_hash=? AND episode_context_hash=?
+            """,
+            (context.get("album_context_hash"), context.get("episode_context_hash")),
+        ).fetchone()
+        if existing and existing["split"] != context.get("split"):
+            raise LearningCorpusError("Import would leak one context across training and held_out")
+    inserted = {"contexts": 0, "rounds": 0, "assets": 0, "preferences": 0, "series": 0}
+    context_ids: dict[str, str] = {}
+    for context in contexts:
+        assert isinstance(context, dict)
+        imported_id = str(context["id"])
+        existing = connection.execute(
+            """
+            SELECT id FROM learning_contexts
+            WHERE profile_id='default' AND album_context_hash=? AND episode_context_hash=?
+            """,
+            (context["album_context_hash"], context["episode_context_hash"]),
+        ).fetchone()
+        if existing:
+            context_ids[imported_id] = str(existing["id"])
+            continue
+        columns = expected_columns["learning_contexts"]
         values = [context.get(column) for column in columns]
         values[1] = "default"
         placeholders = ",".join("?" for _ in columns)
@@ -739,18 +828,47 @@ def import_learning_corpus(
             values,
         )
         inserted["contexts"] += int(cursor.rowcount)
+        context_ids[imported_id] = imported_id
+    round_ids: dict[str, str] = {}
+    for raw_round in rounds:
+        assert isinstance(raw_round, dict)
+        validate_columns("learning_rounds", raw_round)
+        imported_id = str(raw_round["id"])
+        context_id = context_ids.get(str(raw_round["context_id"]))
+        if context_id is None:
+            raise LearningCorpusError("Imported round references an unknown context")
+        existing = connection.execute(
+            "SELECT id FROM learning_rounds WHERE context_id=? AND attempt_index=?",
+            (context_id, raw_round["attempt_index"]),
+        ).fetchone()
+        if existing:
+            round_ids[imported_id] = str(existing["id"])
+            continue
+        columns = expected_columns["learning_rounds"]
+        values = [raw_round[column] for column in columns]
+        values[columns.index("profile_id")] = "default"
+        values[columns.index("context_id")] = context_id
+        placeholders = ",".join("?" for _ in columns)
+        cursor = connection.execute(
+            f"INSERT INTO learning_rounds ({','.join(columns)}) VALUES ({placeholders})",
+            values,
+        )
+        inserted["rounds"] += int(cursor.rowcount)
+        round_ids[imported_id] = imported_id
     for name, collection, table in (
-        ("rounds", rounds, "learning_rounds"),
         ("assets", assets, "learning_assets"),
         ("preferences", preferences, "learning_preferences"),
         ("series", series, "learning_series"),
     ):
         for row in collection:
             assert isinstance(row, dict)
-            columns = tuple(row)
+            validate_columns(table, row)
+            columns = expected_columns[table]
             values = [row[column] for column in columns]
-            if table == "learning_rounds" and "profile_id" in columns:
-                values[columns.index("profile_id")] = "default"
+            round_id = round_ids.get(str(row["round_id"]))
+            if round_id is None:
+                raise LearningCorpusError(f"Imported {table} row references an unknown round")
+            values[columns.index("round_id")] = round_id
             if table == "learning_assets":
                 try:
                     decoded = base64.b64decode(str(row["feature_base64"]), validate=True)
@@ -758,6 +876,7 @@ def import_learning_corpus(
                     raise LearningCorpusError("Imported feature snapshot is corrupt") from error
                 if (
                     not decoded
+                    or len(decoded) % 4 != 0
                     or not row.get("feature_schema")
                     or not row.get("feature_provenance_json")
                 ):
@@ -768,6 +887,29 @@ def import_learning_corpus(
                 values,
             )
             inserted[name] += int(cursor.rowcount)
+    for round_id in sorted(set(round_ids.values())):
+        context = connection.execute(
+            """
+            SELECT lc.album_context_hash, lc.episode_context_hash
+            FROM learning_rounds lr JOIN learning_contexts lc ON lc.id=lr.context_id
+            WHERE lr.id=?
+            """,
+            (round_id,),
+        ).fetchone()
+        if context:
+            _sync_taste_examples(
+                connection,
+                round_id,
+                str(context["album_context_hash"]),
+                str(context["episode_context_hash"]),
+            )
+    calibration_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM preference_examples WHERE split='calibration'"
+        ).fetchone()[0]
+    )
+    if calibration_count >= MIN_CALIBRATION_PAIRS:
+        train_taste_profile(connection)
     return inserted
 
 

@@ -1,7 +1,96 @@
+import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 @MainActor
 extension AppModel {
+    func startQualityRound(split: String) {
+        guard let project, ["training", "held_out"].contains(split) else { return }
+        qualityCandidates = []
+        qualitySeriesCandidates = []
+        qualityPair = nil
+        qualityCandidateIndex = 0
+        isQualityBusy = true
+        Task {
+            defer { isQualityBusy = false }
+            do {
+                let started: QualityRoundStartDTO = try await callDTO(
+                    "quality_round_start",
+                    QualityRoundStartParams(projectID: project.id, split: split),
+                    as: QualityRoundStartDTO.self
+                )
+                qualityMessage = split == "training"
+                    ? "Создан обучающий раунд №\(started.attemptIndex)."
+                    : "Создан замороженный проверочный раунд №\(started.attemptIndex)."
+                await loadQualityStatus(projectID: project.id)
+                loadQualityCandidates(limit: qualityCandidateRequested)
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func exportLearningCorpus() {
+        Task {
+            do {
+                let corpus: JSONValue = try await callDTO(
+                    "quality_learning_export", EmptyWorkerParams(), as: JSONValue.self
+                )
+                let panel = NSSavePanel()
+                panel.title = "Экспорт накопленного обучения"
+                panel.nameFieldStringValue = "photo-curator-learning-corpus.json"
+                panel.allowedContentTypes = [.json]
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                try encoder.encode(corpus).write(to: url, options: .atomic)
+                qualityMessage = "Накопленное обучение экспортировано."
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func importLearningCorpus() {
+        Task {
+            do {
+                let panel = NSOpenPanel()
+                panel.title = "Импорт накопленного обучения"
+                panel.allowedContentTypes = [.json]
+                panel.allowsMultipleSelection = false
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                let corpus = try JSONDecoder().decode(
+                    JSONValue.self, from: Data(contentsOf: url)
+                )
+                _ = try await callDTO(
+                    "quality_learning_import",
+                    QualityLearningImportParams(corpus: corpus),
+                    as: JSONValue.self
+                )
+                if let project { await loadQualityStatus(projectID: project.id) }
+                qualityMessage = "Накопленное обучение импортировано и проверено."
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func deleteAllLearningData() {
+        isQualityBusy = true
+        Task {
+            defer { isQualityBusy = false }
+            do {
+                _ = try await callDTO(
+                    "quality_learning_delete",
+                    ConfirmedWorkerParams(confirmed: true),
+                    as: JSONValue.self
+                )
+                qualityTrainingContexts = 0
+                qualityHeldOutContexts = 0
+                qualityActiveRound = nil
+                qualityRankerVersion = nil
+                qualityRankerStatus = "collecting"
+                qualityTrainingExamples = 0
+                qualityMessage = "Все накопленные learning data и локальный ранкер удалены."
+                await refreshDecisionsForTaste()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func loadQualityCandidates(limit: Int = 75) {
         guard let project, project.state == "ready" else { return }
         isQualityBusy = true

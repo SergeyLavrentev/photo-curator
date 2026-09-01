@@ -241,6 +241,17 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "qualityCandidateIndex = following ?? wrapped ?? qualityCandidates.count" in app
     assert '"Слепая разметка завершена"' in app
     assert 'Button("Перейти к A/B")' in app
+    assert '"quality_round_start"' in app
+    assert '"quality_learning_export"' in app
+    assert '"quality_learning_import"' in app
+    assert '"quality_learning_delete"' in app
+    assert 'GroupBox("Накопленное локальное обучение")' in app
+    assert 'Text("Обучение").tag("training")' in app
+    assert 'Text("Замороженная проверка").tag("held_out")' in app
+    assert "Train contexts" in app
+    assert "Held-out contexts" in app
+    assert "Удалить corpus и локальный ранкер" in app
+    assert "Foundation-модели не переобучаются" in app
     assert '"5. Разберите одну связанную серию"' in app
     assert "Здесь показаны только кадры одной сцены или момента — не весь альбом" in app
     assert 'GroupBox("Что осталось")' in app

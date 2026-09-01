@@ -199,3 +199,25 @@ def test_full_learning_delete_requires_confirmation_and_keeps_project(tmp_path: 
         assert repository.get_project(connection, project_id)["id"] == project_id
         assert learning_status(connection)["training_contexts"] == 0
         assert connection.execute("SELECT COUNT(*) FROM learning_assets").fetchone()[0] == 0
+
+
+def test_export_import_round_trip_restores_training_without_prediction_truth(
+    tmp_path: Path,
+) -> None:
+    worker, project_id = _worker(tmp_path)
+    worker.dispatch("quality_round_start", {"project_id": project_id, "split": "training"})
+    candidates = worker.dispatch("quality_candidates", {"project_id": project_id, "limit": 12})
+    for item in candidates["items"][:6]:
+        _label(worker, project_id, item["asset_uuid"])
+    _training_pairs(worker, project_id)
+    corpus = worker.dispatch("quality_learning_export", {})
+
+    worker.dispatch("quality_learning_delete", {"confirmed": True})
+    imported = worker.dispatch("quality_learning_import", {"corpus": corpus})
+
+    assert imported["counts"]["contexts"] == 1
+    assert imported["counts"]["rounds"] == 1
+    assert imported["learning"]["training_contexts"] == 1
+    assert imported["learning"]["training_examples"] >= 3
+    with database_connection(worker.paths.database) as connection:
+        assert load_taste_model(connection) is not None

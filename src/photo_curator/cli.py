@@ -39,6 +39,11 @@ from photo_curator.analysis.performance_benchmark import (
 from photo_curator.db.connection import database_connection
 from photo_curator.db.migrations import migrate
 from photo_curator.db.repository import get_project, list_assets, list_duplicate_groups
+from photo_curator.learning import (
+    LearningCorpusError,
+    export_learning_corpus,
+    import_learning_corpus,
+)
 from photo_curator.logging_setup import configure_logging
 from photo_curator.native_worker import run_native_worker
 from photo_curator.paths import default_application_paths
@@ -64,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
             "acceptance-evidence-export",
             "acceptance-evaluate",
             "acceptance-compare",
+            "learning-corpus-export",
+            "learning-corpus-import",
             "vision-benchmark",
             "coreml-benchmark",
             "local-model-performance-benchmark",
@@ -109,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-pairwise-uplift", type=float, default=0.05)
     parser.add_argument("--min-top-k-uplift", type=float, default=0.10)
     parser.add_argument("--output", type=Path, help="Записать template в файл вместо stdout")
+    parser.add_argument("--input", type=Path, help="JSON corpus для безопасного импорта")
     parser.add_argument(
         "--score-output",
         type=Path,
@@ -653,6 +661,36 @@ def main(argv: list[str] | None = None) -> None:
         paths.ensure()
         configure_logging(paths.log_file)
         raise SystemExit(run_native_worker(paths, demo=args.demo))
+    if args.command == "learning-corpus-export":
+        paths = default_application_paths()
+        with database_connection(paths.database) as connection:
+            migrate(connection)
+            corpus = export_learning_corpus(connection)
+        rendered = json.dumps(corpus, ensure_ascii=False, indent=2) + "\n"
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(rendered, encoding="utf-8")
+            print(f"Learning corpus: {args.output}")
+        else:
+            print(rendered, end="")
+        raise SystemExit(0)
+    if args.command == "learning-corpus-import":
+        if not args.input:
+            parser.error("learning-corpus-import требует --input")
+        try:
+            corpus = json.loads(args.input.read_text(encoding="utf-8"))
+            if not isinstance(corpus, dict):
+                raise LearningCorpusError("Learning corpus root must be an object")
+            paths = default_application_paths()
+            with database_connection(paths.database) as connection:
+                migrate(connection)
+                counts = import_learning_corpus(connection, corpus)
+            print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
+            result = 0
+        except (LearningCorpusError, OSError, json.JSONDecodeError) as error:
+            print(f"Learning corpus import error: {error}", file=sys.stderr)
+            result = 2
+        raise SystemExit(result)
     if args.command == "acceptance-evidence-export":
         try:
             result = run_acceptance_evidence_export_command(args)
