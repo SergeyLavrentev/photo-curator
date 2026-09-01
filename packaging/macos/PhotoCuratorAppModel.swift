@@ -147,6 +147,7 @@ final class AppModel: ObservableObject {
     @Published var operationMessage: String?
     @Published var publishPlan: PublishPlan?
     @Published var publishMessage: String?
+    @Published var publishReanalysisPending = false
     @Published var publishProcessed = 0
     @Published var publishTotal = 0
     @Published var tasteStatus = "loading"
@@ -762,7 +763,9 @@ final class AppModel: ObservableObject {
 
     func confirmCodexAnalysis() {
         codexConsentPending = false
-        if codexConsentAction == "repair" {
+        if codexConsentAction == "publish-refresh" {
+            performPublishReanalysis()
+        } else if codexConsentAction == "repair" {
             performPreviewRepair()
         } else {
             createAndAnalyze()
@@ -1354,7 +1357,52 @@ final class AppModel: ObservableObject {
                     PublishDryRunParams(projectID: project.id, kind: "best"),
                     as: PublishPlan.self
                 )
-            } catch { errorMessage = error.localizedDescription }
+            } catch {
+                if let workerError = error as? NativeWorkerClientError,
+                   workerError.workerType == "PublishSourceChangedError"
+                {
+                    publishReanalysisPending = true
+                } else {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func requestPublishReanalysis() {
+        guard let project, !isBusy else { return }
+        publishReanalysisPending = false
+        if project.analysisMode == "codex" {
+            codexConsentAction = "publish-refresh"
+            codexConsentPending = true
+        } else {
+            performPublishReanalysis()
+        }
+    }
+
+    private func performPublishReanalysis() {
+        guard let project, !isBusy else { return }
+        isBusy = true
+        ThumbnailLoader.invalidateAll()
+        operationMessage = "Обновляем изменившиеся фото и пересчитываем отбор…"
+        errorMessage = nil
+        publishPlan = nil
+        currentStep = .analysis
+        Task {
+            do {
+                _ = try await callDTO(
+                    "start_analysis",
+                    StartAnalysisParams(projectID: project.id, fromStage: "inventory"),
+                    as: WorkerOperationDTO.self
+                )
+                isBusy = false
+                try await Task.sleep(nanoseconds: 250_000_000)
+                startPolling(projectID: project.id)
+            } catch {
+                isBusy = false
+                operationMessage = nil
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

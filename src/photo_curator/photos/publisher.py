@@ -35,6 +35,10 @@ class PublishValidation:
     warnings: list[str] = field(default_factory=list)
 
 
+class PublishSourceChangedError(ValueError):
+    """The immutable publish plan cannot use assets changed since analysis."""
+
+
 class PhotosPublisher:
     def __init__(
         self,
@@ -236,6 +240,8 @@ class PhotosPublisher:
     def dry_run(self, project_id: str, kind: str = "reject") -> dict[str, object]:
         validation = self.validate(project_id, kind)
         if validation.blockers:
+            if any("изображение изменилось после анализа" in item for item in validation.blockers):
+                raise PublishSourceChangedError("; ".join(validation.blockers))
             raise ValueError("; ".join(validation.blockers))
         with database_connection(self.database_path) as connection:
             project = repository.get_project(connection, project_id)

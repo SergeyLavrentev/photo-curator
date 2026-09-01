@@ -11,7 +11,11 @@ from photo_curator.db.migrations import migrate
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.fake_provider import FakePhotosProvider
 from photo_curator.photos.local_provider import LocalAlbumsProvider
-from photo_curator.photos.publisher import PhotosPublisher, unique_album_name
+from photo_curator.photos.publisher import (
+    PhotosPublisher,
+    PublishSourceChangedError,
+    unique_album_name,
+)
 from photo_curator.photos.shared_copy import SharedCopyCoordinator
 from photo_curator.pipeline.coordinator import PipelineCoordinator
 from photo_curator.utils.subprocesses import CommandResult
@@ -305,6 +309,36 @@ def test_apply_requires_new_analysis_after_photokit_revision_changes(tmp_path: P
 
     with pytest.raises(ValueError, match="новый dry-run"):
         publisher.apply(str(dry_run["id"]))
+
+
+def test_dry_run_reports_source_change_as_recoverable_publish_error(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    provider._assets = [
+        replace(asset, source_revision=f"revision-{asset.uuid}-1") for asset in provider._assets
+    ]
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        picked_ids = {
+            str(asset["asset_uuid"])
+            for asset in repository.list_assets(connection, project_id)
+            if asset["final_selection"] == "pick"
+        }
+    picked = next(asset for asset in provider._assets if asset.uuid in picked_ids)
+    provider._assets = [
+        replace(asset, source_revision=f"revision-{asset.uuid}-2")
+        if asset.uuid == picked.uuid
+        else asset
+        for asset in provider._assets
+    ]
+    publisher = PhotosPublisher(
+        database_path=paths.database,
+        paths=paths,
+        provider=provider,
+        executable="/usr/bin/true",
+    )
+
+    with pytest.raises(PublishSourceChangedError, match="изображение изменилось"):
+        publisher.dry_run(project_id, "best")
 
 
 def test_best_album_publish_contains_selected_assets(tmp_path: Path) -> None:

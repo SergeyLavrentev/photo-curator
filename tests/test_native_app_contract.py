@@ -357,10 +357,18 @@ def test_native_gallery_reports_and_repairs_missing_preview_files() -> None:
 
 def test_native_workflow_keeps_publish_behind_dry_run_and_confirmation() -> None:
     app = native_app_source()
+    ipc = (ROOT / "packaging/macos/NativeIPC.swift").read_text()
+    client = (ROOT / "packaging/macos/NativeWorkerClient.swift").read_text()
 
     assert app.index('"publish_dry_run"') < app.index('"publish_apply"')
     assert "confirmed: true" in app
     assert "confirmationDialog" in app
+    assert "publishReanalysisPending" in app
+    assert 'fromStage: "inventory"' in app
+    assert 'workerError.workerType == "PublishSourceChangedError"' in app
+    assert 'Button("Обновить анализ")' in app
+    assert "let type: String?" in ipc
+    assert "var workerType: String?" in client
 
 
 def test_frozen_worker_excludes_legacy_web_and_osxphotos_runtime() -> None:

@@ -72,6 +72,7 @@ enum JSONValue: Codable, Sendable {
 }
 
 struct NativeWorkerErrorEnvelope: Decodable, Sendable {
+    let type: String?
     let message: String
 }
 

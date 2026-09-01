@@ -148,6 +148,8 @@ correct because `xctrace`, joules and an energy budget were unavailable.
 - [x] Keep independent import only for service-owned Shared/disk snapshots.
 - [x] Preserve immutable dry-run, source revalidation, explicit approval and audit.
 - [x] Preview the exact Pick set, immutable UUID digest and destination behaviour before apply.
+- [x] Turn changed-source publish blockers into an explicit safe recovery flow: no album is
+  created, the user can restart from inventory, wait for recalculation and retry the dry run.
 
 Evidence: disposable real-library membership test proving no duplicate asset was created for a
 regular source, the exact acceptance album was removed, its source asset survived cleanup and

@@ -41,6 +41,18 @@ struct RootView: View {
                 "Review‑копии фотографий будут отправлены в OpenAI через ваш локальный Codex. Прогон расходует лимиты подписки ChatGPT/Codex и может занять несколько часов. API key не используется. Исходный альбом Photos не изменяется."
             )
         }
+        .confirmationDialog(
+            "Best‑альбом не создан",
+            isPresented: $model.publishReanalysisPending,
+            titleVisibility: .visible
+        ) {
+            Button("Обновить анализ") { model.requestPublishReanalysis() }
+            Button("Позже", role: .cancel) { model.publishReanalysisPending = false }
+        } message: {
+            Text(
+                "Некоторые исходные фотографии изменились после анализа. Для безопасности Photo Curator остановил создание альбома. Обновите анализ, дождитесь его завершения и снова нажмите «Создать Best‑альбом». Исходный альбом и фотографии не изменяются."
+            )
+        }
         .sheet(
             isPresented: Binding(
                 get: { model.publishPlan != nil },

@@ -4,7 +4,7 @@ import Foundation
 enum NativeWorkerClientError: LocalizedError {
     case missingExecutable
     case invalidResponse
-    case worker(String)
+    case worker(type: String?, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -12,9 +12,14 @@ enum NativeWorkerClientError: LocalizedError {
             return "Не найден встроенный движок Photo Curator"
         case .invalidResponse:
             return "Движок вернул некорректный ответ"
-        case .worker(let message):
+        case .worker(_, let message):
             return message
         }
+    }
+
+    var workerType: String? {
+        guard case .worker(let type, _) = self else { return nil }
+        return type
     }
 }
 
@@ -299,7 +304,7 @@ final class NativeWorkerClient: @unchecked Sendable {
             throw NativeWorkerClientError.invalidResponse
         }
         if let error = response.error {
-            throw NativeWorkerClientError.worker(error.message)
+            throw NativeWorkerClientError.worker(type: error.type, message: error.message)
         }
         guard let result = response.result else {
             throw NativeWorkerClientError.invalidResponse
