@@ -105,6 +105,11 @@ Schema v2 human manifest содержит 50–100 реальных фотогр
 как минимум одну серию с лидером, минимум 10 held-out A/B preferences и минимум 5
 ожидаемых Top-K UUID. Calibration pairs не участвуют в held-out метрике.
 
+Для scene-aware Engine v3 серия дополнительно получает явный target budget, обязательные
+моменты, хорошие, но избыточные кадры и причины относительного выбора лидера. Эти ответы
+связаны с immutable source snapshot; старые series labels без scene-budget полей не считаются
+полноценным evidence и не закрывают structural readiness.
+
 Каждый scorer экспортируется в immutable JSON snapshot с `project_id`, engine name,
 engine version и числовым score для каждого размеченного asset. Один manifest оценивает
 несколько snapshots без изменения labels. Отчёт включает duplicate precision/recall,

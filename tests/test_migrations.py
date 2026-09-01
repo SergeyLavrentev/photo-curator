@@ -43,6 +43,10 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
             row[1]
             for row in connection.execute("PRAGMA table_info(album_snapshot_items)").fetchall()
         }
+        quality_series_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(quality_series_labels)").fetchall()
+        }
 
     assert version == SCHEMA_VERSION
     assert {
@@ -99,6 +103,48 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "longitude",
     } <= asset_columns
     assert {"latitude", "longitude"} <= snapshot_columns
+    assert {
+        "target_budget",
+        "essential_member_uuids_json",
+        "redundant_good_member_uuids_json",
+        "leader_reason_codes_json",
+    } <= quality_series_columns
+
+
+def test_migration_25_preserves_series_provenance_and_adds_empty_scene_truth(
+    tmp_path: Path,
+) -> None:
+    with database_connection(tmp_path / "v24.sqlite3") as connection:
+        create_schema_at(connection, 24)
+        connection.executescript(
+            """
+            INSERT INTO projects (
+                id, name, library_path, library_fingerprint, album_id, album_name,
+                album_full_path, state, settings_json, created_at, updated_at
+            ) VALUES ('p', 'P', '/library', 'fingerprint', 'album', 'Album',
+                      'Album', 'ready', '{}', 'now', 'now');
+            INSERT INTO album_snapshots (
+                id, project_id, source_album_id, membership_hash,
+                item_count, photo_count, skipped_video_count, captured_at
+            ) VALUES ('snapshot', 'p', 'album', 'hash', 2, 2, 0, 'now');
+            INSERT INTO quality_series_labels (
+                project_id, group_id, source_snapshot_id, source_kind,
+                coherence_status, member_fingerprint, created_at
+            ) VALUES ('p', 'g', 'snapshot', 'predicted_group', 'verified', 'fp', 'now');
+            """
+        )
+
+        migrate(connection)
+
+        row = connection.execute(
+            """
+            SELECT source_snapshot_id, target_budget, essential_member_uuids_json,
+                   redundant_good_member_uuids_json, leader_reason_codes_json
+            FROM quality_series_labels
+            """
+        ).fetchone()
+
+    assert tuple(row) == ("snapshot", None, None, None, None)
 
 
 def test_migration_23_adds_optional_location_without_rewriting_assets(tmp_path: Path) -> None:

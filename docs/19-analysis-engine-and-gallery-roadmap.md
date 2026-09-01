@@ -252,8 +252,12 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   Evidence: schema v24 хранит source snapshot, origin, member fingerprint и coherence status;
   predicted groups считаются coherent, manual groups проходят bounded album-order check,
   а evaluator исключает legacy/unverified/mismatched groups из complete human evidence.
-- [ ] Разрешить разметку scene budget, essential moment, redundant-but-good и причины
+- [x] Разрешить разметку scene budget, essential moment, redundant-but-good и причины
   относительного выбора между технически нормальными кадрами.
+  Evidence: schema v25 привязывает target budget, UUID обязательных и хороших избыточных
+  кадров и versioned reason codes к coherent human series/immutable source snapshot. Quality
+  Wizard собирает эти ответы явно; exporter включает только полную непротиворечивую разметку,
+  а legacy series остаются без scene-budget evidence.
 - [ ] Taste calibration и holdout брать из разных albums/episodes; correlated pairs из
   шести кадров не считать независимым evidence.
 - [x] Structural readiness отделить от evaluator pass и release eligibility.

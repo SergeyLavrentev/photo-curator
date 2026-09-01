@@ -117,7 +117,14 @@ extension AppModel {
         }
     }
 
-    func saveWizardQualitySeries(memberIDs: [String], leaderID: String) {
+    func saveWizardQualitySeries(
+        memberIDs: [String],
+        leaderID: String,
+        targetBudget: Int,
+        essentialMemberIDs: [String],
+        redundantGoodMemberIDs: [String],
+        leaderReasonCodes: [String]
+    ) {
         guard let project else { return }
         Task {
             do {
@@ -126,11 +133,15 @@ extension AppModel {
                     QualityCustomSeriesParams(
                         projectID: project.id,
                         memberUUIDs: memberIDs,
-                        leaderUUID: leaderID
+                        leaderUUID: leaderID,
+                        targetBudget: targetBudget,
+                        essentialMemberUUIDs: essentialMemberIDs,
+                        redundantGoodMemberUUIDs: redundantGoodMemberIDs,
+                        leaderReasonCodes: leaderReasonCodes
                     ),
                     as: JSONValue.self
                 )
-                qualityMessage = "Серия сохранена; выбранный кадр назначен лидером."
+                qualityMessage = "Серия, целевой бюджет и причины выбора сохранены."
                 loadQualityCandidates(limit: qualityCandidateRequested)
             } catch { errorMessage = error.localizedDescription }
         }

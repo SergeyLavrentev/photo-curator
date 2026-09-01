@@ -969,21 +969,40 @@ def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Pa
 
     ungrouped = [asset for asset in after_series if asset["duplicate_group"] is None][:2]
     assert len(ungrouped) == 2
+    for asset in ungrouped:
+        worker.dispatch(
+            "quality_label",
+            {
+                "project_id": project_id,
+                "asset_uuid": asset["asset_uuid"],
+                "disposition": "keep",
+                "defect_codes": [],
+            },
+        )
     custom = worker.dispatch(
         "quality_custom_series",
         {
             "project_id": project_id,
             "member_uuids": [asset["asset_uuid"] for asset in ungrouped],
             "leader_uuid": ungrouped[1]["asset_uuid"],
+            "target_budget": 1,
+            "essential_member_uuids": [ungrouped[1]["asset_uuid"]],
+            "redundant_good_member_uuids": [ungrouped[0]["asset_uuid"]],
+            "leader_reason_codes": ["expression", "sharpness"],
         },
     )
     assert custom["leader_uuid"] == ungrouped[1]["asset_uuid"]
     assert custom["duplicate_group"].startswith("human-")
     assert custom["source_snapshot_id"]
     assert custom["source_kind"] == "manual_album_order"
+    assert custom["target_budget"] == 1
+    assert custom["essential_member_uuids"] == [ungrouped[1]["asset_uuid"]]
+    assert custom["redundant_good_member_uuids"] == [ungrouped[0]["asset_uuid"]]
+    assert custom["leader_reason_codes"] == ["expression", "sharpness"]
     status = worker.dispatch("quality_status", {"project_id": project_id})
-    assert status["manual_labels"] == 0
+    assert status["manual_labels"] == 2
     assert status["expected_top_k"] == 2
+    assert status["budget_annotated_series"] == 1
     assert status["release_ready"] is False
 
 

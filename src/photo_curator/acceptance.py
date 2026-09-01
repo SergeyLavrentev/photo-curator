@@ -161,6 +161,7 @@ def build_native_quality_evidence(
         if isinstance(group, str) and group:
             annotated_groups[group].append(asset)
     complete_groups = set()
+    series_targets: list[dict[str, object]] = []
     for group, members in annotated_groups.items():
         member_ids = sorted(str(member["asset_uuid"]) for member in members)
         fingerprint = hashlib.sha256("\0".join(member_ids).encode()).hexdigest()
@@ -183,6 +184,41 @@ def build_native_quality_evidence(
             and next(iter(provenance_rows))[3] == fingerprint
         ):
             complete_groups.add(group)
+            leader_uuid = next(
+                str(member["asset_uuid"])
+                for member in members
+                if member.get("quality_expected_leader")
+            )
+            target_budget = members[0].get("quality_series_target_budget")
+            essential = members[0].get("quality_series_essential_member_uuids")
+            redundant_good = members[0].get("quality_series_redundant_good_member_uuids")
+            leader_reasons = members[0].get("quality_series_leader_reason_codes")
+            if (
+                isinstance(target_budget, int)
+                and not isinstance(target_budget, bool)
+                and 1 <= target_budget <= len(member_ids)
+                and isinstance(essential, list)
+                and isinstance(redundant_good, list)
+                and isinstance(leader_reasons, list)
+                and all(isinstance(value, str) for value in essential + redundant_good)
+                and all(isinstance(value, str) for value in leader_reasons)
+                and leader_uuid in essential
+                and set(essential) <= set(member_ids)
+                and set(redundant_good) <= set(member_ids)
+                and not set(essential) & set(redundant_good)
+                and len(essential) <= target_budget
+                and bool(leader_reasons)
+            ):
+                series_targets.append(
+                    {
+                        "group_id": group,
+                        "leader_uuid": leader_uuid,
+                        "target_budget": target_budget,
+                        "essential_member_uuids": sorted(essential),
+                        "redundant_good_member_uuids": sorted(redundant_good),
+                        "leader_reason_codes": sorted(set(leader_reasons)),
+                    }
+                )
     top_k = [
         str(asset["asset_uuid"])
         for asset in sorted(
@@ -215,6 +251,7 @@ def build_native_quality_evidence(
         "thresholds": DEFAULT_THRESHOLDS.copy(),
         "preference_pairs": pairs,
         "expected_top_k": top_k,
+        "series_targets": sorted(series_targets, key=lambda target: str(target["group_id"])),
         "assets": [
             {
                 "asset_uuid": str(asset["asset_uuid"]),
@@ -311,7 +348,7 @@ def build_native_quality_evidence(
         50 <= len(quality_labelled) <= 100
         and held_out >= MIN_HELD_OUT_PAIRS
         and len(top_k) >= MIN_TOP_K
-        and bool(complete_groups)
+        and bool(series_targets)
     )
     return {
         "schema_version": 1,
@@ -325,6 +362,7 @@ def build_native_quality_evidence(
             "held_out_pairs": held_out,
             "expected_top_k": len(top_k),
             "human_duplicate_groups": len(complete_groups),
+            "budget_annotated_series": len(series_targets),
             "defect_labels": defect_labels,
             "incomplete_human_duplicate_groups": len(annotated_groups) - len(complete_groups),
             "required_manual_labels_min": 50,

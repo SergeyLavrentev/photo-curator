@@ -178,6 +178,7 @@ final class AppModel: ObservableObject {
     @Published var qualityHeldOutPairs = 0
     @Published var qualityTopKCount = 0
     @Published var qualitySeriesCount = 0
+    @Published var qualityBudgetSeriesCount = 0
     @Published var qualityDefectLabels = 0
     @Published var qualityReleaseReady = false
     @Published var qualityCandidates: [PhotoItem] = []
@@ -683,6 +684,7 @@ final class AppModel: ObservableObject {
         qualityHeldOutPairs = 0
         qualityTopKCount = 0
         qualitySeriesCount = 0
+        qualityBudgetSeriesCount = 0
         qualityDefectLabels = 0
         qualityReleaseReady = false
         publishPlan = nil
@@ -1090,7 +1092,11 @@ final class AppModel: ObservableObject {
                     QualityCustomSeriesParams(
                         projectID: project.id,
                         memberUUIDs: members,
-                        leaderUUID: leaderID
+                        leaderUUID: leaderID,
+                        targetBudget: nil,
+                        essentialMemberUUIDs: nil,
+                        redundantGoodMemberUUIDs: nil,
+                        leaderReasonCodes: nil
                     ),
                     as: JSONValue.self
                 )
@@ -1746,6 +1752,7 @@ final class AppModel: ObservableObject {
             qualityHeldOutPairs = value.heldOutPairs
             qualityTopKCount = value.expectedTopK
             qualitySeriesCount = value.humanDuplicateGroups
+            qualityBudgetSeriesCount = value.budgetAnnotatedSeries
             qualityDefectLabels = value.defectLabels
             qualityReleaseReady = value.releaseReady
         } catch { errorMessage = error.localizedDescription }

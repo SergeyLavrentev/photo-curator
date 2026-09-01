@@ -220,10 +220,18 @@ struct QualityCustomSeriesParams: Encodable {
     let projectID: String
     let memberUUIDs: [String]
     let leaderUUID: String
+    let targetBudget: Int?
+    let essentialMemberUUIDs: [String]?
+    let redundantGoodMemberUUIDs: [String]?
+    let leaderReasonCodes: [String]?
     enum CodingKeys: String, CodingKey {
         case projectID = "project_id"
         case memberUUIDs = "member_uuids"
         case leaderUUID = "leader_uuid"
+        case targetBudget = "target_budget"
+        case essentialMemberUUIDs = "essential_member_uuids"
+        case redundantGoodMemberUUIDs = "redundant_good_member_uuids"
+        case leaderReasonCodes = "leader_reason_codes"
     }
 }
 
@@ -388,6 +396,7 @@ struct QualityStatusDTO: Decodable {
     let heldOutPairs: Int
     let expectedTopK: Int
     let humanDuplicateGroups: Int
+    let budgetAnnotatedSeries: Int
     let defectLabels: Int
     let releaseReady: Bool
 
@@ -396,6 +405,7 @@ struct QualityStatusDTO: Decodable {
         case heldOutPairs = "held_out_pairs"
         case expectedTopK = "expected_top_k"
         case humanDuplicateGroups = "human_duplicate_groups"
+        case budgetAnnotatedSeries = "budget_annotated_series"
         case defectLabels = "defect_labels"
         case releaseReady = "release_ready"
     }

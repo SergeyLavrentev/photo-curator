@@ -1067,6 +1067,12 @@ class NativeWorker:
                 project_id,
                 raw_members,
                 _required_string(params, "leader_uuid"),
+                target_budget=_optional_int(params, "target_budget"),
+                essential_member_uuids=_optional_string_list(params, "essential_member_uuids"),
+                redundant_good_member_uuids=_optional_string_list(
+                    params, "redundant_good_member_uuids"
+                ),
+                leader_reason_codes=_optional_string_list(params, "leader_reason_codes"),
             )
 
     def _handle_quality_evaluate(self, params: dict[str, object]) -> dict[str, object]:
@@ -1296,6 +1302,24 @@ def _required_string(values: dict[str, object], key: str) -> str:
     value = values.get(key)
     if not isinstance(value, str) or not value:
         raise NativeWorkerError(f"{key} is required")
+    return value
+
+
+def _optional_int(values: dict[str, object], key: str) -> int | None:
+    value = values.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise NativeWorkerError(f"{key} must be an integer")
+    return value
+
+
+def _optional_string_list(values: dict[str, object], key: str) -> list[str] | None:
+    value = values.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise NativeWorkerError(f"{key} must be a string array")
     return value
 
 

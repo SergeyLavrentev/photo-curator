@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -625,6 +625,17 @@ CREATE TABLE quality_series_labels (
 );
 """
 
+MIGRATION_25 = """
+ALTER TABLE quality_series_labels ADD COLUMN target_budget INTEGER
+CHECK (target_budget IS NULL OR target_budget >= 1);
+ALTER TABLE quality_series_labels
+ADD COLUMN essential_member_uuids_json TEXT;
+ALTER TABLE quality_series_labels
+ADD COLUMN redundant_good_member_uuids_json TEXT;
+ALTER TABLE quality_series_labels
+ADD COLUMN leader_reason_codes_json TEXT;
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -662,6 +673,7 @@ MIGRATIONS = (
     MIGRATION_22,
     MIGRATION_23,
     MIGRATION_24,
+    MIGRATION_25,
 )
 
 _TABLES_BY_VERSION = {
@@ -794,6 +806,14 @@ _COLUMNS_BY_VERSION = {
             "coherence_status",
             "member_fingerprint",
             "created_at",
+        },
+    },
+    25: {
+        "quality_series_labels": {
+            "target_budget",
+            "essential_member_uuids_json",
+            "redundant_good_member_uuids_json",
+            "leader_reason_codes_json",
         },
     },
 }

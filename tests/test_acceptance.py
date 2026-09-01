@@ -385,6 +385,10 @@ def test_native_quality_export_becomes_ready_only_from_complete_human_annotation
             quality_series_source_kind="manual_album_order" if index < 2 else None,
             quality_series_coherence_status="verified" if index < 2 else None,
             quality_series_member_fingerprint=series_fingerprint if index < 2 else None,
+            quality_series_target_budget=1 if index < 2 else None,
+            quality_series_essential_member_uuids=["asset-00"] if index < 2 else [],
+            quality_series_redundant_good_member_uuids=["asset-01"] if index < 2 else [],
+            quality_series_leader_reason_codes=["expression"] if index < 2 else [],
         )
     examples = [
         {
@@ -401,6 +405,17 @@ def test_native_quality_export_becomes_ready_only_from_complete_human_annotation
 
     assert evidence["summary"]["release_ready"] is True
     assert evidence["summary"]["human_duplicate_groups"] == 1
+    assert evidence["summary"]["budget_annotated_series"] == 1
+    assert evidence["manifest"]["series_targets"] == [
+        {
+            "group_id": "human-series",
+            "leader_uuid": "asset-00",
+            "target_budget": 1,
+            "essential_member_uuids": ["asset-00"],
+            "redundant_good_member_uuids": ["asset-01"],
+            "leader_reason_codes": ["expression"],
+        }
+    ]
     assert evidence["manifest"]["expected_top_k"] == [
         "asset-00",
         "asset-01",

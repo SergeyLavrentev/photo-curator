@@ -1641,7 +1641,11 @@ def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[st
             qs.source_snapshot_id AS quality_series_source_snapshot_id,
             qs.source_kind AS quality_series_source_kind,
             qs.coherence_status AS quality_series_coherence_status,
-            qs.member_fingerprint AS quality_series_member_fingerprint
+            qs.member_fingerprint AS quality_series_member_fingerprint,
+            qs.target_budget AS quality_series_target_budget,
+            qs.essential_member_uuids_json AS quality_series_essential_member_uuids_json,
+            qs.redundant_good_member_uuids_json AS quality_series_redundant_good_member_uuids_json,
+            qs.leader_reason_codes_json AS quality_series_leader_reason_codes_json
         FROM assets a
         LEFT JOIN metrics m USING (project_id, asset_uuid)
         LEFT JOIN decisions d USING (project_id, asset_uuid)
@@ -1801,6 +1805,17 @@ QUALITY_DEFECT_CODES = {
     "other",
 }
 
+QUALITY_SERIES_LEADER_REASON_CODES = {
+    "expression",
+    "sharpness",
+    "composition",
+    "subject_visibility",
+    "moment",
+    "viewpoint",
+    "coverage",
+    "other",
+}
+
 
 def set_quality_label(
     connection: sqlite3.Connection,
@@ -1897,12 +1912,37 @@ def label_quality_custom_group(
     leader_uuid: str,
     *,
     source_kind: str = "manual_album_order",
+    target_budget: int | None = None,
+    essential_member_uuids: list[str] | None = None,
+    redundant_good_member_uuids: list[str] | None = None,
+    leader_reason_codes: list[str] | None = None,
 ) -> dict[str, object]:
     members = sorted(set(member_uuids))
     if len(members) < 2:
         raise ValueError("Серия должна содержать не менее двух разных фото")
     if leader_uuid not in members:
         raise ValueError("Выбранный лидер не входит в эту серию")
+    essential = sorted(set(essential_member_uuids or []))
+    redundant_good = sorted(set(redundant_good_member_uuids or []))
+    reason_codes = sorted(set(leader_reason_codes or []))
+    has_scene_budget_truth = target_budget is not None
+    if has_scene_budget_truth:
+        if target_budget < 1 or target_budget > len(members):
+            raise ValueError("Бюджет серии должен быть от 1 до числа её кадров")
+        if leader_uuid not in essential:
+            raise ValueError("Лидер должен входить в обязательные моменты серии")
+        if not set(essential) <= set(members) or not set(redundant_good) <= set(members):
+            raise ValueError("Scene-разметка содержит фото вне серии")
+        if set(essential) & set(redundant_good):
+            raise ValueError("Кадр не может быть одновременно обязательным и избыточным")
+        if len(essential) > target_budget:
+            raise ValueError("Бюджет серии меньше числа обязательных моментов")
+        if not reason_codes:
+            raise ValueError("Укажите хотя бы одну причину выбора лучшего кадра")
+        if any(code not in QUALITY_SERIES_LEADER_REASON_CODES for code in reason_codes):
+            raise ValueError("Неизвестная причина относительного выбора")
+    elif essential or redundant_good or reason_codes:
+        raise ValueError("Scene-разметка требует явный бюджет серии")
     known = {
         str(row["asset_uuid"])
         for row in connection.execute(
@@ -1976,13 +2016,19 @@ def label_quality_custom_group(
         """
         INSERT INTO quality_series_labels (
             project_id, group_id, source_snapshot_id, source_kind,
-            coherence_status, member_fingerprint, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            coherence_status, member_fingerprint, target_budget,
+            essential_member_uuids_json, redundant_good_member_uuids_json,
+            leader_reason_codes_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id, group_id) DO UPDATE SET
             source_snapshot_id=excluded.source_snapshot_id,
             source_kind=excluded.source_kind,
             coherence_status=excluded.coherence_status,
             member_fingerprint=excluded.member_fingerprint,
+            target_budget=excluded.target_budget,
+            essential_member_uuids_json=excluded.essential_member_uuids_json,
+            redundant_good_member_uuids_json=excluded.redundant_good_member_uuids_json,
+            leader_reason_codes_json=excluded.leader_reason_codes_json,
             created_at=excluded.created_at
         """,
         (
@@ -1992,6 +2038,10 @@ def label_quality_custom_group(
             source_kind,
             coherence_status,
             hashlib.sha256("\0".join(members).encode()).hexdigest(),
+            target_budget,
+            json.dumps(essential) if has_scene_budget_truth else None,
+            json.dumps(redundant_good) if has_scene_budget_truth else None,
+            json.dumps(reason_codes) if has_scene_budget_truth else None,
             now,
         ),
     )
@@ -2002,6 +2052,10 @@ def label_quality_custom_group(
         "source_snapshot_id": str(snapshot["id"]),
         "source_kind": source_kind,
         "coherence_status": coherence_status,
+        "target_budget": target_budget,
+        "essential_member_uuids": essential,
+        "redundant_good_member_uuids": redundant_good,
+        "leader_reason_codes": reason_codes,
     }
 
 
@@ -2803,4 +2857,14 @@ def _decode_asset_row(row: dict[str, object]) -> dict[str, object]:
     row["swipe_model_versions"] = (
         json.loads(str(row["swipe_models_json"])) if row.get("swipe_models_json") else {}
     )
+    for source, target in (
+        ("quality_series_essential_member_uuids_json", "quality_series_essential_member_uuids"),
+        (
+            "quality_series_redundant_good_member_uuids_json",
+            "quality_series_redundant_good_member_uuids",
+        ),
+        ("quality_series_leader_reason_codes_json", "quality_series_leader_reason_codes"),
+    ):
+        raw = row.get(source)
+        row[target] = json.loads(str(raw)) if raw else []
     return row
