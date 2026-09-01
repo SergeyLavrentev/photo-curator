@@ -214,8 +214,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "PHOTO_CURATOR_DEVELOPER_TOOLS" in app
     assert "if model.qualityToolsEnabled" in app
     assert 'Toggle("Лаборатория качества", isOn: $model.qualityLabEnabled)' in app
-    assert "showsQualityWizard = true" in app
-    assert 'Button("Назад к настройкам", systemImage: "chevron.left")' in app
+    assert 'openWindow(id: "photo-curator-quality-wizard")' in app
+    assert "showsQualityWizard" not in app
+    assert 'Window("Мастер проверки качества", id: "photo-curator-quality-wizard")' in app
     assert "if model.isQualityBusy { ProgressView().controlSize(.small) }" in app
     assert "selectedAlbumIsTemporarilyUnavailable" in app
     assert "selectedAlbumIsAvailable" in app
@@ -225,6 +226,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "!model.galleryShortcutsAllowed || model.photos.isEmpty" in app
     assert ".keyboardShortcut(.rightArrow, modifiers: [])" in app
     assert ".keyboardShortcut(.leftArrow, modifiers: [])" in app
+    assert "qualityCandidateIndex = following ?? wrapped ?? qualityCandidates.count" in app
+    assert '"Слепая разметка завершена"' in app
+    assert 'Button("Перейти к A/B")' in app
     assert 'let codes = defectCodes.isEmpty ? ["other"]' in app
     assert "→ хорошее · ← плохое" in app
     assert "Сначала разрешите доступ к Photos" in app

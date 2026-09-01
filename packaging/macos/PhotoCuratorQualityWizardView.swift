@@ -257,13 +257,25 @@ struct QualityWizardView: View {
                     }.frame(width: 330)
                 }
             } else {
-                unavailable(
-                    "Нет готовых кадров",
-                    symbol: "photo.badge.exclamationmark",
-                    detail: model.unavailablePreviewFiles > 0
-                        ? "Локальные изображения были очищены. Вернитесь на шаг «Источник» и восстановите их."
-                        : "Завершите анализ или выберите другой альбом."
-                )
+                if !model.qualityCandidates.isEmpty
+                    && model.qualityCandidates.allSatisfy({ $0.qualityDisposition != nil })
+                {
+                    unavailable(
+                        "Слепая разметка завершена",
+                        symbol: "checkmark.seal.fill",
+                        detail: "Все кадры получили ручное решение. Переходите к A/B-сравнениям."
+                    )
+                    Button("Перейти к A/B") { openStep(2) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    unavailable(
+                        "Нет готовых кадров",
+                        symbol: "photo.badge.exclamationmark",
+                        detail: model.unavailablePreviewFiles > 0
+                            ? "Локальные изображения были очищены. Вернитесь на шаг «Источник» и восстановите их."
+                            : "Завершите анализ или выберите другой альбом."
+                    )
+                }
             }
         }
         .padding(24)

@@ -2,27 +2,10 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
     @State private var confirmsTasteReset = false
-    @State private var showsQualityWizard = false
 
     var body: some View {
-        Group {
-        if showsQualityWizard {
-            VStack(spacing: 0) {
-                HStack {
-                    Button("Назад к настройкам", systemImage: "chevron.left") {
-                        showsQualityWizard = false
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-                Divider()
-                QualityWizardView()
-                    .environmentObject(model)
-            }
-            .frame(minWidth: 940, minHeight: 680)
-        } else {
         ScrollView {
         Form {
             Section("Локальный движок") {
@@ -105,7 +88,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                 if model.qualityToolsEnabled {
                     Button("Открыть мастер проверки качества…") {
-                        showsQualityWizard = true
+                        openWindow(id: "photo-curator-quality-wizard")
                     }
                     .buttonStyle(.borderedProminent)
                     Text("Экспортирует явную разметку и замороженный Swipe Score.")
@@ -169,8 +152,6 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(maxWidth: .infinity)
         .padding(20)
-        }
-        }
         }
         .confirmationDialog(
             "Удалить профиль вкуса?",

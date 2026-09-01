@@ -18,7 +18,7 @@ extension AppModel {
                 qualityCandidateAvailable = response.available
                 qualityCandidateIndex = response.items.firstIndex {
                     $0.qualityDisposition == nil
-                } ?? max(0, response.items.count - 1)
+                } ?? response.items.count
                 await loadQualityStatus(projectID: project.id)
             } catch { errorMessage = error.localizedDescription }
         }
@@ -52,7 +52,13 @@ extension AppModel {
                 )
                 if let index = qualityCandidates.firstIndex(where: { $0.id == photoID }) {
                     qualityCandidates[index] = updated
-                    qualityCandidateIndex = min(index + 1, max(0, qualityCandidates.count - 1))
+                    let following = qualityCandidates.indices.first {
+                        $0 > index && qualityCandidates[$0].qualityDisposition == nil
+                    }
+                    let wrapped = qualityCandidates.indices.first {
+                        $0 <= index && qualityCandidates[$0].qualityDisposition == nil
+                    }
+                    qualityCandidateIndex = following ?? wrapped ?? qualityCandidates.count
                 }
                 await loadQualityStatus(projectID: project.id)
             } catch { errorMessage = error.localizedDescription }
