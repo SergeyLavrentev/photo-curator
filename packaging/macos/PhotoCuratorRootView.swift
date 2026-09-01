@@ -634,51 +634,53 @@ struct RootView: View {
 
                 if model.workspaceMode == .grid {
                     LazyVGrid(
-                    columns: [
-                        GridItem(
-                            .adaptive(
-                                minimum: galleryCardWidth,
-                                maximum: galleryCardWidth
-                            ),
-                            spacing: 4
-                        )
-                    ],
-                    alignment: .leading,
-                    spacing: 4
+                        columns: [
+                            GridItem(
+                                .adaptive(
+                                    minimum: galleryCardWidth,
+                                    maximum: galleryCardWidth
+                                ),
+                                spacing: 4,
+                                alignment: .top
+                            )
+                        ],
+                        alignment: .leading,
+                        spacing: 4
                     ) {
                         ForEach(visibleGridPhotos) { photo in
-                        PhotoCard(
-                            photo: photo,
-                            selected: model.selectedPhotoID == photo.id,
-                            multiSelected: model.selectedPhotoIDs.contains(photo.id),
-                            developerToolsEnabled: model.qualityToolsEnabled,
-                            select: { model.selectPhoto(photoID: photo.id) },
-                            toggleMultiSelection: {
-                                model.togglePhotoSelection(photoID: photo.id)
-                            },
-                            preview: {
-                                model.selectPhoto(photoID: photo.id)
-                                model.previewSelected()
-                            },
-                            openDetails: { model.openPhotoDetails(photoID: photo.id) },
-                            openGoodPhoto: model.openGoodPhoto,
-                            seriesSelected: model.qualitySeriesSelection.contains(photo.id),
-                            toggleTopK: { model.toggleQualityTopK(photoID: photo.id) },
-                            toggleSeriesSelection: {
-                                model.toggleQualitySeriesSelection(photoID: photo.id)
-                            },
-                            labelSeriesLeader: { model.labelSeriesLeader(photoID: photo.id) },
-                            stackCount: stackCount(for: photo),
-                            toggleStack: {
-                                guard let group = photo.duplicateGroup else { return }
-                                model.toggleSeriesExpansion(groupID: group)
-                            },
-                            rate: { model.setRating(photoID: photo.id, rating: $0) }
-                        ) { disposition in
-                            model.setDecision(photoID: photo.id, disposition: disposition)
-                        }
-                        .equatable()
-                        .id(photo.id)
+                            PhotoCard(
+                                photo: photo,
+                                cardWidth: galleryCardWidth,
+                                selected: model.selectedPhotoID == photo.id,
+                                multiSelected: model.selectedPhotoIDs.contains(photo.id),
+                                developerToolsEnabled: model.qualityToolsEnabled,
+                                select: { model.selectPhoto(photoID: photo.id) },
+                                toggleMultiSelection: {
+                                    model.togglePhotoSelection(photoID: photo.id)
+                                },
+                                preview: {
+                                    model.selectPhoto(photoID: photo.id)
+                                    model.previewSelected()
+                                },
+                                openDetails: { model.openPhotoDetails(photoID: photo.id) },
+                                openGoodPhoto: model.openGoodPhoto,
+                                seriesSelected: model.qualitySeriesSelection.contains(photo.id),
+                                toggleTopK: { model.toggleQualityTopK(photoID: photo.id) },
+                                toggleSeriesSelection: {
+                                    model.toggleQualitySeriesSelection(photoID: photo.id)
+                                },
+                                labelSeriesLeader: { model.labelSeriesLeader(photoID: photo.id) },
+                                stackCount: stackCount(for: photo),
+                                toggleStack: {
+                                    guard let group = photo.duplicateGroup else { return }
+                                    model.toggleSeriesExpansion(groupID: group)
+                                },
+                                rate: { model.setRating(photoID: photo.id, rating: $0) }
+                            ) { disposition in
+                                model.setDecision(photoID: photo.id, disposition: disposition)
+                            }
+                            .equatable()
+                            .id(photo.id)
                         }
                     }
                 } else {

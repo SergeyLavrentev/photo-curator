@@ -298,9 +298,11 @@ let selectionCardMinimumWidth: CGFloat = 96
 let selectionCardDefaultWidth: CGFloat = 128
 let selectionCardMaximumWidth: CGFloat = 260
 let selectionCardZoomStep: CGFloat = 8
+let selectionCardDeveloperFooterHeight: CGFloat = 46
 
 struct PhotoCard: View, Equatable {
     let photo: PhotoItem
+    let cardWidth: CGFloat
     let selected: Bool
     let multiSelected: Bool
     let developerToolsEnabled: Bool
@@ -320,6 +322,7 @@ struct PhotoCard: View, Equatable {
 
     static func == (lhs: PhotoCard, rhs: PhotoCard) -> Bool {
         lhs.photo == rhs.photo
+            && lhs.cardWidth == rhs.cardWidth
             && lhs.selected == rhs.selected
             && lhs.multiSelected == rhs.multiSelected
             && lhs.developerToolsEnabled == rhs.developerToolsEnabled
@@ -340,13 +343,21 @@ struct PhotoCard: View, Equatable {
         }
     }
 
+    private var previewSide: CGFloat {
+        max(1, cardWidth - 4)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack {
                 Button(action: select) {
                     Group {
                         if let path = photo.thumbnailPath ?? photo.reviewPath {
-                            CachedThumbnail(path: path, maxPixelSize: 320)
+                            CachedThumbnail(
+                                path: path,
+                                maxPixelSize: max(320, Int(cardWidth * 2)),
+                                contentMode: .fill
+                            )
                         } else {
                             Rectangle().fill(.quaternary).overlay(Image(systemName: "photo"))
                         }
@@ -354,8 +365,7 @@ struct PhotoCard: View, Equatable {
                 }
                 .buttonStyle(.plain)
             }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(4 / 3, contentMode: .fit)
+            .frame(width: previewSide, height: previewSide)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .contextMenu {
@@ -450,47 +460,73 @@ struct PhotoCard: View, Equatable {
             .frame(maxWidth: .infinity)
             .clipped()
             if developerToolsEnabled {
-                HStack {
-                    Button(action: toggleTopK) {
-                        HStack(spacing: 3) {
-                            Image(systemName: photo.qualityTopKRank == nil ? "star" : "star.fill")
-                            if let rank = photo.qualityTopKRank {
-                                Text("#\(rank)").font(.caption2.monospacedDigit())
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Button(action: toggleTopK) {
+                            HStack(spacing: 3) {
+                                Image(systemName: photo.qualityTopKRank == nil ? "star" : "star.fill")
+                                if let rank = photo.qualityTopKRank {
+                                    Text("#\(rank)").font(.caption2.monospacedDigit())
+                                }
                             }
                         }
-                    }
-                    .buttonStyle(.plain)
-                    .help(photo.qualityTopKRank == nil ? "Добавить в мой Top‑K" : "Убрать из моего Top‑K")
-                    .accessibilityLabel(
-                        photo.qualityTopKRank.map { "Позиция \($0) в моём Top-K" }
-                            ?? "Добавить в мой Top-K"
-                    )
-                    Button(action: toggleSeriesSelection) {
-                        Image(systemName: seriesSelected ? "square.stack.3d.up.fill" : "square.stack.3d.up")
+                        .buttonStyle(.plain)
+                        .help(photo.qualityTopKRank == nil ? "Добавить в мой Top‑K" : "Убрать из моего Top‑K")
+                        .accessibilityLabel(
+                            photo.qualityTopKRank.map { "Позиция \($0) в моём Top-K" }
+                                ?? "Добавить в мой Top-K"
+                        )
+                        Button(action: toggleSeriesSelection) {
+                            Image(
+                                systemName: seriesSelected
+                                    ? "square.stack.3d.up.fill"
+                                    : "square.stack.3d.up"
+                            )
                             .foregroundStyle(seriesSelected ? Color.accentColor : Color.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(seriesSelected ? "Убрать из ручной серии" : "Добавить в ручную серию")
+                        .accessibilityLabel(
+                            seriesSelected
+                                ? "Убрать фото из ручной серии"
+                                : "Добавить фото в ручную серию"
+                        )
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                    .help(seriesSelected ? "Убрать из ручной серии" : "Добавить в ручную серию")
-                    .accessibilityLabel(
-                        seriesSelected ? "Убрать фото из ручной серии" : "Добавить фото в ручную серию"
-                    )
-                    Spacer()
+                    if photo.duplicateGroup != nil {
+                        Button(action: labelSeriesLeader) {
+                            Label(
+                                photo.qualityExpectedLeader ? "Лучший кадр подтверждён" : "Это лучший кадр серии",
+                                systemImage: photo.qualityExpectedLeader
+                                    ? "checkmark.seal.fill"
+                                    : "square.stack.3d.up"
+                            )
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption.weight(.semibold))
+                        .help(
+                            photo.qualityExpectedLeader
+                                ? "Лучший кадр серии подтверждён"
+                                : "Отметить как лучший кадр серии"
+                        )
+                    } else {
+                        Color.clear
+                            .frame(height: 16)
+                            .accessibilityHidden(true)
+                    }
                 }
-                .frame(maxWidth: .infinity)
-            }
-            if developerToolsEnabled, photo.duplicateGroup != nil {
-                Button(action: labelSeriesLeader) {
-                    Label(
-                        photo.qualityExpectedLeader ? "Лучший кадр серии подтверждён" : "Это лучший кадр серии",
-                        systemImage: photo.qualityExpectedLeader ? "checkmark.seal.fill" : "square.stack.3d.up"
-                    )
-                }
-                .buttonStyle(.borderless)
-                .font(.caption.weight(.semibold))
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: selectionCardDeveloperFooterHeight,
+                    maxHeight: selectionCardDeveloperFooterHeight,
+                    alignment: .topLeading
+                )
             }
         }
         .padding(2)
-        .frame(maxWidth: .infinity)
+        .frame(width: cardWidth)
         .background(.background, in: RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)

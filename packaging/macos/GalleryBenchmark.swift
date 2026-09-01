@@ -12,13 +12,20 @@ private struct BenchmarkGrid: View {
     var body: some View {
         ScrollView {
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 128, maximum: 128), spacing: 4)],
+                columns: [
+                    GridItem(
+                        .adaptive(minimum: 128, maximum: 128),
+                        spacing: 4,
+                        alignment: .top
+                    )
+                ],
                 alignment: .leading,
                 spacing: 4
             ) {
                 ForEach(photos) { photo in
                     PhotoCard(
                         photo: photo,
+                        cardWidth: 128,
                         selected: photo.id == selectedID,
                         multiSelected: false,
                         developerToolsEnabled: false,

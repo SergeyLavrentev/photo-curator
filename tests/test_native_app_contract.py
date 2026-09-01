@@ -142,7 +142,12 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "Slider(" in app
     assert "let selectionCardMaximumWidth: CGFloat = 260" in app
     assert ".adaptive(" in app
-    assert ".aspectRatio(4 / 3, contentMode: .fit)" in app
+    assert "let cardWidth: CGFloat" in app
+    assert "max(1, cardWidth - 4)" in app
+    assert ".frame(width: previewSide, height: previewSide)" in app
+    assert ".frame(width: cardWidth)" in app
+    assert "selectionCardDeveloperFooterHeight" in app
+    assert ".lineLimit(1)" in app
     assert "systemImage: bucket.symbol" in app
     assert '"binary_decisions"' in app
     assert "selection: selectionBucket.rawValue" in app
