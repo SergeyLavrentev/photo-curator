@@ -1417,6 +1417,40 @@ def _quality_series_candidate(
         and _existing_file(asset.get("review_path"))
         and asset.get("final_disposition") in {"keep", "review", "reject"}
     }
+    manual_groups: dict[str, list[dict[str, object]]] = {}
+    for asset in eligible.values():
+        group_id = asset.get("quality_duplicate_group")
+        if (
+            isinstance(group_id, str)
+            and group_id
+            and asset.get("quality_series_source_kind") == "manual_album_order"
+            and asset.get("quality_series_coherence_status") == "verified"
+            and asset.get("quality_series_target_budget") is None
+        ):
+            manual_groups.setdefault(group_id, []).append(asset)
+    manual_candidates = [
+        {
+            "group_id": group_id,
+            "kind": "manual_album_order",
+            "assets": sorted(
+                members,
+                key=lambda asset: (
+                    str(asset.get("taken_at") or ""),
+                    str(asset["asset_uuid"]),
+                ),
+            ),
+        }
+        for group_id, members in manual_groups.items()
+        if 2 <= len(members) <= min(12, max_members)
+    ]
+    if manual_candidates:
+        return min(
+            manual_candidates,
+            key=lambda candidate: (
+                abs(len(candidate["assets"]) - 6),
+                str(candidate["group_id"]),
+            ),
+        )
     candidates: list[tuple[tuple[object, ...], dict[str, object]]] = []
     for group in groups:
         if str(group.get("kind") or "") == "exact":

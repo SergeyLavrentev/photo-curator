@@ -73,6 +73,9 @@ struct QualityWizardView: View {
         }
         .onDisappear { model.qualityWizardActive = false }
         .onChange(of: model.qualityCandidateIndex) { _ in resetDefectForm() }
+        .onChange(of: model.qualitySeriesCandidates.map(\.id)) { _ in
+            if step == 4 { prepareSeriesCandidate() }
+        }
     }
 
     private var sidebar: some View {
@@ -450,7 +453,7 @@ struct QualityWizardView: View {
                             if model.qualitySeriesCount < 1 || model.qualityBudgetSeriesCount < 1 {
                                 if model.qualitySeriesCandidates.isEmpty {
                                     Label(
-                                        "В этом альбоме не нашлась подходящая связная серия. Экспорт сохранён, но для закрытия серии нужен другой анализ с серийной съёмкой.",
+                                        "Движок автоматически не нашёл подходящую связную серию — это не означает, что серий в альбоме нет. Закройте мастер, добавьте 2–12 кадров одной сцены в ручную серию через контекстное меню галереи и назначьте текущий кадр лидером. Затем снова откройте этот шаг и задайте целевое количество кадров.",
                                         systemImage: "square.stack.3d.up.slash"
                                     )
                                 } else {

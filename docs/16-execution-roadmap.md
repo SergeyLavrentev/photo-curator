@@ -247,7 +247,8 @@ blind sample, defect taxonomy, held-out A/B, ordered Top-K, series/leader and ex
 Lab labels carry explicit sampled provenance, and lab A/B evidence is isolated from taste training.
 The summary distinguishes a complete fixture from an intermediate export and names the exact
 remaining step. If the current album has no coherent series candidate, it asks for a different
-series-rich album instead of inviting the user to compare unrelated photographs.
+series-rich sample or an explicit manual series instead of inviting the user to compare unrelated
+photographs; absence of an automatic candidate is not presented as proof that no series exists.
 
 ## R10 — completion audit
 

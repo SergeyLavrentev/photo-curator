@@ -242,7 +242,8 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert '"5. Разберите одну связанную серию"' in app
     assert "Здесь показаны только кадры одной сцены или момента — не весь альбом" in app
     assert 'GroupBox("Что осталось")' in app
-    assert "для закрытия серии нужен другой анализ с серийной съёмкой" in app
+    assert "это не означает, что серий в альбоме нет" in app
+    assert "в ручную серию через контекстное меню галереи" in app
     assert "Промежуточный экспорт сохранён" in app
     assert "qualitySeriesCandidates" in app
     assert "sourceGroupID" in app

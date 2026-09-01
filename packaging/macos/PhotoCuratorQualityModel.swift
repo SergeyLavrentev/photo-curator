@@ -17,7 +17,8 @@ extension AppModel {
                 qualityCandidateRequested = response.requested
                 qualityCandidateAvailable = response.available
                 qualityCandidateLabelled = response.labelled
-                qualitySeriesCandidateGroupID = response.series?.groupID
+                qualitySeriesCandidateGroupID = response.series?.kind == "manual_album_order"
+                    ? nil : response.series?.groupID
                 qualitySeriesCandidateKind = response.series?.kind
                 qualitySeriesCandidates = response.series?.items ?? []
                 qualityCandidateIndex = response.items.firstIndex {

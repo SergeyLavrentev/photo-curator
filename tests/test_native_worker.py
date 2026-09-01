@@ -1006,6 +1006,40 @@ def test_native_worker_persists_top_k_order_and_human_series_leader(tmp_path: Pa
     assert status["release_ready"] is False
 
 
+def test_quality_wizard_reopens_manual_series_for_budget_annotation(tmp_path: Path) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    member_ids = [asset.uuid for asset in provider._assets[:2]]
+    for asset_uuid in member_ids:
+        worker.dispatch(
+            "quality_label",
+            {
+                "project_id": project_id,
+                "asset_uuid": asset_uuid,
+                "disposition": "keep",
+                "defect_codes": [],
+            },
+        )
+    manual = worker.dispatch(
+        "quality_custom_series",
+        {
+            "project_id": project_id,
+            "member_uuids": member_ids,
+            "leader_uuid": member_ids[0],
+        },
+    )
+    assert manual["source_kind"] == "manual_album_order"
+    assert manual["coherence_status"] == "verified"
+    assert manual["target_budget"] is None
+
+    candidates = worker.dispatch("quality_candidates", {"project_id": project_id, "limit": 75})
+
+    assert candidates["series"]["group_id"] == manual["duplicate_group"]
+    assert candidates["series"]["kind"] == "manual_album_order"
+    assert {item["asset_uuid"] for item in candidates["series"]["items"]} == set(member_ids)
+
+
 def test_quality_wizard_is_blind_and_keeps_held_out_pairs_out_of_taste_profile(
     tmp_path: Path,
 ) -> None:
