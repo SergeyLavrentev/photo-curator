@@ -435,6 +435,32 @@ struct QualityWizardView: View {
                 )
                 .font(.headline)
                 .foregroundStyle(model.qualityReleaseReady ? .green : .orange)
+                if !model.qualityReleaseReady {
+                    GroupBox("Что осталось") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if model.qualityManualLabels < 50 {
+                                missingStep("Завершите слепую разметку: нужно минимум 50 решений.", step: 1)
+                            }
+                            if model.qualityHeldOutPairs < 10 {
+                                missingStep("Выполните минимум 10 независимых A/B‑сравнений.", step: 2)
+                            }
+                            if model.qualityTopKCount < 5 {
+                                missingStep("Выберите минимум пять лучших кадров Top‑K.", step: 3)
+                            }
+                            if model.qualitySeriesCount < 1 || model.qualityBudgetSeriesCount < 1 {
+                                if model.qualitySeriesCandidates.isEmpty {
+                                    Label(
+                                        "В этом альбоме не нашлась подходящая связная серия. Экспорт сохранён, но для закрытия серии нужен другой анализ с серийной съёмкой.",
+                                        systemImage: "square.stack.3d.up.slash"
+                                    )
+                                } else {
+                                    missingStep("Разберите найденную связанную серию и сохраните целевой бюджет.", step: 4)
+                                }
+                            }
+                        }
+                        .padding(8)
+                    }
+                }
                 HStack {
                     Button("Экспортировать набор…") { model.exportQualityEvidence() }
                         .buttonStyle(.borderedProminent)
@@ -445,6 +471,14 @@ struct QualityWizardView: View {
             }
             .padding(28)
             .frame(maxWidth: 760, alignment: .leading)
+        }
+    }
+
+    private func missingStep(_ title: String, step: Int) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Label(title, systemImage: "circle.dashed")
+            Spacer()
+            Button("Открыть") { openStep(step) }
         }
     }
 

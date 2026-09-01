@@ -243,6 +243,9 @@ compile manifests enumerate the same production sources.
 Quality acceptance now has a dedicated six-step native wizard: source analysis, deterministic
 blind sample, defect taxonomy, held-out A/B, ordered Top-K, series/leader and export/evaluation.
 Lab labels carry explicit sampled provenance, and lab A/B evidence is isolated from taste training.
+The summary distinguishes a complete fixture from an intermediate export and names the exact
+remaining step. If the current album has no coherent series candidate, it asks for a different
+series-rich album instead of inviting the user to compare unrelated photographs.
 
 ## R10 — completion audit
 

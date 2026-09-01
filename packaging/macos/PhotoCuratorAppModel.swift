@@ -501,8 +501,8 @@ final class AppModel: ObservableObject {
                     options: .atomic
                 )
                 qualityMessage = releaseReady
-                    ? "Quality fixture готов к evaluation."
-                    : "Сохранено: \(labels) решений, \(heldOut) A/B, Top‑K \(topK), серий \(series)."
+                    ? "Готовый проверочный набор сохранён в \(directory.path)."
+                    : "Промежуточный экспорт сохранён в \(directory.path). Незакрытые шаги остаются в мастере."
             } catch { errorMessage = error.localizedDescription }
         }
     }
