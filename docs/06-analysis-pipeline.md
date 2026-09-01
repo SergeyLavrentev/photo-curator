@@ -32,6 +32,7 @@ metadata-only source inventory
   → exact duplicate protection
   → Apple Vision native signals
   → optional Core ML / Apple Photos enrichment
+  → bounded high-resolution ROI for shortlisted series
   → semantic scene and series grouping
   → generic Swipe Score
   → best-in-series comparison
@@ -59,6 +60,18 @@ PhotoKit renders с ограниченным параллелизмом, пер�
 - sharpness, clipping, exposure and contrast defects.
 
 These signals protect correctness and break close ties. They do not define aesthetic appeal.
+
+### High-resolution series ROI
+
+После первичного duplicate/series grouping отдельный `roi` stage выбирает не более восьми
+кандидатов из каждой non-exact серии. Только эти review renders повторно читаются в полном
+сохранённом разрешении. По Vision face rectangles либо saliency ROI сохраняются относительная
+резкость объекта, резкость предполагаемых eye regions и непрерывные directional
+motion/defocus evidence. Eye regions не являются open-eye/blink detector.
+
+Нормализация выполняется внутри серии. Этот канал может разрешить близкий выбор лидера, но
+не является самостоятельным defect verdict, не разблокирует automatic Reject и отсутствует
+у кадров вне shortlist. Exact copies второй декод не требуют.
 
 ### Apple-native generic appeal
 

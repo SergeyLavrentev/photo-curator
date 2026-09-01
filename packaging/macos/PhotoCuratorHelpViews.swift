@@ -382,7 +382,7 @@ private struct AppleVisionHelpView: View {
                 VisionSignalRow(
                     request: "VNDetectFaceLandmarksRequest + VNDetectFaceCaptureQualityRequest",
                     title: "Лица и качество портрета",
-                    details: "Определяются количество лиц, доступность landmark-точек и face capture quality. Наличие landmarks не выдаётся за открытые глаза и не влияет на лидерство серии; отдельный blink/open-eye detector пока не валидирован. Отсутствие лица не считается недостатком фотографии."
+                    details: "Определяются количество лиц, доступность landmark-точек и face capture quality. Для ограниченного shortlist похожей серии приложение повторно измеряет резкость лица, объекта и предполагаемых областей глаз на полном review render. Это относительный sharpness-сигнал, а не blink/open-eye detector; он не создаёт automatic Reject. Отсутствие лица не считается недостатком фотографии."
                 )
 
                 Divider()

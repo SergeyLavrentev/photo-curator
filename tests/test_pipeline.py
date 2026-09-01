@@ -13,7 +13,7 @@ from photo_curator.db.migrations import migrate
 from photo_curator.paths import default_application_paths
 from photo_curator.photos.fake_provider import FakePhotosProvider
 from photo_curator.photos.provider import PhotoAsset
-from photo_curator.pipeline.coordinator import PipelineCoordinator
+from photo_curator.pipeline.coordinator import STAGES, PipelineCoordinator
 from photo_curator.pipeline.previews import analysis_preview_is_eligible
 
 
@@ -138,6 +138,8 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         assets = repository.list_assets(connection, project_id)
         jobs = repository.latest_jobs(connection, project_id)
         project = repository.get_project(connection, project_id)
+        groups = repository.list_duplicate_groups(connection, project_id)
+        signals_by_asset = repository.analysis_signals_by_asset(connection, project_id)
         signals = repository.list_analysis_signals(connection, project_id)
         swipe_scores = repository.list_swipe_scores(connection, project_id)
         shadow = repository.latest_engine_shadow_run(connection, project_id)
@@ -146,6 +148,29 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     assert summary["total"] == 12
     assert summary["ready"] == 12
     assert summary["duplicate_groups"] >= 1
+    roi_signals = {
+        asset_uuid: asset_signals["high_resolution_roi"]
+        for asset_uuid, asset_signals in signals_by_asset.items()
+        if "high_resolution_roi" in asset_signals
+    }
+    non_exact_members = {
+        str(member["asset_uuid"])
+        for group in groups
+        if group["kind"] != "exact"
+        for member in group["members"]
+    }
+    assert roi_signals
+    assert set(roi_signals) <= non_exact_members
+    assert len(roi_signals) < len(assets)
+    assert len(roi_signals) <= len([group for group in groups if group["kind"] != "exact"]) * 8
+    assert all(
+        signal["status"] in {"ready", "unavailable", "error"} for signal in roi_signals.values()
+    )
+    assert any(
+        max(int(signal["value"]["image_width"]), int(signal["value"]["image_height"])) > 1024
+        for signal in roi_signals.values()
+        if signal["status"] == "ready"
+    )
     assert summary["reject"] >= 1
     assert 0 < summary["pick"] < summary["keep"]
     assert (
@@ -157,7 +182,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
     )
     assert all(asset["phash"] and asset["final_disposition"] for asset in assets)
     assert all(asset["final_selection"] for asset in assets)
-    assert len(signals) == 96
+    assert len(signals) == 96 + len(roi_signals)
     assert {signal["signal_kind"] for signal in signals} == {
         "aesthetics",
         "feature_print",
@@ -167,6 +192,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         "nima_aesthetics",
         "mobileclip",
         "musiq_quality",
+        "high_resolution_roi",
     }
     assert all(signal["status"] == "ready" for signal in signals)
     assert all(signal["source_fingerprint"] for signal in signals)
@@ -188,6 +214,7 @@ def test_full_pipeline_persists_assets_metrics_groups_and_decisions(tmp_path: Pa
         "duplicates",
         "vision",
         "models",
+        "roi",
         "scene_shadow",
         "decisions",
     }
@@ -333,7 +360,8 @@ def test_same_process_preview_repair_reloads_only_degraded_photokit_assets(
     assert provider.repair_calls == [[f"demo-{index:03d}" for index in range(1, 13)]]
     assert all(asset["cache_state"] == "ready" for asset in repaired)
     assert all(analysis_preview_is_eligible(Path(str(asset["review_path"]))) for asset in repaired)
-    assert len(signals) == 96
+    roi_signals = [signal for signal in signals if signal["signal_kind"] == "high_resolution_roi"]
+    assert len(signals) == 96 + len(roi_signals)
 
 
 def test_stage_fingerprints_skip_unchanged_expensive_analysis(tmp_path: Path) -> None:
@@ -345,13 +373,10 @@ def test_stage_fingerprints_skip_unchanged_expensive_analysis(tmp_path: Path) ->
             (row["asset_uuid"], row["signal_kind"]): row["calculated_at"]
             for row in repository.list_analysis_signals(connection, project_id)
         }
-        assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM stage_fingerprints WHERE project_id=?",
-                (project_id,),
-            ).fetchone()[0]
-            == 9
-        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM stage_fingerprints WHERE project_id=?",
+            (project_id,),
+        ).fetchone()[0] == len(STAGES)
 
     coordinator.run(project_id)
 
@@ -617,9 +642,16 @@ def test_native_vision_failure_is_persisted_without_breaking_review_pipeline(
         if signal["signal_kind"]
         in {"aesthetics", "feature_print", "attention_saliency", "faces", "subject_quality"}
     ]
-    model_signals = [signal for signal in signals if signal not in apple_signals]
+    model_signals = [
+        signal
+        for signal in signals
+        if signal["signal_kind"] in {"nima_aesthetics", "mobileclip", "musiq_quality"}
+    ]
+    roi_signals = [signal for signal in signals if signal["signal_kind"] == "high_resolution_roi"]
     assert len(apple_signals) == 60
     assert len(model_signals) == 36
+    assert roi_signals
+    assert all(signal["status"] == "unavailable" for signal in roi_signals)
     assert all(signal["status"] == "unavailable" for signal in signals)
     assert all("synthetic Vision" in str(signal["error_text"]) for signal in apple_signals)
     assert all("Core ML model helper" in str(signal["error_text"]) for signal in model_signals)

@@ -763,6 +763,14 @@ def _series_quality(
         raw = value.get(score_field) if isinstance(value, dict) else None
         if isinstance(raw, (int, float)):
             values.append((max(0.0, min(100.0, transform(float(raw)))), weight))
+    roi = signals.get("high_resolution_roi")
+    roi_value = roi.get("value") if roi and roi.get("status") == "ready" else None
+    relative_roi_quality = (
+        roi_value.get("relative_quality_score") if isinstance(roi_value, dict) else None
+    )
+    if isinstance(relative_roi_quality, (int, float)):
+        # ROI is a bounded within-series ranking channel, never standalone reject evidence.
+        values.append((max(0.0, min(100.0, float(relative_roi_quality))), 0.25))
     faces = signals.get("faces")
     face_value = faces.get("value") if faces and faces.get("status") == "ready" else None
     if isinstance(face_value, dict) and int(face_value.get("face_count") or 0) > 0:

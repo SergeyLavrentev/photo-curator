@@ -213,8 +213,8 @@ final class AppModel: ObservableObject {
     private var stageOrder: [String] {
         let mode = project?.analysisMode ?? analysisMode
         return mode == "codex"
-            ? ["inventory", "previews", "metrics", "duplicates", "vision", "models", "codex", "scene_shadow", "decisions"]
-            : ["inventory", "previews", "metrics", "duplicates", "vision", "models", "scene_shadow", "decisions"]
+            ? ["inventory", "previews", "metrics", "duplicates", "vision", "models", "roi", "codex", "scene_shadow", "decisions"]
+            : ["inventory", "previews", "metrics", "duplicates", "vision", "models", "roi", "scene_shadow", "decisions"]
     }
     private var pollTask: Task<Void, Never>?
     private var permissionHelpTask: Task<Void, Never>?
@@ -1825,6 +1825,7 @@ final class AppModel: ObservableObject {
             "duplicates": "Сравниваем серии",
             "vision": "Apple Vision оценивает кадры",
             "models": "NIMA, MobileCLIP и MUSIQ оценивают кадры",
+            "roi": "Уточняем лица и резкость в похожих сериях",
             "codex": "Codex понимает сюжет и сравнивает серии",
             "scene_shadow": "Engine v3 строит эпизоды и сцены",
             "decisions": "Формируем подборку",

@@ -221,8 +221,13 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   - [x] Landmark availability больше не трактуется как открытые глаза: она не штрафует
     Swipe Score и не участвует в series leader quality. Help явно оставляет blink/open-eye
     отдельным невалидированным gate; regression фиксирует одинаковый результат при 0/1 landmarks.
-- [ ] Для shortlisted/ambiguous stacks выполнять high-resolution ROI pass: лица, глаза,
+- [x] Для shortlisted/ambiguous stacks выполнять high-resolution ROI pass: лица, глаза,
   subject sharpness и motion blur; полный альбом не декодировать повторно без необходимости.
+  Evidence: отдельный versioned `roi` stage выбирает максимум восемь кандидатов на non-exact
+  stack, декодирует только их полный review render и сохраняет within-series subject/eye
+  sharpness, directional motion/defocus evidence и source provenance. Eye ROI остаётся
+  sharpness-only, не выдаётся за blink detector; сигнал имеет ограниченный leader-ranking вес
+  и не участвует в automatic Reject.
 - [ ] Перед допуском NIMA, MobileCLIP, MUSIQ, taste или Codex к leader/final ranking требовать
   album-separated held-out uplift именно по leader/Top-K/coverage.
 - [ ] MobileCLIP/совместимые embeddings оценить прежде всего для scene segmentation и

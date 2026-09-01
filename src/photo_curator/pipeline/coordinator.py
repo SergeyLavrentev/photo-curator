@@ -42,6 +42,12 @@ from photo_curator.analysis.local_models import (
 )
 from photo_curator.analysis.native_vision import NativeVisionEngine, NativeVisionError
 from photo_curator.analysis.normalization import percentile_ranks
+from photo_curator.analysis.roi import (
+    ROI_ENGINE_VERSION,
+    measure_high_resolution_roi,
+    normalize_series_roi,
+    select_series_roi_candidates,
+)
 from photo_curator.analysis.scene_engine import (
     SCENE_ENGINE_VERSION,
     build_scene_shadow,
@@ -84,6 +90,7 @@ STAGES = (
     "duplicates",
     "vision",
     "models",
+    "roi",
     "codex",
     "scene_shadow",
     "decisions",
@@ -284,6 +291,42 @@ class PipelineCoordinator:
                     ),
                     [(row[0], row[9]) for row in assets],
                 )
+            elif stage == "roi":
+                groups = [
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT g.group_id, g.kind, g.leader_uuid, g.flags_json,
+                            m.asset_uuid, m.is_leader
+                        FROM duplicate_groups g
+                        JOIN duplicate_members m USING (project_id, group_id)
+                        WHERE g.project_id=?
+                        ORDER BY g.group_id, m.asset_uuid
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ]
+                vision_regions = [
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT asset_uuid, signal_kind, status, engine_version,
+                            source_fingerprint, value_json
+                        FROM analysis_signals
+                        WHERE project_id=?
+                          AND signal_kind IN ('faces', 'attention_saliency')
+                        ORDER BY asset_uuid, signal_kind
+                        """,
+                        (project_id,),
+                    ).fetchall()
+                ]
+                payload = (
+                    ROI_ENGINE_VERSION,
+                    _file_digest(Path(__file__).parents[1] / "analysis" / "roi.py"),
+                    assets,
+                    groups,
+                    vision_regions,
+                )
             elif stage == "codex":
                 payload = (
                     CODEX_ENGINE_VERSION,
@@ -376,10 +419,11 @@ class PipelineCoordinator:
         affected = {
             "inventory": STAGES,
             "previews": STAGES[1:],
-            "metrics": ("metrics", "duplicates", "scene_shadow", "decisions"),
-            "duplicates": ("duplicates", "codex", "decisions"),
-            "vision": ("vision", "scene_shadow", "decisions"),
+            "metrics": ("metrics", "duplicates", "roi", "scene_shadow", "decisions"),
+            "duplicates": ("duplicates", "roi", "codex", "decisions"),
+            "vision": ("vision", "roi", "scene_shadow", "decisions"),
             "models": ("models", "decisions"),
+            "roi": ("roi", "decisions"),
             "codex": ("codex", "decisions"),
             "scene_shadow": ("scene_shadow",),
             "decisions": ("decisions",),
@@ -400,6 +444,8 @@ class PipelineCoordinator:
                 ),
                 "codex": ("codex_vision",),
             }.get(stage)
+            if stage in {"metrics", "duplicates", "vision", "roi"}:
+                signal_kinds = (*tuple(signal_kinds or ()), "high_resolution_roi")
             if signal_kinds:
                 placeholders = ",".join("?" for _ in signal_kinds)
                 connection.execute(
@@ -1204,6 +1250,143 @@ class PipelineCoordinator:
                 warnings=1,
                 errors=len(assets) * len(enabled),
                 message="Дополнительные Core ML модели недоступны; Apple-сигналы сохранены",
+            )
+
+    def _stage_roi(self, project_id: str) -> None:
+        with database_connection(self.database_path) as connection:
+            assets = repository.list_assets(connection, project_id)
+            assets_by_uuid = {str(asset["asset_uuid"]): asset for asset in assets}
+            groups = repository.list_duplicate_groups(connection, project_id)
+            signals = repository.analysis_signals_by_asset(connection, project_id)
+            shortlist = select_series_roi_candidates(groups, assets_by_uuid)
+            connection.execute(
+                "DELETE FROM analysis_signals WHERE project_id=? AND signal_kind=?",
+                (project_id, "high_resolution_roi"),
+            )
+            job_id = repository.create_job(connection, project_id, "roi", len(shortlist))
+        if not shortlist:
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    status="done",
+                    processed=0,
+                    message="High-resolution ROI не нужен: сравнимых серий нет",
+                )
+            return
+
+        measured_by_group: dict[str, dict[str, dict[str, object]]] = {}
+        durations: dict[str, float] = {}
+        errors = 0
+        unavailable = 0
+        for processed, (asset_uuid, context) in enumerate(shortlist.items(), start=1):
+            self._check_cancelled(project_id)
+            asset = assets_by_uuid[asset_uuid]
+            asset_signals = signals.get(asset_uuid, {})
+            faces_signal = asset_signals.get("faces", {})
+            faces = faces_signal.get("value") if faces_signal.get("status") == "ready" else None
+            saliency_signal = asset_signals.get("attention_saliency", {})
+            saliency = (
+                saliency_signal.get("value") if saliency_signal.get("status") == "ready" else None
+            )
+            face_rectangles = faces.get("face_rectangles") if isinstance(faces, dict) else None
+            salient_objects = (
+                saliency.get("salient_objects") if isinstance(saliency, dict) else None
+            )
+            if isinstance(face_rectangles, list) and face_rectangles:
+                rectangles = [value for value in face_rectangles if isinstance(value, dict)]
+                source = "faces"
+            elif isinstance(salient_objects, list) and salient_objects:
+                rectangles = [value for value in salient_objects if isinstance(value, dict)]
+                source = "attention_saliency"
+            else:
+                rectangles = []
+                source = "unavailable"
+            status = "unavailable"
+            value: dict[str, object] | None = None
+            error_text: str | None = None
+            started = time.perf_counter()
+            if rectangles:
+                try:
+                    image = load_normalized(Path(str(asset["review_path"])))
+                    raw = measure_high_resolution_roi(image, rectangles, source=source)
+                    if raw:
+                        value = {**raw, **context}
+                        measured_by_group.setdefault(str(context["group_id"]), {})[asset_uuid] = (
+                            value
+                        )
+                        status = "ready"
+                    else:
+                        error_text = "High-resolution subject ROI is empty"
+                except (OSError, ValueError) as error:
+                    status = "error"
+                    error_text = str(error)[-1000:]
+                    errors += 1
+            else:
+                error_text = "No face or saliency ROI for shortlisted series member"
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            durations[asset_uuid] = duration_ms
+            if status == "unavailable":
+                unavailable += 1
+            if status != "ready":
+                with database_connection(self.database_path) as connection:
+                    repository.upsert_analysis_signal(
+                        connection,
+                        project_id,
+                        asset_uuid,
+                        signal_kind="high_resolution_roi",
+                        schema_version=1,
+                        engine_name="photo-curator-series-roi",
+                        engine_version=ROI_ENGINE_VERSION,
+                        request_revision=1,
+                        source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                        status=status,
+                        value=None,
+                        duration_ms=duration_ms,
+                        error_text=error_text,
+                    )
+            with database_connection(self.database_path) as connection:
+                repository.update_job(
+                    connection,
+                    job_id,
+                    processed=processed,
+                    errors=errors,
+                    warnings=unavailable,
+                    message=f"High-resolution ROI {processed} из {len(shortlist)}",
+                )
+
+        for measured in measured_by_group.values():
+            for asset_uuid, value in normalize_series_roi(measured).items():
+                asset = assets_by_uuid[asset_uuid]
+                with database_connection(self.database_path) as connection:
+                    repository.upsert_analysis_signal(
+                        connection,
+                        project_id,
+                        asset_uuid,
+                        signal_kind="high_resolution_roi",
+                        schema_version=1,
+                        engine_name="photo-curator-series-roi",
+                        engine_version=ROI_ENGINE_VERSION,
+                        request_revision=1,
+                        source_fingerprint=_optional_string(asset.get("source_fingerprint")),
+                        status="ready",
+                        value=value,
+                        duration_ms=durations[asset_uuid],
+                        error_text=None,
+                    )
+        with database_connection(self.database_path) as connection:
+            repository.update_job(
+                connection,
+                job_id,
+                status="warning" if errors or unavailable else "done",
+                processed=len(shortlist),
+                errors=errors,
+                warnings=unavailable,
+                message=(
+                    f"ROI shortlist {len(shortlist)}; без ROI {unavailable}; ошибок {errors}"
+                    if errors or unavailable
+                    else f"High-resolution ROI завершён для {len(shortlist)} кадров"
+                ),
             )
 
     def _stage_codex(self, project_id: str) -> None:
