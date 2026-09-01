@@ -682,6 +682,15 @@ struct RootView: View {
                             .equatable()
                             .id(photo.id)
                         }
+                        if model.canLoadMorePhotos,
+                           !model.isLoadingPhotos,
+                           model.galleryLoadError == nil {
+                            Color.clear
+                                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                                .id("gallery-load-sentinel-\(model.photos.count)")
+                                .accessibilityHidden(true)
+                                .onAppear { model.loadMorePhotosAutomatically() }
+                        }
                     }
                 } else {
                     WorkspaceCanvas(
@@ -713,27 +722,23 @@ struct RootView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 240)
                 }
-                if model.photos.count < model.photosTotal {
-                    Group {
-                        if let galleryLoadError = model.galleryLoadError {
-                            VStack(spacing: 8) {
-                                Text("Не удалось автоматически загрузить продолжение")
-                                    .font(.subheadline.weight(.semibold))
-                                Text(galleryLoadError)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                                Button("Повторить загрузку") { model.retryGalleryLoad() }
-                                    .buttonStyle(.bordered)
-                            }
-                        } else {
-                            ProgressView("Загружаем следующие фотографии…")
-                                .controlSize(.small)
-                                .onAppear { model.loadMorePhotosAutomatically() }
-                        }
+                if model.photos.count < model.photosTotal,
+                   let galleryLoadError = model.galleryLoadError {
+                    VStack(spacing: 8) {
+                        Text("Не удалось автоматически загрузить продолжение")
+                            .font(.subheadline.weight(.semibold))
+                        Text(galleryLoadError)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Button("Повторить загрузку") { model.retryGalleryLoad() }
+                            .buttonStyle(.bordered)
                     }
-                    .id("gallery-continuation-\(model.photos.count)")
                     .frame(maxWidth: .infinity, minHeight: 64)
+                } else if model.isLoadingPhotos, !model.photos.isEmpty {
+                    ProgressView("Загружаем следующие фотографии…")
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, minHeight: 64)
                 }
                 Text(
                     "Загружено \(model.photos.count) из \(model.photosTotal) · "

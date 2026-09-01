@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 extension AppModel {
+    var canLoadMorePhotos: Bool {
+        galleryCursor != nil && photos.count < photosTotal
+    }
+
     func loadPhotos(
         projectID: String,
         append: Bool = false,
@@ -91,7 +95,7 @@ extension AppModel {
     }
 
     func loadMorePhotos(selectFirstNewPhoto: Bool = false) {
-        guard let project, galleryCursor != nil, photos.count < photosTotal, !isLoadingPhotos else {
+        guard let project, canLoadMorePhotos, !isLoadingPhotos else {
             return
         }
         let previousIDs = Set(photos.map(\.id))
