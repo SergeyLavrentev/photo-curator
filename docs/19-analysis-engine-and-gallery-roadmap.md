@@ -267,6 +267,9 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   кадров и versioned reason codes к coherent human series/immutable source snapshot. Quality
   Wizard собирает эти ответы явно; exporter включает только полную непротиворечивую разметку,
   а legacy series остаются без scene-budget evidence.
+  - [x] Wizard больше не предлагает вручную сравнивать несвязанные кадры всего альбома:
+    blind sample резервирует одну целую bounded predicted scene-серию, а series step показывает
+    только её хронологически упорядоченные кадры, основной representative и multi-pick budget.
 - [x] Taste calibration и holdout брать из разных albums/episodes; correlated pairs из
   шести кадров не считать независимым evidence.
   Evidence: schema v26 сохраняет source album и пару Engine v3 episode IDs для каждого

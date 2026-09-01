@@ -185,6 +185,10 @@ final class AppModel: ObservableObject {
     @Published var qualityCandidateIndex = 0
     @Published var qualityCandidateRequested = 75
     @Published var qualityCandidateAvailable = 0
+    @Published var qualityCandidateLabelled = 0
+    @Published var qualitySeriesCandidateGroupID: String?
+    @Published var qualitySeriesCandidateKind: String?
+    @Published var qualitySeriesCandidates: [PhotoItem] = []
     @Published var qualityPair: QualityPairDTO.Pair?
     @Published var qualityPairCompleted = 0
     @Published var qualityPairEligible = 0
@@ -1096,7 +1100,8 @@ final class AppModel: ObservableObject {
                         targetBudget: nil,
                         essentialMemberUUIDs: nil,
                         redundantGoodMemberUUIDs: nil,
-                        leaderReasonCodes: nil
+                        leaderReasonCodes: nil,
+                        sourceGroupID: nil
                     ),
                     as: JSONValue.self
                 )

@@ -224,6 +224,7 @@ struct QualityCustomSeriesParams: Encodable {
     let essentialMemberUUIDs: [String]?
     let redundantGoodMemberUUIDs: [String]?
     let leaderReasonCodes: [String]?
+    let sourceGroupID: String?
     enum CodingKeys: String, CodingKey {
         case projectID = "project_id"
         case memberUUIDs = "member_uuids"
@@ -232,6 +233,7 @@ struct QualityCustomSeriesParams: Encodable {
         case essentialMemberUUIDs = "essential_member_uuids"
         case redundantGoodMemberUUIDs = "redundant_good_member_uuids"
         case leaderReasonCodes = "leader_reason_codes"
+        case sourceGroupID = "source_group_id"
     }
 }
 
@@ -416,6 +418,17 @@ struct QualityCandidatesDTO: Decodable {
     let requested: Int
     let available: Int
     let labelled: Int
+    let series: QualityCandidateSeriesDTO?
+}
+
+struct QualityCandidateSeriesDTO: Decodable {
+    let groupID: String
+    let kind: String
+    let items: [PhotoItem]
+    enum CodingKeys: String, CodingKey {
+        case groupID = "group_id"
+        case kind, items
+    }
 }
 
 struct QualityPairDTO: Decodable {

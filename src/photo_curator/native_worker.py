@@ -951,7 +951,12 @@ class NativeWorker:
             if project["state"] != "ready":
                 raise NativeWorkerError("Мастер доступен после завершения анализа")
             assets = repository.list_assets(connection, project_id)
-        candidates = _quality_candidates(project_id, assets, raw_limit)
+            groups = repository.list_duplicate_groups(connection, project_id)
+        series = _quality_series_candidate(project_id, assets, groups, max_members=raw_limit)
+        reserved = (
+            {str(asset["asset_uuid"]) for asset in series.get("assets", [])} if series else set()
+        )
+        candidates = _quality_candidates(project_id, assets, raw_limit, reserved_uuids=reserved)
         labelled = sum(
             candidate.get("quality_expected_disposition") in {"keep", "review", "reject"}
             for candidate in candidates
@@ -961,6 +966,15 @@ class NativeWorker:
             "requested": raw_limit,
             "available": len(candidates),
             "labelled": labelled,
+            "series": (
+                {
+                    "group_id": series["group_id"],
+                    "kind": series["kind"],
+                    "items": [_quality_asset_payload(asset) for asset in series["assets"]],
+                }
+                if series
+                else None
+            ),
         }
 
     def _handle_quality_label(self, params: dict[str, object]) -> dict[str, object]:
@@ -1068,12 +1082,21 @@ class NativeWorker:
             isinstance(value, str) and value for value in raw_members
         ):
             raise NativeWorkerError("member_uuids must be a non-empty string array")
+        source_group_id = _optional_string(params, "source_group_id")
         with database_connection(self.paths.database) as connection:
+            source_kind = "manual_album_order"
+            if source_group_id:
+                predicted = repository.get_duplicate_series(connection, project_id, source_group_id)
+                predicted_members = {str(asset["asset_uuid"]) for asset in predicted["items"]}
+                if predicted_members != set(raw_members):
+                    raise NativeWorkerError("Разметка должна содержать всю выбранную серию")
+                source_kind = "predicted_group"
             return repository.label_quality_custom_group(
                 connection,
                 project_id,
                 raw_members,
                 _required_string(params, "leader_uuid"),
+                source_kind=source_kind,
                 target_budget=_optional_int(params, "target_budget"),
                 essential_member_uuids=_optional_string_list(params, "essential_member_uuids"),
                 redundant_good_member_uuids=_optional_string_list(
@@ -1330,6 +1353,15 @@ def _optional_string_list(values: dict[str, object], key: str) -> list[str] | No
     return value
 
 
+def _optional_string(values: dict[str, object], key: str) -> str | None:
+    value = values.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise NativeWorkerError(f"{key} must be a non-empty string")
+    return value
+
+
 def _boolean_param(values: dict[str, object], key: str, *, default: bool) -> bool:
     value = values.get(key, default)
     if not isinstance(value, bool):
@@ -1341,6 +1373,8 @@ def _quality_candidates(
     project_id: str,
     assets: list[dict[str, object]],
     limit: int,
+    *,
+    reserved_uuids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     candidates = [
         asset
@@ -1355,7 +1389,61 @@ def _quality_candidates(
             f"quality-v1|{project_id}|{asset['asset_uuid']}".encode()
         ).hexdigest()
     )
-    return candidates[:limit]
+    reserved_uuids = reserved_uuids or set()
+    reserved = [asset for asset in candidates if str(asset["asset_uuid"]) in reserved_uuids]
+    others = [asset for asset in candidates if str(asset["asset_uuid"]) not in reserved_uuids]
+    selected = reserved[:limit] + others[: max(0, limit - len(reserved))]
+    selected.sort(
+        key=lambda asset: hashlib.sha256(
+            f"quality-v1|{project_id}|{asset['asset_uuid']}".encode()
+        ).hexdigest()
+    )
+    return selected
+
+
+def _quality_series_candidate(
+    project_id: str,
+    assets: list[dict[str, object]],
+    groups: list[dict[str, object]],
+    *,
+    max_members: int,
+) -> dict[str, object] | None:
+    """Select one complete, bounded visual series for human relative ranking."""
+    eligible = {
+        str(asset["asset_uuid"]): asset
+        for asset in assets
+        if not asset.get("no_longer_exists")
+        and asset.get("cache_state") == "ready"
+        and _existing_file(asset.get("review_path"))
+        and asset.get("final_disposition") in {"keep", "review", "reject"}
+    }
+    candidates: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    for group in groups:
+        if str(group.get("kind") or "") == "exact":
+            continue
+        member_ids = [str(member["asset_uuid"]) for member in group.get("members") or []]
+        if not 2 <= len(member_ids) <= min(12, max_members) or not set(member_ids) <= set(eligible):
+            continue
+        digest = hashlib.sha256(
+            f"quality-series-v1|{project_id}|{group['group_id']}".encode()
+        ).hexdigest()
+        candidates.append(
+            (
+                (abs(len(member_ids) - 6), digest),
+                {
+                    "group_id": str(group["group_id"]),
+                    "kind": str(group["kind"]),
+                    "assets": sorted(
+                        (eligible[asset_uuid] for asset_uuid in member_ids),
+                        key=lambda asset: (
+                            str(asset.get("taken_at") or ""),
+                            str(asset["asset_uuid"]),
+                        ),
+                    ),
+                },
+            )
+        )
+    return min(candidates, key=lambda value: value[0])[1] if candidates else None
 
 
 def _existing_file(path: object) -> bool:

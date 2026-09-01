@@ -16,6 +16,10 @@ extension AppModel {
                 qualityCandidates = response.items
                 qualityCandidateRequested = response.requested
                 qualityCandidateAvailable = response.available
+                qualityCandidateLabelled = response.labelled
+                qualitySeriesCandidateGroupID = response.series?.groupID
+                qualitySeriesCandidateKind = response.series?.kind
+                qualitySeriesCandidates = response.series?.items ?? []
                 qualityCandidateIndex = response.items.firstIndex {
                     $0.qualityDisposition == nil
                 } ?? response.items.count
@@ -60,6 +64,12 @@ extension AppModel {
                     }
                     qualityCandidateIndex = following ?? wrapped ?? qualityCandidates.count
                 }
+                if let index = qualitySeriesCandidates.firstIndex(where: { $0.id == photoID }) {
+                    qualitySeriesCandidates[index] = updated
+                }
+                qualityCandidateLabelled = qualityCandidates.filter {
+                    $0.qualityDisposition != nil
+                }.count
                 await loadQualityStatus(projectID: project.id)
             } catch { errorMessage = error.localizedDescription }
         }
@@ -129,7 +139,8 @@ extension AppModel {
         targetBudget: Int,
         essentialMemberIDs: [String],
         redundantGoodMemberIDs: [String],
-        leaderReasonCodes: [String]
+        leaderReasonCodes: [String],
+        sourceGroupID: String?
     ) {
         guard let project else { return }
         Task {
@@ -143,7 +154,8 @@ extension AppModel {
                         targetBudget: targetBudget,
                         essentialMemberUUIDs: essentialMemberIDs,
                         redundantGoodMemberUUIDs: redundantGoodMemberIDs,
-                        leaderReasonCodes: leaderReasonCodes
+                        leaderReasonCodes: leaderReasonCodes,
+                        sourceGroupID: sourceGroupID
                     ),
                     as: JSONValue.self
                 )

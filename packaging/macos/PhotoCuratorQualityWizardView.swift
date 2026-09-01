@@ -213,7 +213,7 @@ struct QualityWizardView: View {
         VStack(alignment: .leading, spacing: 14) {
             wizardTitle("2. Слепая разметка", "Оцените 50–100 фото. Оценка движка, причины и его решение здесь намеренно скрыты.")
             HStack {
-                Text("Размечено \(model.qualityManualLabels) из \(model.qualityCandidateAvailable)")
+                Text("Размечено \(model.qualityCandidateLabelled) из \(model.qualityCandidateAvailable)")
                 Spacer()
                 Picker("Выборка", selection: $sampleSize) {
                     Text("50").tag(50); Text("75").tag(75); Text("100").tag(100)
@@ -330,73 +330,92 @@ struct QualityWizardView: View {
 
     private var seriesStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            wizardTitle("5. Разметьте одну серию", "Задайте лучший кадр, целевой бюджет, обязательные моменты и хорошие, но избыточные варианты. У всех кадров должны быть ручные решения шага 2.")
-            HStack {
-                Text("Кадров: \(seriesSelection.count)")
-                Text("Лидер: \(seriesLeader.flatMap(nameForPhoto) ?? "не выбран")")
-                Stepper(
-                    "Оставить: \(seriesTargetBudget)",
-                    value: $seriesTargetBudget,
-                    in: 1...max(1, seriesSelection.count)
+            wizardTitle(
+                "5. Разберите одну связанную серию",
+                "Здесь показаны только кадры одной сцены или момента — не весь альбом. Выберите основной кадр и сколько разных удачных вариантов действительно стоит оставить."
+            )
+            if model.qualitySeriesCandidates.isEmpty {
+                unavailable(
+                    "Подходящая серия не найдена",
+                    symbol: "square.stack.3d.up.slash",
+                    detail: "В этом альбоме нет полной связной серии из 2–12 доступных фотографий. Не объединяйте несравнимые кадры вручную."
                 )
-                .frame(width: 150)
-                Spacer()
-                Button("Сохранить серию") {
-                    guard let seriesLeader else { return }
-                    model.saveWizardQualitySeries(
-                        memberIDs: seriesSelection.sorted(),
-                        leaderID: seriesLeader,
-                        targetBudget: seriesTargetBudget,
-                        essentialMemberIDs: seriesEssential.sorted(),
-                        redundantGoodMemberIDs: seriesRedundantGood.sorted(),
-                        leaderReasonCodes: seriesLeaderReasons.sorted()
+            } else if model.qualitySeriesCandidates.contains(where: {
+                $0.qualityDisposition == nil
+            }) {
+                unavailable(
+                    "Сначала оцените кадры этой серии",
+                    symbol: "eye.slash",
+                    detail: "Мастер добавил целую серию в слепую выборку. Завершите оставшиеся ручные решения шага 2, затем вернитесь сюда."
+                )
+                Button("Вернуться к слепой разметке") { openStep(1) }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                HStack {
+                    Text("Кадров в серии: \(seriesSelection.count)")
+                    Text("Основной: \(seriesLeader.flatMap(nameForPhoto) ?? "не выбран")")
+                    Stepper(
+                        "Оставить: \(seriesTargetBudget)",
+                        value: $seriesTargetBudget,
+                        in: 1...max(1, seriesSelection.count)
                     )
-                    resetSeriesForm()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(
-                    seriesSelection.count < 2 || seriesLeader == nil
-                        || seriesEssential.count > seriesTargetBudget
-                        || seriesLeaderReasons.isEmpty
-                )
-            }
-            GroupBox("Почему этот кадр лучший") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130))], spacing: 6) {
-                    ForEach(seriesReasonOptions, id: \.0) { code, title in
-                        Toggle(title, isOn: Binding(
-                            get: { seriesLeaderReasons.contains(code) },
-                            set: { selected in
-                                if selected { seriesLeaderReasons.insert(code) }
-                                else { seriesLeaderReasons.remove(code) }
-                            }
-                        ))
-                        .toggleStyle(.button)
-                        .controlSize(.small)
+                    .frame(width: 150)
+                    Spacer()
+                    Button("Сохранить разбор серии") {
+                        guard let seriesLeader else { return }
+                        model.saveWizardQualitySeries(
+                            memberIDs: seriesSelection.sorted(),
+                            leaderID: seriesLeader,
+                            targetBudget: seriesTargetBudget,
+                            essentialMemberIDs: seriesEssential.sorted(),
+                            redundantGoodMemberIDs: seriesRedundantGood.sorted(),
+                            leaderReasonCodes: seriesLeaderReasons.sorted(),
+                            sourceGroupID: model.qualitySeriesCandidateGroupID
+                        )
                     }
-                }
-                .padding(6)
-            }
-            qualityGrid { photo in
-                Button { toggleSeries(photo.id) } label: {
-                    wizardGridCard(
-                        photo,
-                        badge: seriesBadge(photo.id)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        seriesSelection.count < 2 || seriesLeader == nil
+                            || seriesEssential.count > seriesTargetBudget
+                            || seriesLeaderReasons.isEmpty
                     )
                 }
-                .buttonStyle(.plain)
-                .disabled(photo.qualityDisposition == nil)
-                .contextMenu {
-                    if seriesSelection.contains(photo.id) {
-                        Button("Назначить лучшим") { setSeriesLeader(photo.id) }
-                        Button("Обязательный момент") { toggleSeriesEssential(photo.id) }
-                        Button("Хороший, но избыточный") {
-                            toggleSeriesRedundantGood(photo.id)
+                GroupBox("Почему этот кадр — основной представитель серии") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130))], spacing: 6) {
+                        ForEach(seriesReasonOptions, id: \.0) { code, title in
+                            Toggle(title, isOn: Binding(
+                                get: { seriesLeaderReasons.contains(code) },
+                                set: { selected in
+                                    if selected { seriesLeaderReasons.insert(code) }
+                                    else { seriesLeaderReasons.remove(code) }
+                                }
+                            ))
+                            .toggleStyle(.button)
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(6)
+                }
+                qualityGrid(photos: model.qualitySeriesCandidates) { photo in
+                    Button { setSeriesLeader(photo.id) } label: {
+                        wizardGridCard(photo, badge: seriesBadge(photo.id))
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if seriesSelection.contains(photo.id) {
+                            Button("Назначить основным") { setSeriesLeader(photo.id) }
+                            Button("Обязательный отдельный момент") {
+                                toggleSeriesEssential(photo.id)
+                            }
+                            Button("Хороший, но избыточный вариант") {
+                                toggleSeriesRedundantGood(photo.id)
+                            }
                         }
                     }
                 }
+                Text("Все карточки относятся к одной найденной серии. Клик назначает основной кадр; через контекстное меню отметьте обязательные отдельные моменты и хорошие избыточные варианты. Основной кадр всегда обязателен.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Клик добавляет кадр. Через контекстное меню назначьте лучший, обязательные моменты и хорошие избыточные варианты. Лидер всегда считается обязательным.")
-                .font(.caption).foregroundStyle(.secondary)
         }.padding(24)
     }
 
@@ -468,6 +487,7 @@ struct QualityWizardView: View {
             model.loadQualityCandidates(limit: sampleSize)
         }
         if value == 2 && model.qualityPair == nil { model.loadQualityPair() }
+        if value == 4 { prepareSeriesCandidate() }
     }
 
     private func saveLabel(_ photo: PhotoItem, _ disposition: String) {
@@ -552,6 +572,15 @@ struct QualityWizardView: View {
         seriesLeaderReasons.removeAll()
     }
 
+    private func prepareSeriesCandidate() {
+        let identifiers = Set(model.qualitySeriesCandidates.map(\.id))
+        if seriesSelection != identifiers {
+            resetSeriesForm()
+            seriesSelection = identifiers
+            seriesTargetBudget = min(max(1, Int(Double(identifiers.count).squareRoot())), max(1, identifiers.count))
+        }
+    }
+
     private func nameForPhoto(_ id: String) -> String? {
         model.qualityCandidates.first(where: { $0.id == id })?.filename
     }
@@ -587,11 +616,12 @@ struct QualityWizardView: View {
     }
 
     private func qualityGrid<Content: View>(
+        photos: [PhotoItem]? = nil,
         @ViewBuilder content: @escaping (PhotoItem) -> Content
     ) -> some View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 210))], spacing: 10) {
-                ForEach(model.qualityCandidates) { photo in content(photo) }
+                ForEach(photos ?? model.qualityCandidates) { photo in content(photo) }
             }
         }
     }

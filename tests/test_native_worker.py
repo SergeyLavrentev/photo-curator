@@ -1015,6 +1015,13 @@ def test_quality_wizard_is_blind_and_keeps_held_out_pairs_out_of_taste_profile(
 
     candidates = worker.dispatch("quality_candidates", {"project_id": project_id, "limit": 12})
     assert candidates["available"] == 12
+    assert candidates["series"] is not None
+    series_items = candidates["series"]["items"]
+    assert 2 <= len(series_items) <= 12
+    assert {item["asset_uuid"] for item in series_items} <= {
+        item["asset_uuid"] for item in candidates["items"]
+    }
+    assert all("swipe_score" not in item and "reasons" not in item for item in series_items)
     first = candidates["items"][0]
     assert "swipe_score" not in first
     assert "reasons" not in first
@@ -1090,6 +1097,43 @@ def test_quality_wizard_is_blind_and_keeps_held_out_pairs_out_of_taste_profile(
     assert evidence["summary"]["held_out_pairs"] == 1
     assert evidence["summary"]["defect_labels"] == 1
     assert any(asset["defect_codes"] == ["motion_blur"] for asset in evidence["manifest"]["assets"])
+
+    for item in series_items:
+        worker.dispatch(
+            "quality_label",
+            {
+                "project_id": project_id,
+                "asset_uuid": item["asset_uuid"],
+                "disposition": "keep",
+                "defect_codes": [],
+            },
+        )
+    series_ids = [item["asset_uuid"] for item in series_items]
+    annotated = worker.dispatch(
+        "quality_custom_series",
+        {
+            "project_id": project_id,
+            "member_uuids": series_ids,
+            "leader_uuid": series_ids[0],
+            "source_group_id": candidates["series"]["group_id"],
+            "target_budget": 1,
+            "essential_member_uuids": [series_ids[0]],
+            "redundant_good_member_uuids": series_ids[1:],
+            "leader_reason_codes": ["moment"],
+        },
+    )
+    assert annotated["source_kind"] == "predicted_group"
+    assert annotated["coherence_status"] == "verified"
+    with pytest.raises(NativeWorkerError, match="всю выбранную серию"):
+        worker.dispatch(
+            "quality_custom_series",
+            {
+                "project_id": project_id,
+                "member_uuids": series_ids[:-1],
+                "leader_uuid": series_ids[0],
+                "source_group_id": candidates["series"]["group_id"],
+            },
+        )
 
 
 def test_delete_project_fails_closed_when_database_backup_fails(
