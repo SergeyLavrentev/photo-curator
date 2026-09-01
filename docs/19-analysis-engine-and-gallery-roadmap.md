@@ -284,6 +284,50 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   Evidence: CLI и native worker вызывают один database-backed exporter; оба читают только
   project-scoped `quality_preference_examples`, никогда global taste preferences.
 
+## R5.1 — постоянное локальное обучение из Quality Lab
+
+Audit 2026-09-01 на `2b0813e` подтвердил архитектурный разрыв:
+
+- `preference_examples` и `taste_profiles` глобальны; pairwise feature snapshots переживают
+  удаление проекта и уже могут обучать `pairwise-linear-v2`;
+- `quality_asset_labels`, `quality_preference_examples` и `quality_series_labels` имеют
+  project/asset/snapshot foreign keys с `ON DELETE CASCADE` и теряются вместе с анализом;
+- Quality Lab экспортирует evaluation corpus, но не создаёт обучающие примеры и не обновляет
+  локальный selection ranker;
+- кнопка повторного запуска переиспользует project-scoped строки вместо явного versioned
+  round/attempt, а отдельного полного удаления learning corpus нет.
+
+План реализации и миграционные инварианты:
+
+- [ ] Добавить durable corpus без FK на `projects`, `assets` и project snapshots: versioned
+  rounds/attempts, псевдонимизированные album/episode contexts, immutable feature snapshots,
+  human disposition/defect/pairwise/Top-K/series-budget truth и model/schema provenance.
+- [ ] Жёстко закреплять каждый context за `training` либо locked `held_out`; один album/episode
+  context не может присутствовать в обоих split, а predictions не могут импортироваться как
+  human truth.
+- [ ] Перед project cascade выполнять идемпотентную audited migration Quality Lab в durable
+  corpus. Неизвестная feature schema, отсутствующий source snapshot/model provenance или
+  неполный перенос должны блокировать удаление проекта до исправления/явного отказа от него.
+- [ ] Сохранять текущие project-scoped labels как совместимый working projection, но после
+  каждого принятого human action синхронизировать versioned durable attempt. Уже собранный
+  незавершённый corpus сохраняется как отдельный attempt и не выдаётся за complete evidence.
+- [ ] Обучать только versioned локальный selection ranker поверх сохранённых Apple Vision/
+  Core ML feature vectors. Locked held-out не участвует ни в fit, ни в model selection;
+  foundation/Core ML модели не переобучаются, taste не влияет на delete/reject safety.
+- [ ] «Начать заново» завершает текущий attempt как superseded и создаёт новый, не удаляя
+  накопленное обучение. Полное удаление corpus/model требует отдельного typed IPC action,
+  `confirmed=true`, verified backup и destructive audit.
+- [ ] Экспорт/импорт сохраняет corpus/model/feature schema provenance, split locks, context
+  fingerprints и human-origin markers; import fail-closed при конфликте или leakage.
+- [ ] Native UI отдельно показывает накопленное обучение, текущий раунд и замороженную
+  проверку: числа независимых train/held-out contexts и версию активного ranker.
+- [ ] Regression покрывает project delete, idempotent migration, incompatible provenance,
+  round restart, full reset, context leakage, import prediction rejection и ranker survival.
+
+Acceptance: implementation/tests/build не закрывают качество. Активация сильного personal
+влияния и любые quality claims требуют album-separated human evidence и улучшения на locked
+held-out; Photos integrity и запрет automatic unique-photo reject остаются неизменными.
+
 ## R6 — series-first Gallery и UX
 
 - [x] Добавить API `series(group_id)` с полным составом независимо от page и
