@@ -125,24 +125,49 @@ uv run photo-curator acceptance-evaluate --project-id PROJECT_ID \
 ```
 
 Нативный Settings → «Проверка качества» открывает отдельный мастер. Он выбирает стабильную
-для проекта выборку независимо от prediction, скрывает score/reasons/auto decision, проводит
-50–100 disposition labels, требует явный тип дефекта для Reject, собирает отдельные held-out
-A/B-пары, ordered Top-K и одну человеческую серию с лидером. Lab A/B хранится отдельно от
-профиля вкуса и не попадает в его обучение. В schema v18 lab-sampled provenance отделяет
+для versioned attempt выборку независимо от prediction, скрывает score/reasons/auto decision,
+проводит 50–100 disposition labels, требует явный тип дефекта для Reject, собирает A/B-пары,
+ordered Top-K и одну человеческую серию с лидером. В schema v18 lab-sampled provenance отделяет
 слепой corpus от ручных решений в prediction-conditioned review-галерее.
+
+Начиная со schema v27/v28 Quality Lab имеет durable learning corpus без FK на project/assets.
+Каждый псевдонимизированный album-wide episode context один раз закрепляется за назначением:
+
+- `training` — explicit human A/B, ordered Top-K и series-leader relations копируются как
+  pairwise examples и могут обучать `pairwise-linear-v5-durable-quality-corpus`;
+- locked `held_out` — используется только для evaluation и никогда не копируется в fit set;
+- disposition/defect truth сохраняется в corpus, но не превращает эстетический rank в
+  delete/reject safety evidence;
+- restart создаёт новый attempt и помечает предыдущий `superseded`, не удаляя его snapshots;
+- project delete сначала выполняет audited idempotent migration и блокируется при неполной
+  feature/model/source provenance.
+
+Экспорт/импорт corpus сохраняет split locks, human-origin markers, model/feature provenance и
+псевдонимизированные context IDs. Import отклоняет prediction-origin rows, неизвестную schema,
+повреждённые feature vectors и train/held-out overlap одного context. Полное удаление corpus и
+ranker требует отдельного подтверждения и verified backup.
 
 Personal Taste examples имеют отдельный album/Engine-v3-episode provenance. Calibration и
 held-out не могут использовать один и тот же context; старые либо неразрешимые пары остаются
 доступны для аудита, но не засчитываются как held-out accuracy и не усиливают reliability.
 
-Мастер экспортирует manifest и отдельный immutable Swipe Score snapshot с schema/model
-provenance. Экспорт fail-honest: predicted dispositions, duplicate groups и автоматический
-Top-K не копируются в truth labels; серия готова только после lab manual decision для каждого
-кадра. Итоговый экран перечисляет недостающие gates, запускает versioned evaluator без CLI и
-переключает `release_ready` только при полной структуре corpus.
+Мастер экспортирует project acceptance manifest и отдельный immutable Swipe Score snapshot с
+schema/model provenance. Экспорт fail-honest: predicted dispositions, duplicate groups и
+автоматический Top-K не копируются в truth labels; серия готова только после lab manual decision
+для каждого кадра. Итоговый экран перечисляет недостающие gates, запускает versioned evaluator
+без CLI и переключает `release_ready` только при полной структуре corpus.
 Quality Lab включается пользователем в Settings и не требует специальной environment variable.
 До выполнения этих человеческих действий `release_ready=false` является ожидаемым и обязательным
 результатом, а не поводом ослаблять gate.
+
+Regression minimum для durable learning:
+
+- accepted corpus и active ranker переживают project cascade;
+- held-out context создаёт ноль training examples;
+- повторный start сохраняет предыдущий attempt и очищает только working projection;
+- migration повторяема, а schema/provenance drift блокирует delete с audit row;
+- export → confirmed reset → import восстанавливает corpus/ranker без prediction truth;
+- полный reset не удаляет project и не касается Apple Photos.
 
 ## Production gallery benchmark
 

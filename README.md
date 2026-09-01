@@ -35,7 +35,7 @@ the app from the DMG to `Applications` before launching it.
 1. Select a regular or shared Apple Photos album.
 2. Choose an analysis mode and start the run.
 3. Review Pick, Alternatives, Review, and Reject in Grid, Loupe, Compare, or Survey.
-4. Use ratings 1–5, `P/U/X`, undo and batch actions; teach the local Personal Taste profile.
+4. Use ratings 1–5, `P/U/X`, undo and batch actions; teach the versioned local selection ranker.
 5. Preview the exact immutable Pick set and explicitly create a Best album.
 
 The analysis pipeline records:
@@ -45,7 +45,7 @@ The analysis pipeline records:
 - technical quality signals such as blur, exposure, resolution, and horizon;
 - exact, burst, and scene grouping with crop/exposure and Vision-feature confirmation;
 - diversity protection so one scene does not dominate the result;
-- a local Personal Taste model trained from explicit A/B choices;
+- a versioned local Personal Taste/selection ranker trained only from explicit training choices;
 - conservative safety rules that protect favourites, edits, originals, and uncertain cases.
 
 ## Analysis modes
@@ -168,9 +168,17 @@ The repository also contains reproducible benchmark and human-labelled acceptanc
 See the architecture and pipeline documents for native Apple Vision, optional Core ML,
 gallery, release-hot-path, and held-out Swipe Score evaluation commands.
 Settings → **Проверка качества** opens a dedicated Quality Lab wizard. It guides the user through
-a deterministic blind 50–100-photo sample, explicit defect labels, held-out A/B comparisons,
-ordered Top-K, one human series/leader, completeness checks and export. Automatic recommendations
-are hidden during blind labelling and are never copied into the human truth set.
+a deterministic blind 50–100-photo sample, explicit defect labels, purpose-separated A/B
+comparisons, ordered Top-K, one human series/leader, completeness checks and export. Automatic
+recommendations are hidden during blind labelling and are never copied into the human truth set.
+
+Quality Lab stores accepted human evidence in a durable local corpus that is independent of an
+analysis project. Each album context is locked either to training or to held-out evaluation, so a
+single context cannot leak into both. Training rounds update only a small versioned local ranker
+over immutable Apple Vision/Core ML feature snapshots; held-out rounds never participate in fit,
+and foundation/Core ML models are not retrained. Deleting an analysis preserves the corpus and
+active ranker. Restarting a round creates a new attempt; deleting all accumulated learning is a
+separate confirmed action with a verified database backup.
 
 The local-model performance gate compares bounded work batches and concurrency while checking
 score parity, peak RSS and thermal state. It intentionally exits non-zero until retained energy
@@ -187,6 +195,8 @@ their provenance and the human-label manifest:
 
 ```bash
 uv run photo-curator acceptance-evidence-export --project-id <id> --output evidence.json
+uv run photo-curator learning-corpus-export --output learning-corpus.json
+uv run photo-curator learning-corpus-import --input learning-corpus.json
 ```
 
 ## Known limitations

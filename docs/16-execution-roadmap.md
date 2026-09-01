@@ -4,8 +4,9 @@ This roadmap turns the product review into an executable plan. It supplements `R
 the latter defines the product direction, while this file records implementation order,
 dependencies, acceptance evidence and completion status.
 
-Current versioned boundary: `docs/18-acceptance-2026-08-27.md`. The earlier disposable PhotoKit
-publish proof remains in `docs/17-acceptance-2026-08-09.md`.
+Current versioned implementation boundary: `docs/20-acceptance-2026-09-02.md`. The real PhotoKit
+runtime boundary remains `docs/18-acceptance-2026-08-27.md`; the earlier disposable publish proof
+remains in `docs/17-acceptance-2026-08-09.md`.
 
 ## Product state contract
 
@@ -101,8 +102,17 @@ Evidence: defect precision, false reject rate, Brier score and ECE.
 - [x] Split taste examples by independent assets/albums, not Cartesian pair diagonals.
 - [x] Center personal deltas and shrink them until independent evidence is sufficient.
 - [x] Keep taste outside duplicate safety and objective-defect decisions.
+- [x] Persist accepted Quality Lab evidence independently of project lifecycle and train only a
+  versioned local selection ranker from contexts locked to training; locked held-out contexts
+  never enter fit.
+- [x] Make round restart versioned/non-destructive, protect project delete with audited migration,
+  and require a separate backed-up confirmation to delete all accumulated learning.
 
 Evidence: generic and personalized pairwise/Top-K uplift on separate hold-outs.
+
+Implementation evidence for durable learning is recorded in
+`docs/20-acceptance-2026-09-02.md`. The feature is built and regression-tested, but personalized
+uplift remains open until independent album-separated training/held-out human evidence exists.
 
 ## R5 — Core ML correctness, provenance and throughput
 

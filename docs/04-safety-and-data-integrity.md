@@ -50,6 +50,18 @@
   временем, PID и путём backup;
 - одновременно один каталог может обслуживать только один native worker; второй процесс
   завершается до открытия БД.
+- перед project cascade все Quality Lab human labels, pairwise choices, Top-K и series-budget
+  truth копируются в durable learning corpus без FK на project/assets; неполная feature/model
+  provenance или несовместимая schema блокирует удаление и сохраняет failed migration audit;
+- project cascade удаляет только working projection Quality Lab. Durable attempts, immutable
+  feature snapshots и обученный локальный ranker сохраняются.
+
+Полное удаление накопленного обучения — отдельное глобальное destructive action:
+
+- worker требует `confirmed=true` и до изменения создаёт проверенный SQLite backup;
+- удаляются training/held-out contexts, все attempts, copied feature snapshots и активный ranker;
+- проекты, Apple Photos и project review artifacts этим действием не изменяются;
+- request/completion записываются в `destructive-actions.jsonl` как `delete_learning_data`.
 
 ## Source drift
 

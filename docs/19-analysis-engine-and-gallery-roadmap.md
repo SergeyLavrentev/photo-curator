@@ -299,34 +299,40 @@ Audit 2026-09-01 на `2b0813e` подтвердил архитектурный 
 
 План реализации и миграционные инварианты:
 
-- [ ] Добавить durable corpus без FK на `projects`, `assets` и project snapshots: versioned
+- [x] Добавить durable corpus без FK на `projects`, `assets` и project snapshots: versioned
   rounds/attempts, псевдонимизированные album/episode contexts, immutable feature snapshots,
   human disposition/defect/pairwise/Top-K/series-budget truth и model/schema provenance.
-- [ ] Жёстко закреплять каждый context за `training` либо locked `held_out`; один album/episode
+- [x] Жёстко закреплять каждый context за `training` либо locked `held_out`; один album/episode
   context не может присутствовать в обоих split, а predictions не могут импортироваться как
   human truth.
-- [ ] Перед project cascade выполнять идемпотентную audited migration Quality Lab в durable
+- [x] Перед project cascade выполнять идемпотентную audited migration Quality Lab в durable
   corpus. Неизвестная feature schema, отсутствующий source snapshot/model provenance или
   неполный перенос должны блокировать удаление проекта до исправления/явного отказа от него.
-- [ ] Сохранять текущие project-scoped labels как совместимый working projection, но после
+- [x] Сохранять текущие project-scoped labels как совместимый working projection, но после
   каждого принятого human action синхронизировать versioned durable attempt. Уже собранный
   незавершённый corpus сохраняется как отдельный attempt и не выдаётся за complete evidence.
-- [ ] Обучать только versioned локальный selection ranker поверх сохранённых Apple Vision/
+- [x] Обучать только versioned локальный selection ranker поверх сохранённых Apple Vision/
   Core ML feature vectors. Locked held-out не участвует ни в fit, ни в model selection;
   foundation/Core ML модели не переобучаются, taste не влияет на delete/reject safety.
-- [ ] «Начать заново» завершает текущий attempt как superseded и создаёт новый, не удаляя
+- [x] «Начать заново» завершает текущий attempt как superseded и создаёт новый, не удаляя
   накопленное обучение. Полное удаление corpus/model требует отдельного typed IPC action,
   `confirmed=true`, verified backup и destructive audit.
-- [ ] Экспорт/импорт сохраняет corpus/model/feature schema provenance, split locks, context
+- [x] Экспорт/импорт сохраняет corpus/model/feature schema provenance, split locks, context
   fingerprints и human-origin markers; import fail-closed при конфликте или leakage.
-- [ ] Native UI отдельно показывает накопленное обучение, текущий раунд и замороженную
+- [x] Native UI отдельно показывает накопленное обучение, текущий раунд и замороженную
   проверку: числа независимых train/held-out contexts и версию активного ranker.
-- [ ] Regression покрывает project delete, idempotent migration, incompatible provenance,
+- [x] Regression покрывает project delete, idempotent migration, incompatible provenance,
   round restart, full reset, context leakage, import prediction rejection и ranker survival.
 
 Acceptance: implementation/tests/build не закрывают качество. Активация сильного personal
 влияния и любые quality claims требуют album-separated human evidence и улучшения на locked
 held-out; Photos integrity и запрет automatic unique-photo reject остаются неизменными.
+
+Implementation evidence: `69974cb` добавил schema v27, durable snapshots, pre-delete migration,
+audit и backend regressions; `1214353` добавил purpose-aware rounds, typed SwiftUI/IPC,
+ranker v5 и fail-closed corpus export/import; `6e036a5` довёл schema до v28 и сохраняет human
+notes. Scoped regressions прошли, production Swift sources скомпилированы gallery harness.
+Human-quality acceptance остаётся открытым до album-separated evidence.
 
 ## R6 — series-first Gallery и UX
 
