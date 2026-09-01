@@ -86,8 +86,8 @@ struct PhotoCuratorApplication: App {
                 }
                     .keyboardShortcut(.rightArrow, modifiers: [])
                     .disabled(!model.galleryShortcutsAllowed || model.photos.isEmpty)
-                Button("Быстрый просмотр") {
-                    model.performGalleryShortcut { model.previewSelected() }
+                Button("Открыть детали") {
+                    model.performGalleryShortcut { model.openSelectedPhotoDetails() }
                 }
                     .keyboardShortcut(.space, modifiers: [])
                     .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)

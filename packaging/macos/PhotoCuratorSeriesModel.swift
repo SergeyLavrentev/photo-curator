@@ -195,6 +195,11 @@ extension AppModel {
         QuickLookController.shared.show(path: path)
     }
 
+    func openSelectedPhotoDetails() {
+        guard let selectedPhotoID else { return }
+        openPhotoDetails(photoID: selectedPhotoID)
+    }
+
     func openPhotoDetails(photoID: String) {
         selectPhoto(photoID: photoID)
         guard let project else { return }

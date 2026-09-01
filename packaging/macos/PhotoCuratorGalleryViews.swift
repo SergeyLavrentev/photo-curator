@@ -298,7 +298,6 @@ let selectionCardMinimumWidth: CGFloat = 96
 let selectionCardDefaultWidth: CGFloat = 128
 let selectionCardMaximumWidth: CGFloat = 260
 let selectionCardZoomStep: CGFloat = 8
-let selectionCardDeveloperFooterHeight: CGFloat = 46
 
 struct PhotoCard: View, Equatable {
     let photo: PhotoItem
@@ -319,6 +318,7 @@ struct PhotoCard: View, Equatable {
     let toggleStack: () -> Void
     let rate: (Int?) -> Void
     let decide: (String?) -> Void
+    @State private var isHovering = false
 
     static func == (lhs: PhotoCard, rhs: PhotoCard) -> Bool {
         lhs.photo == rhs.photo
@@ -332,15 +332,6 @@ struct PhotoCard: View, Equatable {
 
     private var decisionTitle: String {
         selectionTitle(photo.selection)
-    }
-
-    private var recommendationSymbol: String {
-        switch photo.selection {
-        case "pick": return "flag.fill"
-        case "reject": return "xmark"
-        case "review": return "exclamationmark.triangle.fill"
-        default: return "circle"
-        }
     }
 
     private var previewSide: CGFloat {
@@ -385,27 +376,47 @@ struct PhotoCard: View, Equatable {
                 if photo.manualRating != nil {
                     Button("Снять оценку") { rate(nil) }
                 }
-            }
-            .help("Нажмите, чтобы выбрать; пробел — быстрый просмотр")
-            .overlay(alignment: .topTrailing) {
-                Button(action: toggleMultiSelection) {
-                    Image(systemName: multiSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3.weight(.semibold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(
-                            Color.white,
-                            multiSelected ? Color.green : Color.black.opacity(0.55)
-                        )
-                        .frame(width: 30, height: 30)
-                        .background(
-                            Color.black.opacity(multiSelected ? 0 : 0.24),
-                            in: Circle()
-                        )
+                if developerToolsEnabled {
+                    Divider()
+                    Button(
+                        photo.qualityTopKRank == nil
+                            ? "Добавить в Top-K разметки"
+                            : "Убрать из Top-K разметки",
+                        action: toggleTopK
+                    )
+                    Button(
+                        seriesSelected
+                            ? "Убрать из ручной серии"
+                            : "Добавить в ручную серию",
+                        action: toggleSeriesSelection
+                    )
+                    if photo.duplicateGroup != nil {
+                        Button("Это лучший кадр серии", action: labelSeriesLeader)
+                            .disabled(photo.qualityExpectedLeader)
+                    }
                 }
-                .buttonStyle(.plain)
-                .padding(8)
-                .help(multiSelected ? "Снять отметку" : "Отметить для группового действия")
-                .accessibilityLabel(multiSelected ? "Снять отметку" : "Отметить фотографию")
+            }
+            .overlay(alignment: .topTrailing) {
+                if multiSelected || isHovering {
+                    Button(action: toggleMultiSelection) {
+                        Image(systemName: multiSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3.weight(.semibold))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(
+                                Color.white,
+                                multiSelected ? Color.green : Color.black.opacity(0.55)
+                            )
+                            .frame(width: 30, height: 30)
+                            .background(
+                                Color.black.opacity(multiSelected ? 0 : 0.24),
+                                in: Circle()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                    .help(multiSelected ? "Снять отметку" : "Отметить для группового действия")
+                    .accessibilityLabel(multiSelected ? "Снять отметку" : "Отметить фотографию")
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 if stackCount > 1 {
@@ -422,19 +433,6 @@ struct PhotoCard: View, Equatable {
                     .help("Развернуть или свернуть серию")
                 }
             }
-            .overlay(alignment: .top) {
-                Button(action: openDetails) {
-                    Image(systemName: "info.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Color.black.opacity(0.48), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .padding(8)
-                .help("Открыть детали")
-                .accessibilityLabel("Открыть детали фотографии")
-            }
             .overlay(alignment: .topLeading) {
                 if let rating = photo.manualRating {
                     Label("\(rating)", systemImage: "star.fill")
@@ -447,83 +445,8 @@ struct PhotoCard: View, Equatable {
                         .allowsHitTesting(false)
                 }
             }
-            .overlay(alignment: .bottomLeading) {
-                Label(decisionTitle, systemImage: recommendationSymbol)
-                    .labelStyle(.iconOnly)
-                    .font(.caption.weight(.bold))
-                    .frame(width: 26, height: 26)
-                    .foregroundStyle(photo.selection == "pick" ? Color.green : Color.white)
-                    .background(Color.black.opacity(0.62), in: Circle())
-                    .padding(8)
-                    .allowsHitTesting(false)
-            }
             .frame(maxWidth: .infinity)
             .clipped()
-            if developerToolsEnabled {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Button(action: toggleTopK) {
-                            HStack(spacing: 3) {
-                                Image(systemName: photo.qualityTopKRank == nil ? "star" : "star.fill")
-                                if let rank = photo.qualityTopKRank {
-                                    Text("#\(rank)").font(.caption2.monospacedDigit())
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help(photo.qualityTopKRank == nil ? "Добавить в мой Top‑K" : "Убрать из моего Top‑K")
-                        .accessibilityLabel(
-                            photo.qualityTopKRank.map { "Позиция \($0) в моём Top-K" }
-                                ?? "Добавить в мой Top-K"
-                        )
-                        Button(action: toggleSeriesSelection) {
-                            Image(
-                                systemName: seriesSelected
-                                    ? "square.stack.3d.up.fill"
-                                    : "square.stack.3d.up"
-                            )
-                            .foregroundStyle(seriesSelected ? Color.accentColor : Color.primary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(seriesSelected ? "Убрать из ручной серии" : "Добавить в ручную серию")
-                        .accessibilityLabel(
-                            seriesSelected
-                                ? "Убрать фото из ручной серии"
-                                : "Добавить фото в ручную серию"
-                        )
-                        Spacer()
-                    }
-                    if photo.duplicateGroup != nil {
-                        Button(action: labelSeriesLeader) {
-                            Label(
-                                photo.qualityExpectedLeader ? "Лучший кадр подтверждён" : "Это лучший кадр серии",
-                                systemImage: photo.qualityExpectedLeader
-                                    ? "checkmark.seal.fill"
-                                    : "square.stack.3d.up"
-                            )
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption.weight(.semibold))
-                        .help(
-                            photo.qualityExpectedLeader
-                                ? "Лучший кадр серии подтверждён"
-                                : "Отметить как лучший кадр серии"
-                        )
-                    } else {
-                        Color.clear
-                            .frame(height: 16)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: selectionCardDeveloperFooterHeight,
-                    maxHeight: selectionCardDeveloperFooterHeight,
-                    alignment: .topLeading
-                )
-            }
         }
         .padding(2)
         .frame(width: cardWidth)
@@ -543,8 +466,9 @@ struct PhotoCard: View, Equatable {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(photo.filename), решение: \(decisionTitle)")
         .accessibilityValue(selectionTitle(photo.selection))
-        .accessibilityHint("P добавляет в Best, X отклоняет; пробел открывает быстрый просмотр")
+        .accessibilityHint("P добавляет в Best, X отклоняет; пробел открывает детали")
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .onHover { isHovering = $0 }
     }
 }
 
@@ -583,6 +507,23 @@ struct PhotoDetailView: View {
                     LabeledContent("Категория", value: recommendationTitle)
                         .font(.headline)
                     LabeledContent("Безопасность", value: dispositionTitle(photo.disposition))
+                    if let rating = photo.manualRating {
+                        LabeledContent("Ваша оценка", value: "\(rating) из 5")
+                    }
+                    if let rank = photo.qualityTopKRank {
+                        LabeledContent("Top-K разметки", value: "Позиция №\(rank)")
+                    }
+                    if photo.duplicateGroup != nil {
+                        LabeledContent(
+                            "Серия",
+                            value: photo.qualityExpectedLeader
+                                ? "Вы отмечали этот кадр как лучший"
+                                : "Кадр входит в найденную серию"
+                        )
+                    }
+                    if photo.qualityDuplicateGroup != nil {
+                        LabeledContent("Ручная серия", value: "Добавлен для проверки")
+                    }
                     if photo.manualDisposition != nil {
                         Label(
                             "Категория изменена вами вручную",

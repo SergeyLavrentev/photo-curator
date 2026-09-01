@@ -89,6 +89,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "rejectedUUIDs: rejected" in app
     assert "прежде чем запускать первый анализ" in app
     assert "QuickLookController.shared.show" in app
+    assert "openSelectedPhotoDetails" in app
     assert '.keyboardShortcut("p", modifiers: [])' in app
     assert '.keyboardShortcut("u", modifiers: [])' in app
     assert '.keyboardShortcut("x", modifiers: [])' in app
@@ -146,8 +147,10 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "max(1, cardWidth - 4)" in app
     assert ".frame(width: previewSide, height: previewSide)" in app
     assert ".frame(width: cardWidth)" in app
-    assert "selectionCardDeveloperFooterHeight" in app
-    assert ".lineLimit(1)" in app
+    assert "selectionCardDeveloperFooterHeight" not in app
+    assert 'Image(systemName: "info.circle.fill")' not in app
+    assert 'help("Нажмите, чтобы выбрать; пробел — быстрый просмотр")' not in app
+    assert "if multiSelected || isHovering" in app
     assert "systemImage: bucket.symbol" in app
     assert '"binary_decisions"' in app
     assert "selection: selectionBucket.rawValue" in app
@@ -181,7 +184,9 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "Обновляем критерии отбора" in app
     assert 'Label("Почему?"' not in app
     assert 'Button("Открыть детали", action: openDetails)' in app
-    assert 'Image(systemName: "info.circle.fill")' in app
+    assert 'LabeledContent("Top-K разметки"' in app
+    assert '"Вы отмечали этот кадр как лучший"' in app
+    assert 'LabeledContent("Ручная серия"' in app
     assert "Создать Best‑альбом" in app
     assert '"delete_project"' in app
     assert "Отменить новый анализ" in app
