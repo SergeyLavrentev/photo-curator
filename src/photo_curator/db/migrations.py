@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -636,6 +636,11 @@ ALTER TABLE quality_series_labels
 ADD COLUMN leader_reason_codes_json TEXT;
 """
 
+MIGRATION_26 = """
+ALTER TABLE preference_examples ADD COLUMN source_album_id TEXT;
+ALTER TABLE preference_examples ADD COLUMN source_episode_key TEXT;
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -674,6 +679,7 @@ MIGRATIONS = (
     MIGRATION_23,
     MIGRATION_24,
     MIGRATION_25,
+    MIGRATION_26,
 )
 
 _TABLES_BY_VERSION = {
@@ -814,6 +820,12 @@ _COLUMNS_BY_VERSION = {
             "essential_member_uuids_json",
             "redundant_good_member_uuids_json",
             "leader_reason_codes_json",
+        },
+    },
+    26: {
+        "preference_examples": {
+            "source_album_id",
+            "source_episode_key",
         },
     },
 }

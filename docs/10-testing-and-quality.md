@@ -131,6 +131,10 @@ A/B-пары, ordered Top-K и одну человеческую серию с �
 профиля вкуса и не попадает в его обучение. В schema v18 lab-sampled provenance отделяет
 слепой corpus от ручных решений в prediction-conditioned review-галерее.
 
+Personal Taste examples имеют отдельный album/Engine-v3-episode provenance. Calibration и
+held-out не могут использовать один и тот же context; старые либо неразрешимые пары остаются
+доступны для аудита, но не засчитываются как held-out accuracy и не усиливают reliability.
+
 Мастер экспортирует manifest и отдельный immutable Swipe Score snapshot с schema/model
 provenance. Экспорт fail-honest: predicted dispositions, duplicate groups и автоматический
 Top-K не копируются в truth labels; серия готова только после lab manual decision для каждого

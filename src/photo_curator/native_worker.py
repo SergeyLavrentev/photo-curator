@@ -24,6 +24,7 @@ from photo_curator.analysis.taste import (
     capture_preference,
     capture_preference_vectors,
     feature_vector,
+    independent_preference_split,
     train_taste_profile,
 )
 from photo_curator.db import repository
@@ -865,14 +866,20 @@ class NativeWorker:
         }
 
     def _handle_taste_preference(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        left_uuid = _required_string(params, "left_uuid")
+        right_uuid = _required_string(params, "right_uuid")
         with database_connection(self.paths.database) as connection:
             examples = repository.list_preference_examples(connection)
-            split = _next_preference_split(examples)
+            album_id, episode_key = repository.preference_source_provenance(
+                connection, project_id, left_uuid, right_uuid
+            )
+            split = independent_preference_split(examples, album_id, episode_key)
             example_id = capture_preference(
                 connection,
-                project_id=_required_string(params, "project_id"),
-                left_uuid=_required_string(params, "left_uuid"),
-                right_uuid=_required_string(params, "right_uuid"),
+                project_id=project_id,
+                left_uuid=left_uuid,
+                right_uuid=right_uuid,
                 preferred_uuid=_required_string(params, "preferred_uuid"),
                 split=split,
             )
@@ -1536,14 +1543,6 @@ def _taste_round_payload(
             if asset_uuid in assets
         ],
     }
-
-
-def _next_preference_split(examples: list[dict[str, object]]) -> str:
-    calibration_count = sum(example["split"] == "calibration" for example in examples)
-    if calibration_count < 3:
-        return "calibration"
-    post_warmup_count = max(0, len(examples) - 3)
-    return "held_out" if post_warmup_count % 2 == 0 else "calibration"
 
 
 @contextmanager

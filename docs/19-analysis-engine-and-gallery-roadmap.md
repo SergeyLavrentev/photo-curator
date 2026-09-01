@@ -258,8 +258,12 @@ Album -> capture episode -> semantic scene -> moment/near-duplicate stack -> ran
   кадров и versioned reason codes к coherent human series/immutable source snapshot. Quality
   Wizard собирает эти ответы явно; exporter включает только полную непротиворечивую разметку,
   а legacy series остаются без scene-budget evidence.
-- [ ] Taste calibration и holdout брать из разных albums/episodes; correlated pairs из
+- [x] Taste calibration и holdout брать из разных albums/episodes; correlated pairs из
   шести кадров не считать независимым evidence.
+  Evidence: schema v26 сохраняет source album и пару Engine v3 episode IDs для каждого
+  preference example. Один context закрепляется только за одним split; legacy/unverified и
+  пересекающий calibration context held-out исключаются из accuracy/reliability, а число
+  независимых contexts ограничивает силу personal delta.
 - [x] Structural readiness отделить от evaluator pass и release eligibility.
   Evidence: native summary публикует `release_ready` только по полноте human corpus, тогда как
   evaluator отдельно возвращает absolute checks, `release_eligible` и итоговый `passed`;

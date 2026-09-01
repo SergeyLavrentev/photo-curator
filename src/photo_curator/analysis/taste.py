@@ -9,7 +9,7 @@ import numpy as np
 from photo_curator.db import repository
 
 TASTE_PROFILE_SCHEMA_VERSION = 1
-TASTE_MODEL_VERSION = "pairwise-linear-v3-independent-holdout"
+TASTE_MODEL_VERSION = "pairwise-linear-v4-context-separated-holdout"
 MIN_CALIBRATION_PAIRS = 3
 
 
@@ -58,6 +58,9 @@ def capture_preference(
     right_schema, _, right_base64 = feature_vector(right)
     if left_schema != right_schema:
         raise TasteProfileError("Feature schema пары не совпадает")
+    source_album_id, source_episode_key = repository.preference_source_provenance(
+        connection, project_id, left_uuid, right_uuid
+    )
     return repository.add_preference_example(
         connection,
         profile_id=profile_id,
@@ -69,6 +72,8 @@ def capture_preference(
         feature_schema=left_schema,
         left_feature_base64=left_base64,
         right_feature_base64=right_base64,
+        source_album_id=source_album_id,
+        source_episode_key=source_episode_key,
     )
 
 
@@ -122,7 +127,19 @@ def train_taste_profile(connection, profile_id: str = "default") -> dict[str, ob
     if len(schemas) != 1:
         raise TasteProfileError("Preference examples используют несовместимые feature schemas")
     schema = schemas.pop()
-    decoded = [_decode_example(example) for example in examples]
+    calibration_contexts = {
+        context for example in calibration if (context := _preference_context(example)) is not None
+    }
+    raw_held_out = [example for example in examples if example["split"] == "held_out"]
+    held_out = [
+        example
+        for example in raw_held_out
+        if (context := _preference_context(example)) is not None
+        and context not in calibration_contexts
+    ]
+    accepted_ids = {str(example["id"]) for example in calibration + held_out}
+    accepted_examples = [example for example in examples if str(example["id"]) in accepted_ids]
+    decoded = [_decode_example(example) for example in accepted_examples]
     dimension = decoded[0][0].size
     if any(left.size != dimension or right.size != dimension for left, right, _, _ in decoded):
         raise TasteProfileError("Feature dimensions не совпадают")
@@ -152,16 +169,16 @@ def train_taste_profile(connection, profile_id: str = "default") -> dict[str, ob
         "calibration_accuracy": calibration_accuracy,
         "held_out_pairs": len(held_out_vectors),
         "held_out_accuracy": held_out_accuracy,
+        "held_out_excluded_unverified_or_correlated": len(raw_held_out) - len(held_out),
+        "calibration_independent_contexts": len(calibration_contexts),
+        "held_out_independent_contexts": len(
+            {context for value in held_out if (context := _preference_context(value)) is not None}
+        ),
         "calibration_unique_assets": len(
             {str(value[key]) for value in calibration for key in ("left_uuid", "right_uuid")}
         ),
         "held_out_unique_assets": len(
-            {
-                str(value[key])
-                for value in examples
-                if value["split"] == "held_out"
-                for key in ("left_uuid", "right_uuid")
-            }
+            {str(value[key]) for value in held_out for key in ("left_uuid", "right_uuid")}
         ),
         "weights_l2": round(float(np.linalg.norm(weights)), 6),
     }
@@ -219,7 +236,8 @@ def _taste_reliability(profile: dict[str, object]) -> float:
     if held_out_pairs >= 3 and isinstance(held_out_accuracy, (int, float)):
         accuracy = float(held_out_accuracy)
         independent_assets = int(values.get("held_out_unique_assets") or 0)
-        evaluation_strength = min(1.0, independent_assets / 24.0)
+        independent_contexts = int(values.get("held_out_independent_contexts") or 0)
+        evaluation_strength = min(1.0, independent_assets / 24.0, independent_contexts / 3.0)
     elif isinstance(calibration_accuracy, (int, float)):
         accuracy = float(calibration_accuracy)
         # In-sample accuracy is optimistic and therefore gets at most half trust.
@@ -228,8 +246,51 @@ def _taste_reliability(profile: dict[str, object]) -> float:
         return 0.0
     skill = max(0.0, min(1.0, (accuracy - 0.5) / 0.5))
     independent_training_assets = int(values.get("calibration_unique_assets") or 0)
-    sample_strength = min(1.0, independent_training_assets / 24.0)
+    training_contexts = int(values.get("calibration_independent_contexts") or 0)
+    sample_strength = min(1.0, independent_training_assets / 24.0, training_contexts / 3.0)
     return round(min(sample_strength, evaluation_strength) * skill, 3)
+
+
+def independent_preference_split(
+    examples: list[dict[str, object]],
+    source_album_id: str,
+    source_episode_key: str | None,
+) -> str:
+    """Keep one album/episode context entirely in calibration or held-out."""
+    if not source_episode_key:
+        return "calibration"
+    context = (source_album_id, source_episode_key)
+    existing_splits = {
+        str(example["split"]) for example in examples if _preference_context(example) == context
+    }
+    if existing_splits:
+        return "held_out" if existing_splits == {"held_out"} else "calibration"
+    calibration_count = sum(example["split"] == "calibration" for example in examples)
+    if calibration_count < MIN_CALIBRATION_PAIRS:
+        return "calibration"
+    calibration_contexts = {
+        value
+        for example in examples
+        if example["split"] == "calibration"
+        if (value := _preference_context(example)) is not None
+    }
+    held_out_contexts = {
+        value
+        for example in examples
+        if example["split"] == "held_out"
+        if (value := _preference_context(example)) is not None
+    }
+    return "held_out" if len(held_out_contexts) < len(calibration_contexts) else "calibration"
+
+
+def _preference_context(example: dict[str, object]) -> tuple[str, str] | None:
+    album_id = example.get("source_album_id")
+    episode_key = example.get("source_episode_key")
+    if not isinstance(album_id, str) or not album_id:
+        return None
+    if not isinstance(episode_key, str) or not episode_key:
+        return None
+    return album_id, episode_key
 
 
 def compatible_taste_model(

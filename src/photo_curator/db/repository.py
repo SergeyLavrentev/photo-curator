@@ -1177,6 +1177,8 @@ def add_preference_example(
     feature_schema: str,
     left_feature_base64: str,
     right_feature_base64: str,
+    source_album_id: str | None = None,
+    source_episode_key: str | None = None,
 ) -> str:
     if split not in {"calibration", "held_out"}:
         raise ValueError("split должен быть calibration или held_out")
@@ -1200,8 +1202,9 @@ def add_preference_example(
         """
         INSERT INTO preference_examples (
             id, profile_id, project_id, left_uuid, right_uuid, preferred_uuid,
-            split, feature_schema, left_feature_base64, right_feature_base64, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            split, feature_schema, left_feature_base64, right_feature_base64,
+            source_album_id, source_episode_key, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             example_id,
@@ -1214,6 +1217,8 @@ def add_preference_example(
             feature_schema,
             left_feature_base64,
             right_feature_base64,
+            source_album_id,
+            source_episode_key,
             now,
         ),
     )
@@ -1244,6 +1249,34 @@ def list_preference_examples(
         (profile_id,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def preference_source_provenance(
+    connection: sqlite3.Connection,
+    project_id: str,
+    left_uuid: str,
+    right_uuid: str,
+) -> tuple[str, str | None]:
+    project = get_project(connection, project_id)
+    album_id = str(project["album_id"])
+    run = latest_engine_shadow_run(connection, project_id)
+    if run is None:
+        return album_id, None
+    rows = connection.execute(
+        """
+        SELECT esm.asset_uuid, esm.node_id
+        FROM engine_shadow_members esm
+        JOIN engine_shadow_nodes esn
+          ON esn.run_id=esm.run_id AND esn.node_id=esm.node_id
+        WHERE esm.run_id=? AND esn.kind='episode'
+          AND esm.asset_uuid IN (?, ?)
+        """,
+        (str(run["id"]), left_uuid, right_uuid),
+    ).fetchall()
+    episode_by_asset = {str(row["asset_uuid"]): str(row["node_id"]) for row in rows}
+    if left_uuid not in episode_by_asset or right_uuid not in episode_by_asset:
+        return album_id, None
+    return album_id, "|".join(sorted((episode_by_asset[left_uuid], episode_by_asset[right_uuid])))
 
 
 def add_quality_preference_example(

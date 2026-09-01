@@ -657,13 +657,13 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
             "split": "calibration",
         },
     )
-    assert held_out["split"] == "held_out"
-    assert held_out["profile"]["calibration_count"] == 3
-    assert held_out["profile"]["held_out_count"] == 1
-    assert held_out["profile"]["status"] == "ready"
+    assert held_out["split"] == "calibration"
+    assert held_out["profile"]["calibration_count"] == 4
+    assert held_out["profile"]["held_out_count"] == 0
+    assert held_out["profile"]["status"] == "stale"
     evaluated = worker.dispatch("taste_train", {})
-    assert evaluated["evidence"]["held_out_pairs"] == 1
-    assert evaluated["evidence"]["held_out_accuracy"] in {0.0, 1.0}
+    assert evaluated["evidence"]["held_out_pairs"] == 0
+    assert evaluated["evidence"]["held_out_accuracy"] is None
     exported = worker.dispatch("taste_export", {})
     assert exported["schema_version"] == 1
     assert len(exported["examples"]) == 4

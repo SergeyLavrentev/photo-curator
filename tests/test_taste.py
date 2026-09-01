@@ -9,6 +9,7 @@ from photo_curator.analysis.taste import (
     TasteProfileError,
     capture_preference,
     compatible_taste_model,
+    independent_preference_split,
     load_taste_model,
     train_taste_profile,
 )
@@ -46,6 +47,10 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
             preferred_uuid="demo-008",
             split="held_out",
         )
+        connection.execute(
+            "UPDATE preference_examples SET source_episode_key='heldout-independent' "
+            "WHERE split='held_out'"
+        )
         profile = train_taste_profile(connection)
         model = load_taste_model(connection)
         signals = repository.analysis_signals_by_asset(connection, project_id)
@@ -54,6 +59,7 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
     assert profile["training_examples"] == 4
     assert profile["evidence"]["calibration_accuracy"] == 1.0
     assert profile["evidence"]["held_out_pairs"] == 1
+    assert profile["evidence"]["held_out_excluded_unverified_or_correlated"] == 0
     assert model is not None
     assert 0 < model.reliability < 0.1
     assert model.personal_delta(signals["demo-012"]["feature_print"]) > model.personal_delta(
@@ -186,3 +192,54 @@ def test_taste_training_requires_explicit_valid_comparisons(tmp_path: Path) -> N
                 right_uuid="demo-012",
                 preferred_uuid="demo-012",
             )
+
+
+def test_holdout_context_cannot_overlap_calibration_context() -> None:
+    examples = [
+        {
+            "split": "calibration",
+            "source_album_id": "album-a",
+            "source_episode_key": "episode-1|episode-1",
+        }
+        for _ in range(3)
+    ]
+
+    assert independent_preference_split(examples, "album-a", "episode-1|episode-1") == "calibration"
+    assert independent_preference_split(examples, "album-a", "episode-2|episode-2") == "held_out"
+
+
+def test_correlated_heldout_pair_is_excluded_from_taste_reliability(tmp_path: Path) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        _capture_training_pairs(connection, project_id)
+        calibration = repository.list_preference_examples(connection)
+        context = next(
+            (
+                (example["source_album_id"], example["source_episode_key"])
+                for example in calibration
+                if example["source_episode_key"]
+            ),
+            None,
+        )
+        assert context is not None
+        capture_preference(
+            connection,
+            project_id=project_id,
+            left_uuid="demo-008",
+            right_uuid="demo-005",
+            preferred_uuid="demo-008",
+            split="held_out",
+        )
+        connection.execute(
+            """
+            UPDATE preference_examples
+            SET source_album_id=?, source_episode_key=?
+            WHERE split='held_out'
+            """,
+            context,
+        )
+        profile = train_taste_profile(connection)
+
+    assert profile["evidence"]["held_out_pairs"] == 0
+    assert profile["evidence"]["held_out_excluded_unverified_or_correlated"] == 1

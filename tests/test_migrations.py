@@ -47,6 +47,10 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
             row[1]
             for row in connection.execute("PRAGMA table_info(quality_series_labels)").fetchall()
         }
+        preference_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(preference_examples)").fetchall()
+        }
 
     assert version == SCHEMA_VERSION
     assert {
@@ -109,6 +113,33 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "redundant_good_member_uuids_json",
         "leader_reason_codes_json",
     } <= quality_series_columns
+    assert {"source_album_id", "source_episode_key"} <= preference_columns
+
+
+def test_migration_26_keeps_legacy_preferences_unverified(tmp_path: Path) -> None:
+    with database_connection(tmp_path / "v25.sqlite3") as connection:
+        create_schema_at(connection, 25)
+        connection.executescript(
+            """
+            INSERT INTO taste_profiles (
+                id, name, status, schema_version, training_examples, evidence_json,
+                created_at, updated_at
+            ) VALUES ('default', 'Taste', 'collecting', 1, 0, '{}', 'now', 'now');
+            INSERT INTO preference_examples (
+                id, profile_id, project_id, left_uuid, right_uuid, preferred_uuid,
+                split, feature_schema, left_feature_base64, right_feature_base64, created_at
+            ) VALUES (
+                'e', 'default', NULL, 'a', 'b', 'a', 'held_out', 'schema', 'AA==', 'AA==', 'now'
+            );
+            """
+        )
+
+        migrate(connection)
+        row = connection.execute(
+            "SELECT split, source_album_id, source_episode_key FROM preference_examples"
+        ).fetchone()
+
+    assert tuple(row) == ("held_out", None, None)
 
 
 def test_migration_25_preserves_series_provenance_and_adds_empty_scene_truth(
