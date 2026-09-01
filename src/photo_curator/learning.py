@@ -327,8 +327,9 @@ def _replace_round_projection(
             INSERT INTO learning_assets (
                 round_id, asset_key, feature_schema, feature_base64, feature_provenance_json,
                 source_revision_hash, expected_disposition, defect_codes_json,
-                defect_severity, defect_confidence, top_k_rank, human_origin, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                defect_severity, defect_confidence, top_k_rank, human_note,
+                human_origin, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
             (
                 round_value["id"],
@@ -342,6 +343,7 @@ def _replace_round_projection(
                 label.get("defect_severity"),
                 label.get("defect_confidence"),
                 label.get("top_k_rank"),
+                label.get("quality_note"),
                 now,
                 now,
             ),
@@ -756,6 +758,7 @@ def import_learning_corpus(
             "defect_severity",
             "defect_confidence",
             "top_k_rank",
+            "human_note",
             "human_origin",
             "created_at",
             "updated_at",

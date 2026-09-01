@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -756,6 +756,10 @@ CREATE TABLE learning_migration_audit (
 );
 """
 
+MIGRATION_28 = """
+ALTER TABLE learning_assets ADD COLUMN human_note TEXT;
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -796,6 +800,7 @@ MIGRATIONS = (
     MIGRATION_25,
     MIGRATION_26,
     MIGRATION_27,
+    MIGRATION_28,
 )
 
 _TABLES_BY_VERSION = {
@@ -1011,6 +1016,7 @@ _COLUMNS_BY_VERSION = {
             "counts_json",
         },
     },
+    28: {"learning_assets": {"human_note"}},
 }
 
 

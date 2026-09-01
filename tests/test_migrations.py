@@ -51,6 +51,9 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
             row[1]
             for row in connection.execute("PRAGMA table_info(preference_examples)").fetchall()
         }
+        learning_asset_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(learning_assets)").fetchall()
+        }
 
     assert version == SCHEMA_VERSION
     assert {
@@ -121,6 +124,7 @@ def test_initial_migration_creates_all_required_tables(tmp_path: Path) -> None:
         "leader_reason_codes_json",
     } <= quality_series_columns
     assert {"source_album_id", "source_episode_key"} <= preference_columns
+    assert "human_note" in learning_asset_columns
 
 
 def test_migration_26_keeps_legacy_preferences_unverified(tmp_path: Path) -> None:
@@ -147,6 +151,38 @@ def test_migration_26_keeps_legacy_preferences_unverified(tmp_path: Path) -> Non
         ).fetchone()
 
     assert tuple(row) == ("held_out", None, None)
+
+
+def test_migration_28_adds_optional_human_note_without_changing_corpus(tmp_path: Path) -> None:
+    with database_connection(tmp_path / "v27.sqlite3") as connection:
+        create_schema_at(connection, 27)
+        connection.executescript(
+            """
+            INSERT INTO taste_profiles (
+                id, name, status, schema_version, training_examples, evidence_json,
+                created_at, updated_at
+            ) VALUES ('default', 'Taste', 'collecting', 1, 0, '{}', 'now', 'now');
+            INSERT INTO learning_contexts (
+                id, profile_id, album_context_hash, episode_context_hash, split,
+                locked, provenance_json, created_at, updated_at
+            ) VALUES ('c', 'default', 'album', 'episode', 'training', 1, '{}', 'now', 'now');
+            INSERT INTO learning_rounds (
+                id, profile_id, context_id, attempt_index, status, source_project_hash,
+                source_snapshot_hash, model_provenance_json, human_origin, created_at, updated_at
+            ) VALUES ('r', 'default', 'c', 1, 'in_progress', 'project', 'snapshot',
+                      '{}', 1, 'now', 'now');
+            INSERT INTO learning_assets (
+                round_id, asset_key, feature_schema, feature_base64,
+                feature_provenance_json, source_revision_hash, human_origin,
+                created_at, updated_at
+            ) VALUES ('r', 'a', 'schema', 'AAAAAA==', '{}', 'revision', 1, 'now', 'now');
+            """
+        )
+
+        migrate(connection)
+        row = connection.execute("SELECT asset_key, human_note FROM learning_assets").fetchone()
+
+    assert tuple(row) == ("a", None)
 
 
 def test_migration_25_preserves_series_provenance_and_adds_empty_scene_truth(
