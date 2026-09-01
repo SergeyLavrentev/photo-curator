@@ -1286,7 +1286,10 @@ def add_quality_preference_example(
     left_uuid: str,
     right_uuid: str,
     preferred_uuid: str,
+    split: str = "held_out",
 ) -> str:
+    if split not in {"training", "held_out"}:
+        raise ValueError("split должен быть training или held_out")
     if left_uuid == right_uuid or preferred_uuid not in {left_uuid, right_uuid}:
         raise ValueError("Некорректная проверочная пара")
     known = assets_by_uuid(connection, project_id, {left_uuid, right_uuid})
@@ -1307,7 +1310,7 @@ def add_quality_preference_example(
         """
         INSERT INTO quality_preference_examples (
             id, project_id, left_uuid, right_uuid, preferred_uuid, split, created_at
-        ) VALUES (?, ?, ?, ?, ?, 'held_out', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             example_id,
@@ -1315,6 +1318,7 @@ def add_quality_preference_example(
             ordered_left,
             ordered_right,
             preferred_uuid,
+            split,
             utc_now(),
         ),
     )

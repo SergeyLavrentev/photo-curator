@@ -30,6 +30,14 @@ from photo_curator.analysis.taste import (
 from photo_curator.db import repository
 from photo_curator.db.connection import create_database_backup, database_connection
 from photo_curator.db.migrations import SCHEMA_VERSION, migrate
+from photo_curator.learning import (
+    export_learning_corpus,
+    import_learning_corpus,
+    learning_status,
+    migrate_project_learning,
+    reset_all_learning,
+    start_new_round,
+)
 from photo_curator.native_payloads import (
     album_payload as _album_payload,
 )
@@ -105,6 +113,8 @@ class NativeWorker:
         with database_connection(paths.database) as connection:
             migrate(connection)
             repository.mark_running_jobs_interrupted(connection)
+            for project in repository.list_projects(connection):
+                migrate_project_learning(connection, str(project["id"]))
         _cleanup_transient_cache(paths)
 
     def dispatch(
@@ -183,6 +193,7 @@ class NativeWorker:
                 project = repository.get_project(connection, project_id)
                 if project["state"] == "running":
                     raise NativeWorkerError("Сначала остановите выполняющийся анализ")
+            learning = self._migrate_learning_or_raise(project_id)
             _append_destructive_audit(
                 self.paths,
                 action="delete_project",
@@ -204,7 +215,24 @@ class NativeWorker:
                 project_id=project_id,
                 backup_path=str(backup),
             )
-        return {"status": "deleted", "project_id": project_id, "backup_path": str(backup)}
+        return {
+            "status": "deleted",
+            "project_id": project_id,
+            "backup_path": str(backup),
+            "learning_migration": learning,
+        }
+
+    def _migrate_learning_or_raise(
+        self, project_id: str, *, default_split: str = "held_out"
+    ) -> dict[str, object]:
+        with database_connection(self.paths.database) as connection:
+            result = migrate_project_learning(connection, project_id, default_split=default_split)
+        if result["status"] != "completed":
+            raise NativeWorkerError(
+                "Durable learning migration blocked the operation: "
+                + str(result.get("error") or "unknown provenance error")
+            )
+        return result
 
     def _handle_create_project(self, params: dict[str, object]) -> dict[str, object]:
         album_id = _required_string(params, "album_id")
@@ -933,9 +961,70 @@ class NativeWorker:
         with database_connection(self.paths.database) as connection:
             return build_database_quality_evidence(connection, project_id)
 
+    def _handle_quality_learning_status(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _optional_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            if project_id:
+                repository.get_project(connection, project_id)
+            return learning_status(connection, project_id)
+
+    def _handle_quality_round_start(self, params: dict[str, object]) -> dict[str, object]:
+        project_id = _required_string(params, "project_id")
+        split = _required_string(params, "split")
+        with database_connection(self.paths.database) as connection:
+            result = start_new_round(connection, project_id, split)
+        if result["status"] == "failed":
+            raise NativeWorkerError(str(result.get("error") or "Learning round migration failed"))
+        return result
+
+    def _handle_quality_learning_export(self, params: dict[str, object]) -> dict[str, object]:
+        del params
+        with database_connection(self.paths.database) as connection:
+            return export_learning_corpus(connection)
+
+    def _handle_quality_learning_import(self, params: dict[str, object]) -> dict[str, object]:
+        corpus = params.get("corpus")
+        if not isinstance(corpus, dict):
+            raise NativeWorkerError("corpus must be an object")
+        with database_connection(self.paths.database) as connection:
+            imported = import_learning_corpus(connection, corpus)
+            status = learning_status(connection)
+        return {"status": "imported", "counts": imported, "learning": status}
+
+    def _handle_quality_learning_delete(self, params: dict[str, object]) -> dict[str, object]:
+        if params.get("confirmed") is not True:
+            raise NativeWorkerError("Learning data deletion requires confirmed=true")
+        _append_destructive_audit(
+            self.paths,
+            action="delete_learning_data",
+            status="requested",
+            project_id="global-learning-corpus",
+        )
+        backup = create_database_backup(
+            self.paths.database,
+            self.paths.data_dir / "backups",
+            reason="before-delete-learning-data",
+        )
+        with database_connection(self.paths.database) as connection:
+            reset_all_learning(connection)
+            status = learning_status(connection)
+        shutil.rmtree(self.paths.data_dir / "taste-onboarding", ignore_errors=True)
+        _append_destructive_audit(
+            self.paths,
+            action="delete_learning_data",
+            status="completed",
+            project_id="global-learning-corpus",
+            backup_path=str(backup),
+        )
+        return {"status": "deleted", "backup_path": str(backup), "learning": status}
+
     def _handle_quality_status(self, params: dict[str, object]) -> dict[str, object]:
         evidence = self._handle_quality_export(params)
-        return dict(evidence["summary"])
+        status = dict(evidence["summary"])
+        project_id = _required_string(params, "project_id")
+        with database_connection(self.paths.database) as connection:
+            status["learning"] = learning_status(connection, project_id)
+        return status
 
     def _handle_quality_candidates(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -1011,6 +1100,7 @@ class NativeWorker:
                 note=note,
             )
             asset = repository.get_asset(connection, project_id, asset_uuid)
+        self._migrate_learning_or_raise(project_id)
         return _quality_asset_payload(asset)
 
     def _handle_quality_pair(self, params: dict[str, object]) -> dict[str, object]:
@@ -1045,15 +1135,19 @@ class NativeWorker:
     def _handle_quality_preference(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         with database_connection(self.paths.database) as connection:
+            active = learning_status(connection, project_id).get("active_round")
+            split = str(active["split"]) if isinstance(active, dict) else "held_out"
             example_id = repository.add_quality_preference_example(
                 connection,
                 project_id=project_id,
                 left_uuid=_required_string(params, "left_uuid"),
                 right_uuid=_required_string(params, "right_uuid"),
                 preferred_uuid=_required_string(params, "preferred_uuid"),
+                split=split,
             )
             completed = len(repository.list_quality_preference_examples(connection, project_id))
-        return {"example_id": example_id, "split": "held_out", "completed": completed}
+        self._migrate_learning_or_raise(project_id)
+        return {"example_id": example_id, "split": split, "completed": completed}
 
     def _handle_quality_top_k(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -1063,17 +1157,20 @@ class NativeWorker:
             raise NativeWorkerError("selected must be boolean")
         with database_connection(self.paths.database) as connection:
             ordered = repository.set_quality_top_k(connection, project_id, asset_uuid, selected)
+        self._migrate_learning_or_raise(project_id)
         return {"top_k": ordered, "count": len(ordered)}
 
     def _handle_quality_series(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         with database_connection(self.paths.database) as connection:
-            return repository.label_quality_duplicate_group(
+            result = repository.label_quality_duplicate_group(
                 connection,
                 project_id,
                 _required_string(params, "group_id"),
                 _required_string(params, "leader_uuid"),
             )
+        self._migrate_learning_or_raise(project_id)
+        return result
 
     def _handle_quality_custom_series(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
@@ -1091,7 +1188,7 @@ class NativeWorker:
                 if predicted_members != set(raw_members):
                     raise NativeWorkerError("Разметка должна содержать всю выбранную серию")
                 source_kind = "predicted_group"
-            return repository.label_quality_custom_group(
+            result = repository.label_quality_custom_group(
                 connection,
                 project_id,
                 raw_members,
@@ -1104,6 +1201,8 @@ class NativeWorker:
                 ),
                 leader_reason_codes=_optional_string_list(params, "leader_reason_codes"),
             )
+        self._migrate_learning_or_raise(project_id)
+        return result
 
     def _handle_quality_evaluate(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")

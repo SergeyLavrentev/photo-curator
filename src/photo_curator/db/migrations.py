@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -641,6 +641,121 @@ ALTER TABLE preference_examples ADD COLUMN source_album_id TEXT;
 ALTER TABLE preference_examples ADD COLUMN source_episode_key TEXT;
 """
 
+MIGRATION_27 = """
+CREATE TABLE learning_contexts (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    album_context_hash TEXT NOT NULL,
+    episode_context_hash TEXT NOT NULL,
+    split TEXT NOT NULL CHECK (split IN ('training', 'held_out')),
+    locked INTEGER NOT NULL DEFAULT 1 CHECK (locked IN (0, 1)),
+    provenance_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (profile_id) REFERENCES taste_profiles(id) ON DELETE CASCADE,
+    UNIQUE (profile_id, album_context_hash, episode_context_hash)
+);
+CREATE INDEX learning_contexts_profile_split
+ON learning_contexts(profile_id, split, created_at);
+
+CREATE TABLE learning_rounds (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    attempt_index INTEGER NOT NULL CHECK (attempt_index >= 1),
+    status TEXT NOT NULL CHECK (
+        status IN ('in_progress', 'completed', 'superseded', 'imported')
+    ),
+    source_project_hash TEXT NOT NULL,
+    source_snapshot_hash TEXT NOT NULL,
+    feature_schema TEXT,
+    model_provenance_json TEXT NOT NULL,
+    human_origin INTEGER NOT NULL DEFAULT 1 CHECK (human_origin IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (profile_id) REFERENCES taste_profiles(id) ON DELETE CASCADE,
+    FOREIGN KEY (context_id) REFERENCES learning_contexts(id) ON DELETE CASCADE,
+    UNIQUE (context_id, attempt_index)
+);
+CREATE INDEX learning_rounds_profile_status
+ON learning_rounds(profile_id, status, updated_at);
+
+CREATE TABLE quality_round_bindings (
+    project_id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (round_id) REFERENCES learning_rounds(id) ON DELETE CASCADE
+);
+
+CREATE TABLE learning_assets (
+    round_id TEXT NOT NULL,
+    asset_key TEXT NOT NULL,
+    feature_schema TEXT NOT NULL,
+    feature_base64 TEXT NOT NULL,
+    feature_provenance_json TEXT NOT NULL,
+    source_revision_hash TEXT NOT NULL,
+    expected_disposition TEXT CHECK (
+        expected_disposition IS NULL
+        OR expected_disposition IN ('keep', 'review', 'reject')
+    ),
+    defect_codes_json TEXT NOT NULL DEFAULT '[]',
+    defect_severity INTEGER CHECK (defect_severity IS NULL OR defect_severity BETWEEN 1 AND 3),
+    defect_confidence REAL CHECK (defect_confidence IS NULL OR defect_confidence BETWEEN 0 AND 1),
+    top_k_rank INTEGER,
+    human_origin INTEGER NOT NULL DEFAULT 1 CHECK (human_origin IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (round_id, asset_key),
+    FOREIGN KEY (round_id) REFERENCES learning_rounds(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX learning_assets_round_top_k
+ON learning_assets(round_id, top_k_rank) WHERE top_k_rank IS NOT NULL;
+
+CREATE TABLE learning_preferences (
+    id TEXT PRIMARY KEY,
+    round_id TEXT NOT NULL,
+    left_asset_key TEXT NOT NULL,
+    right_asset_key TEXT NOT NULL,
+    preferred_asset_key TEXT NOT NULL,
+    split TEXT NOT NULL CHECK (split IN ('training', 'held_out')),
+    human_origin INTEGER NOT NULL DEFAULT 1 CHECK (human_origin IN (0, 1)),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (round_id) REFERENCES learning_rounds(id) ON DELETE CASCADE,
+    CHECK (left_asset_key <> right_asset_key),
+    CHECK (preferred_asset_key IN (left_asset_key, right_asset_key)),
+    UNIQUE (round_id, left_asset_key, right_asset_key)
+);
+
+CREATE TABLE learning_series (
+    round_id TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    member_asset_keys_json TEXT NOT NULL,
+    leader_asset_key TEXT NOT NULL,
+    target_budget INTEGER,
+    essential_asset_keys_json TEXT,
+    redundant_good_asset_keys_json TEXT,
+    leader_reason_codes_json TEXT,
+    provenance_json TEXT NOT NULL,
+    human_origin INTEGER NOT NULL DEFAULT 1 CHECK (human_origin IN (0, 1)),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (round_id, group_key),
+    FOREIGN KEY (round_id) REFERENCES learning_rounds(id) ON DELETE CASCADE
+);
+
+CREATE TABLE learning_migration_audit (
+    id TEXT PRIMARY KEY,
+    source_project_hash TEXT NOT NULL,
+    source_snapshot_hash TEXT NOT NULL,
+    migration_version INTEGER NOT NULL,
+    input_fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+    counts_json TEXT NOT NULL,
+    error_text TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (source_project_hash, migration_version, input_fingerprint)
+);
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -680,6 +795,7 @@ MIGRATIONS = (
     MIGRATION_24,
     MIGRATION_25,
     MIGRATION_26,
+    MIGRATION_27,
 )
 
 _TABLES_BY_VERSION = {
@@ -705,6 +821,15 @@ _TABLES_BY_VERSION = {
     20: {"album_snapshots", "album_snapshot_items"},
     21: {"engine_shadow_runs", "engine_shadow_nodes", "engine_shadow_members"},
     24: {"quality_series_labels"},
+    27: {
+        "learning_contexts",
+        "learning_rounds",
+        "quality_round_bindings",
+        "learning_assets",
+        "learning_preferences",
+        "learning_series",
+        "learning_migration_audit",
+    },
 }
 
 _COLUMNS_BY_VERSION = {
@@ -826,6 +951,64 @@ _COLUMNS_BY_VERSION = {
         "preference_examples": {
             "source_album_id",
             "source_episode_key",
+        },
+    },
+    27: {
+        "learning_contexts": {
+            "id",
+            "profile_id",
+            "album_context_hash",
+            "episode_context_hash",
+            "split",
+            "locked",
+            "provenance_json",
+        },
+        "learning_rounds": {
+            "id",
+            "context_id",
+            "attempt_index",
+            "status",
+            "source_project_hash",
+            "source_snapshot_hash",
+            "feature_schema",
+            "model_provenance_json",
+            "human_origin",
+        },
+        "learning_assets": {
+            "round_id",
+            "asset_key",
+            "feature_schema",
+            "feature_base64",
+            "feature_provenance_json",
+            "source_revision_hash",
+            "expected_disposition",
+            "defect_codes_json",
+            "top_k_rank",
+            "human_origin",
+        },
+        "learning_preferences": {
+            "round_id",
+            "left_asset_key",
+            "right_asset_key",
+            "preferred_asset_key",
+            "split",
+            "human_origin",
+        },
+        "learning_series": {
+            "round_id",
+            "group_key",
+            "member_asset_keys_json",
+            "leader_asset_key",
+            "provenance_json",
+            "human_origin",
+        },
+        "learning_migration_audit": {
+            "source_project_hash",
+            "source_snapshot_hash",
+            "migration_version",
+            "input_fingerprint",
+            "status",
+            "counts_json",
         },
     },
 }
