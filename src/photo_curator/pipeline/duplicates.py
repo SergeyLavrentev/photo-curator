@@ -695,7 +695,7 @@ def _recommended_series_picks(
         if not isinstance(vector, np.ndarray) or not selected:
             continue
         # A materially different pose/moment can survive the stack as an additional pick.
-        if max(float(np.dot(vector, chosen)) for chosen in selected) < 0.995:
+        if max(float(np.dot(vector, chosen)) for chosen in selected) < 0.94:
             result.add(uuid)
             selected.append(vector)
     return result
@@ -750,13 +750,8 @@ def _series_quality(
     signals: dict[str, dict[str, object]],
     personal_delta: float,
 ) -> float:
-    values: list[tuple[float, float]] = [(_quality(asset) * 100.0, 0.35)]
-    score_fields = (
-        ("aesthetics", "overall_score", 0.20, lambda value: (value + 1.0) * 50.0),
-        ("nima_aesthetics", "aesthetic_score", 0.15, lambda value: value),
-        ("mobileclip", "aesthetic_score", 0.15, lambda value: value),
-        ("musiq_quality", "quality_score", 0.10, lambda value: value),
-    )
+    values: list[tuple[float, float]] = [(_quality(asset) * 100.0, 0.20)]
+    score_fields = (("aesthetics", "overall_score", 0.65, lambda value: (value + 1.0) * 50.0),)
     for signal_kind, score_field, weight, transform in score_fields:
         signal = signals.get(signal_kind)
         value = signal.get("value") if signal and signal.get("status") == "ready" else None
@@ -770,21 +765,14 @@ def _series_quality(
     )
     if isinstance(relative_roi_quality, (int, float)):
         # ROI is a bounded within-series ranking channel, never standalone reject evidence.
-        values.append((max(0.0, min(100.0, float(relative_roi_quality))), 0.25))
+        values.append((max(0.0, min(100.0, float(relative_roi_quality))), 0.10))
     faces = signals.get("faces")
     face_value = faces.get("value") if faces and faces.get("status") == "ready" else None
     if isinstance(face_value, dict) and int(face_value.get("face_count") or 0) > 0:
         capture = face_value.get("best_capture_quality")
         if isinstance(capture, (int, float)):
             values.append((max(0.0, min(100.0, float(capture) * 100.0)), 0.20))
-    codex = signals.get("codex_vision")
-    codex_value = codex.get("value") if codex and codex.get("status") == "ready" else None
-    if isinstance(codex_value, dict):
-        if isinstance(codex_value.get("series_rank"), int):
-            rank = max(1, int(codex_value["series_rank"]))
-            values.append((max(0.0, 105.0 - rank * 10.0), 0.25))
-        if isinstance(codex_value.get("moment_score"), (int, float)):
-            values.append((float(codex_value["moment_score"]), 0.10))
+    # Advisory models cannot bypass the global ranking gate via series leaders.
     denominator = sum(weight for _, weight in values)
     generic = sum(value * weight for value, weight in values) / denominator
     return max(0.0, min(100.0, generic + max(-8.0, min(8.0, personal_delta)))) / 100.0

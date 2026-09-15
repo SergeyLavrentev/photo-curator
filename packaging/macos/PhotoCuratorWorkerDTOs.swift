@@ -296,6 +296,8 @@ struct BatchDecisionParams: Encodable {
 }
 
 struct ProjectSummaryDTO: Decodable {
+    let cullingKeep: Int?
+    let cullingReject: Int?
     let keep: Int?
     let pick: Int?
     let alternative: Int?
@@ -313,6 +315,8 @@ struct ProjectSummaryDTO: Decodable {
     let unavailablePreviewFiles: Int?
 
     enum CodingKeys: String, CodingKey {
+        case cullingKeep = "culling_keep"
+        case cullingReject = "culling_reject"
         case keep, pick, alternative, reject, total, ready, missing
         case videosSkipped = "videos_skipped"
         case selectionReview = "selection_review"
@@ -349,12 +353,13 @@ struct AlbumGroupsDTO: Decodable {
 }
 
 struct WorkerOperationDTO: Decodable {
+    let notice: String?
     let status: String
     let projectID: String?
     let fromStage: String?
 
     enum CodingKeys: String, CodingKey {
-        case status
+        case status, notice
         case projectID = "project_id"
         case fromStage = "from_stage"
     }

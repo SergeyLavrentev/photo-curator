@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
+from photo_curator.analysis.culling import selection_filter_sql, selection_filter_value
+
 AssetDecoder = Callable[[dict[str, object]], dict[str, object]]
 
 
@@ -37,8 +39,8 @@ def list_assets_page(
         clauses.append("d.final_disposition = ?")
         parameters.append(disposition)
     if selection is not None:
-        clauses.append("d.final_selection = ?")
-        parameters.append(selection)
+        clauses.append(selection_filter_sql("d", selection))
+        parameters.append(selection_filter_value(selection))
     if cursor_score is not None and cursor_asset_uuid is not None:
         clauses.append(
             "(COALESCE(s.score, -1.0) < ? OR (COALESCE(s.score, -1.0) = ? AND a.asset_uuid > ?))"
@@ -49,6 +51,7 @@ def list_assets_page(
         f"""
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
             d.auto_selection, d.manual_selection, d.final_selection,
+            d.auto_culling, d.culling_reason,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
             d.manual_note, d.manual_rating, d.manual_mutation_generation,
             d.reviewed, s.score AS swipe_score,
@@ -117,8 +120,8 @@ def _list_ranked_decision_page(
         decision_clauses.append("filter_d.final_disposition = ?")
         parameters.append(disposition)
     if selection is not None:
-        decision_clauses.append("filter_d.final_selection = ?")
-        parameters.append(selection)
+        decision_clauses.append(selection_filter_sql("filter_d", selection))
+        parameters.append(selection_filter_value(selection))
     clauses.append(
         f"EXISTS (SELECT 1 FROM decisions filter_d WHERE {' AND '.join(decision_clauses)})"
     )
@@ -135,6 +138,7 @@ def _list_ranked_decision_page(
         )
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
             d.auto_selection, d.manual_selection, d.final_selection,
+            d.auto_culling, d.culling_reason,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
             d.manual_note, d.manual_rating, d.manual_mutation_generation,
             d.reviewed, s.score AS swipe_score,
@@ -171,8 +175,8 @@ def count_assets(
         clauses.append("d.final_disposition = ?")
         parameters.append(disposition)
     if selection is not None:
-        clauses.append("d.final_selection = ?")
-        parameters.append(selection)
+        clauses.append(selection_filter_sql("d", selection))
+        parameters.append(selection_filter_value(selection))
     return int(
         connection.execute(
             f"""

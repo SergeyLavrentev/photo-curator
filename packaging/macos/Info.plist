@@ -17,7 +17,7 @@
   <key>LSMultipleInstancesProhibited</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPhotoLibraryAddUsageDescription</key><string>Photo Curator сохраняет только одобренную вами подборку в выбранный альбом Photos.</string>
-  <key>NSPhotoLibraryUsageDescription</key><string>Photo Curator анализирует выбранные вами альбомы локально; optional Codex Vision включается и подтверждается отдельно.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>Photo Curator читает выбранные альбомы для анализа и удаляет только явно подтверждённые вами фотографии. Codex Vision включается отдельно.</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>

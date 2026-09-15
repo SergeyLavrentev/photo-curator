@@ -23,6 +23,7 @@ from photo_curator.analysis.codex_vision import (
     build_batches,
     codex_status,
 )
+from photo_curator.analysis.culling import automatic_culling
 from photo_curator.analysis.curation import automatic_selection_state
 from photo_curator.analysis.decision_engine import (
     DECISION_MODEL_VERSION,
@@ -1730,6 +1731,9 @@ class PipelineCoordinator:
                     confidence=decision.confidence,
                     flags=decision.flags,
                     reasons=decision.reasons,
+                    culling=automatic_culling(
+                        asset, decision, duplicate_by_asset.get(str(asset["asset_uuid"]))
+                    ),
                 )
                 repository.update_job(
                     connection,
@@ -1864,17 +1868,10 @@ def _apply_diversity_to_score(score, evidence):
     models = dict(score.model_versions)
     if evidence.model_version:
         models["diversity"] = evidence.model_version
-    adjusted_score = score.score
-    adjusted_generic = score.generic_score
-    if evidence.demoted:
-        adjusted_score = max(0, adjusted_score - 25)
-        adjusted_generic = max(0.0, adjusted_generic - 25.0)
     return replace(
         score,
-        score=adjusted_score,
-        generic_score=round(adjusted_generic, 2),
         components=components,
-        reasons=reasons[:4],
+        reasons=reasons,
         model_versions=models,
     )
 

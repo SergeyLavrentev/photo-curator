@@ -87,3 +87,33 @@ def test_missing_embeddings_do_not_fall_back_to_blind_temporal_demotion() -> Non
 
     assert not any(item.demoted for item in evidence.values())
     assert {item.reason for item in evidence.values()} == {"feature_unavailable"}
+
+
+def test_redundancy_changes_selection_without_faking_bad_image_quality() -> None:
+    from dataclasses import replace
+
+    from photo_curator.analysis.curation import automatic_selection_state
+    from photo_curator.analysis.diversity import DiversityEvidence
+    from photo_curator.analysis.swipe_score import calculate_swipe_score
+    from photo_curator.pipeline.coordinator import _apply_diversity_to_score
+
+    asset = _asset("frame")
+    score = calculate_swipe_score(asset, None, {})
+    # A demotion must survive even when four other explanations already exist.
+    score = replace(score, reasons=[{"code": "example"}] * 4)
+    demoted = _apply_diversity_to_score(
+        score, DiversityEvidence(value=10, demoted=True, reason="semantic_scene_limit")
+    )
+    assert demoted.score == score.score
+    assert demoted.generic_score == score.generic_score
+    decision = decide_asset(asset, None, swipe_score=demoted)
+    assert decision.disposition == "keep"
+    assert (
+        automatic_selection_state(asset, decision, None, demoted, selected_threshold=0)
+        == "alternative"
+    )
+    near = {"kind": "near", "is_leader": False, "confidence": 0.95}
+    assert (
+        calculate_swipe_score(asset, near, {}).components["technical_penalty"]
+        == score.components["technical_penalty"]
+    )

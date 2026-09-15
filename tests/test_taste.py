@@ -48,7 +48,8 @@ def test_pairwise_taste_profile_trains_persists_and_scores_future_assets(tmp_pat
             split="held_out",
         )
         connection.execute(
-            "UPDATE preference_examples SET source_episode_key='heldout-independent' "
+            "UPDATE preference_examples SET source_album_id='independent-album', "
+            "source_episode_key='heldout-independent' "
             "WHERE split='held_out'"
         )
         profile = train_taste_profile(connection)
@@ -205,7 +206,12 @@ def test_holdout_context_cannot_overlap_calibration_context() -> None:
     ]
 
     assert independent_preference_split(examples, "album-a", "episode-1|episode-1") == "calibration"
-    assert independent_preference_split(examples, "album-a", "episode-2|episode-2") == "held_out"
+    assert independent_preference_split(examples, "album-a", "episode-2|episode-2") == "calibration"
+    assert independent_preference_split(examples, "album-b", "episode-2|episode-2") == "held_out"
+    import hashlib
+
+    hashed_album = hashlib.sha256(b"album\0album-a").hexdigest()
+    assert independent_preference_split(examples, hashed_album, "other-episode") == "calibration"
 
 
 def test_correlated_heldout_pair_is_excluded_from_taste_reliability(tmp_path: Path) -> None:
@@ -243,3 +249,22 @@ def test_correlated_heldout_pair_is_excluded_from_taste_reliability(tmp_path: Pa
 
     assert profile["evidence"]["held_out_pairs"] == 0
     assert profile["evidence"]["held_out_excluded_unverified_or_correlated"] == 1
+
+
+def test_retraining_preserves_explicit_profile_pause(tmp_path: Path) -> None:
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        _capture_training_pairs(connection, project_id)
+        train_taste_profile(connection)
+        repository.set_taste_profile_paused(connection, True)
+        capture_preference(
+            connection,
+            project_id=project_id,
+            left_uuid="demo-008",
+            right_uuid="demo-007",
+            preferred_uuid="demo-008",
+        )
+        trained = train_taste_profile(connection)
+        assert trained["status"] == "paused"
+        assert load_taste_model(connection) is None

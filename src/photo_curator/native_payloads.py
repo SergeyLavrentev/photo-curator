@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
+from photo_curator.analysis.culling import culling_category
+
 
 class AlbumPayloadSource(Protocol):
     id: str
@@ -101,6 +103,9 @@ def asset_payload(asset: dict[str, object]) -> dict[str, object]:
         "width": asset.get("width"),
         "height": asset.get("height"),
         "favorite": bool(asset.get("favorite")),
+        "culling_category": culling_category(asset),
+        "culling_reason": asset.get("culling_reason"),
+        "auto_culling": asset.get("auto_culling"),
         "final_disposition": asset.get("final_disposition"),
         "auto_selection": asset.get("auto_selection"),
         "manual_selection": asset.get("manual_selection"),

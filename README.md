@@ -1,14 +1,18 @@
 # Photo Curator
 
-Photo Curator is a native macOS app that helps turn a large Apple Photos album into a
-smaller, personal selection. It looks for weak frames, near-duplicate bursts, technical
-problems, composition, and your own visual preferences while keeping you in control of
-every final decision.
+Photo Curator is a native macOS app for quickly reviewing large Apple Photos albums.
+It proposes unsuccessful frames and redundant photos for removal. The main workflow has
+just two categories: **Оставить** and **К удалению**. A low aesthetic rank alone is not
+proof that a unique photo should be removed.
 
-The original library is never edited or deleted. Photo Curator renders review-sized JPEGs
-into private service-owned project storage, proposes a selection, shows a dry run, and only
-creates a new Photos album after explicit confirmation. Purgeable PhotoKit cache can be
-regenerated without leaving the gallery or Quality Lab permanently blank.
+Analysis is read-only. Deletion is a separate user action: review an exact list, explicitly
+confirm it, and let the native Photos change request run. The app revalidates source
+membership and revision before that request, never writes to `Photos.sqlite`, and never
+retries deletion automatically. For a Shared Album, removal targets only its shared posts
+and affects every subscriber; personal originals and saved copies remain. The app checks
+PhotoKit's permission to remove album content. If Apple does not expose this operation,
+it reports the limitation and asks you to use Photos; it never falls back to deleting originals.
+Local copies cannot identify the shared posts to remove; use a fresh direct PhotoKit analysis.
 
 > **Private preview status:** this build is for non-commercial use without redistribution.
 > Treat recommendations as review assistance until the strict gates pass on diverse,
@@ -32,11 +36,19 @@ the app from the DMG to `Applications` before launching it.
 
 ## What it does
 
-1. Select a regular or shared Apple Photos album.
-2. Choose an analysis mode and start the run.
-3. Review Pick, Alternatives, Review, and Reject in Grid, Loupe, Compare, or Survey.
-4. Use ratings 1–5, `P/U/X`, undo and batch actions; teach the versioned local selection ranker.
-5. Preview the exact immutable Pick set and explicitly create a Best album.
+1. Select an album and run analysis.
+2. Review **К удалению**, with a reason for every candidate, in Grid/Loupe/Compare/Survey.
+3. Keep a disputed candidate with `P`, mark a photo for removal with `X`, undo with ⌘Z.
+4. Optionally teach personal taste by comparing different frames of the same scene.
+5. Review the exact removal list and explicitly confirm deletion from the Photos library.
+
+Use **Удалить фото…** in a photo's context menu, or mark several photos and use
+**Удалить выбранные…**. This works in both categories: your explicit choice can remove a
+photo the engine recommended keeping. Cancelling deletion preserves its existing decision.
+`X` only marks a candidate; it never deletes a photo by itself.
+
+There is no Best-album step or compact/balanced/broad choice in the main UI.
+Historical ranking and publish APIs remain available internally for existing evidence.
 
 The analysis pipeline records:
 
@@ -81,9 +93,10 @@ experimental model or route-specific scale from replacing the Apple baseline sil
   non-commercial build; review their licenses before publication or commercial use.
 - The app has no telemetry and does not run a local web server.
 - Photos are accessed through public PhotoKit APIs, never by writing to `Photos.sqlite`.
-- Originals, edits, favourites, keywords, and existing albums are not modified.
-- There is no photo deletion API or automatic deletion workflow.
-- Publishing shows the exact UUID-backed Pick set and is separated into dry-run and apply.
+- Analysis never changes originals, edits, favourites, metadata, or albums.
+- Only an explicitly confirmed native PhotoKit operation can delete the listed assets.
+- Deletion affects the whole library and its albums; the confirmation explains iCloud impact.
+- Uncertain, missing, favourite and edited photos are protected from automatic removal advice.
 - Local review renders and project data can be removed without touching the Photos library.
 - Secrets, authentication tokens, and API keys are not stored in this repository.
 
@@ -172,6 +185,13 @@ a deterministic blind 50–100-photo sample, explicit defect labels, purpose-sep
 comparisons, ordered Top-K, one human series/leader, completeness checks and export. Automatic
 recommendations are hidden during blind labelling and are never copied into the human truth set.
 
+**Ваш вкус** offers a shorter everyday flow: up to 12 blind comparisons from a completed
+analysis, with left/right choices, a skip button and session resume. Each explicit choice is
+saved to durable training evidence; skips are ignored. Training and independent evaluation
+use different albums. Older analyses without an immutable album snapshot must be analyzed
+again before entering this flow. See [the September 5 review](docs/21-review-2026-09-05.md)
+for implementation findings, measured UI improvements and the local photo-run limitations.
+
 Quality Lab stores accepted human evidence in a durable local corpus that is independent of an
 analysis project. Each album context is locked either to training or to held-out evaluation, so a
 single context cannot leak into both. Training rounds update only a small versioned local ranker
@@ -200,6 +220,10 @@ uv run photo-curator learning-corpus-import --input learning-corpus.json
 ```
 
 ## Known limitations
+
+Deleting a legacy analysis without an immutable album snapshot preserves its old labels,
+database and local review images in `legacy-learning-archives` before removing the analysis.
+These archives remain on disk and are not used for training without verified provenance.
 
 - The downloadable preview is Apple Silicon only and not notarized.
 - Codex Vision depends on a working local ChatGPT/Codex installation and subscription limits.

@@ -100,11 +100,17 @@ def _asset_snapshots(
     album_hash: str,
     asset_uuids: set[str],
 ) -> dict[str, _AssetSnapshot]:
-    signals = repository.analysis_signals_by_asset(connection, project_id)
     assets = repository.assets_by_uuid(connection, project_id, asset_uuids)
     snapshots: dict[str, _AssetSnapshot] = {}
     for asset_uuid in sorted(asset_uuids):
-        signal = signals.get(asset_uuid, {}).get("feature_print")
+        signal = next(
+            (
+                s
+                for s in repository.list_analysis_signals(connection, project_id, asset_uuid)
+                if s["signal_kind"] == "feature_print"
+            ),
+            None,
+        )
         asset = assets.get(asset_uuid)
         if signal is None or asset is None:
             raise LearningCorpusError(f"Missing feature provenance for labelled asset {asset_uuid}")
@@ -299,6 +305,25 @@ def _replace_round_projection(
 ) -> dict[str, int]:
     asset_uuids = _referenced_uuids(rows)
     snapshots = _asset_snapshots(connection, project_id, identity["album_hash"], asset_uuids)
+    # Reanalysis must never silently replace the features behind accepted answers.
+    retained = {
+        str(row["asset_key"]): dict(row)
+        for row in connection.execute(
+            "SELECT * FROM learning_assets WHERE round_id=?", (round_value["id"],)
+        )
+    }
+    for snapshot in snapshots.values():
+        old = retained.get(snapshot.asset_key)
+        if old and (
+            old["feature_schema"] != snapshot.feature_schema
+            or old["feature_base64"] != snapshot.feature_base64
+            or old["source_revision_hash"] != snapshot.source_revision_hash
+            or json.loads(old["feature_provenance_json"]) != snapshot.feature_provenance
+        ):
+            raise LearningCorpusError(
+                "Accepted learning snapshot changed; retained evidence was preserved. "
+                "Use a new analysis for the changed source/model."
+            )
     labels = rows["labels"]
     series = rows["series"]
     assert isinstance(labels, list) and isinstance(series, list)
@@ -459,7 +484,9 @@ def _sync_taste_examples(
     }
     inserted = 0
     for pair in connection.execute(
-        "SELECT * FROM learning_preferences WHERE round_id=? ORDER BY id", (round_id,)
+        "SELECT * FROM learning_preferences WHERE round_id=? "
+        "AND id NOT IN (SELECT id FROM learning_pair_exclusions) ORDER BY id",
+        (round_id,),
     ).fetchall():
         pair = dict(pair)
         left = assets[str(pair["left_asset_key"])]
@@ -548,7 +575,8 @@ def migrate_project_learning(
         )
         calibration_count = int(
             connection.execute(
-                "SELECT COUNT(*) FROM preference_examples WHERE split='calibration'"
+                "SELECT COUNT(*) FROM preference_examples WHERE split='calibration' "
+                "AND id NOT IN (SELECT id FROM learning_pair_exclusions)"
             ).fetchone()[0]
         )
         trained = False
@@ -668,8 +696,13 @@ def export_learning_corpus(connection: sqlite3.Connection) -> dict[str, object]:
         "learning_preferences",
         "learning_series",
     ):
+        condition = (
+            " WHERE id NOT IN (SELECT id FROM learning_pair_exclusions)"
+            if table == "learning_preferences"
+            else ""
+        )
         tables[table] = [
-            dict(row) for row in connection.execute(f"SELECT * FROM {table}").fetchall()
+            dict(row) for row in connection.execute(f"SELECT * FROM {table}{condition}").fetchall()
         ]
     profile_export = {
         key: profile.get(key)
@@ -908,7 +941,8 @@ def import_learning_corpus(
             )
     calibration_count = int(
         connection.execute(
-            "SELECT COUNT(*) FROM preference_examples WHERE split='calibration'"
+            "SELECT COUNT(*) FROM preference_examples WHERE split='calibration' "
+            "AND id NOT IN (SELECT id FROM learning_pair_exclusions)"
         ).fetchone()[0]
     )
     if calibration_count >= MIN_CALIBRATION_PAIRS:
@@ -917,5 +951,6 @@ def import_learning_corpus(
 
 
 def reset_all_learning(connection: sqlite3.Connection) -> None:
+    connection.execute("DELETE FROM learning_pair_exclusions")
     repository.reset_taste_profile(connection)
     repository.ensure_taste_profile(connection)

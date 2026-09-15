@@ -384,7 +384,7 @@ def test_pair_confirmation_records_dhash_and_normalized_pixel_mae(tmp_path: Path
     assert 0 < evidence["normalized_pixel_mae"] < 0.02
 
 
-def test_post_signal_series_discovers_exposure_variant_and_keeps_distinct_moment(
+def test_post_signal_series_groups_exposure_variant_without_an_extra_pick(
     tmp_path: Path,
 ) -> None:
     left_path, right_path = tmp_path / "left.jpg", tmp_path / "right.jpg"
@@ -436,7 +436,7 @@ def test_post_signal_series_discovers_exposure_variant_and_keeps_distinct_moment
     loser = next(member for member in groups[0].members if not member.is_leader)
     assert loser.evidence["feature_print_similarity"] >= 0.989
     assert loser.evidence["exposure_invariant_crop_mae"] < 0.05
-    assert loser.evidence["recommended_pick"] is True
+    assert loser.evidence["recommended_pick"] is False
 
 
 def test_candidate_reduction_avoids_pairwise_scan_for_normal_album_size() -> None:
@@ -510,3 +510,31 @@ def test_capture_time_alone_never_demotes_technically_good_frames() -> None:
     demoted = _diversity_demotions(assets, decisions)
 
     assert demoted == set()
+
+
+def test_unvalidated_models_cannot_change_series_leader_quality() -> None:
+    from photo_curator.pipeline.duplicates import _series_quality
+
+    source = asset("frame")
+    baseline = {"aesthetics": {"status": "ready", "value": {"overall_score": 0.5}}}
+    advisory = {
+        **baseline,
+        "nima_aesthetics": {"status": "ready", "value": {"aesthetic_score": 0}},
+        "mobileclip": {"status": "ready", "value": {"aesthetic_score": 0}},
+        "codex_vision": {"status": "ready", "value": {"series_rank": 1, "moment_score": 100}},
+    }
+    assert _series_quality(source, advisory, 0) == _series_quality(source, baseline, 0)
+
+
+def test_minor_scene_variations_do_not_create_additional_picks() -> None:
+    import numpy as np
+
+    from photo_curator.pipeline.duplicates import _recommended_series_picks
+
+    leader = {**asset("leader"), "series_feature_vector": np.array([1.0, 0.0])}
+    near = {**asset("near"), "series_feature_vector": np.array([0.98, 0.199])}
+    distinct = {**asset("distinct"), "series_feature_vector": np.array([0.8, 0.6])}
+    assert _recommended_series_picks([leader, near, distinct], leader, "scene") == {
+        "leader",
+        "distinct",
+    }

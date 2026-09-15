@@ -145,6 +145,8 @@ def build_native_quality_evidence(
     assets: list[dict[str, object]],
     preference_examples: list[dict[str, object]],
     signals: dict[str, dict[str, dict[str, object]]] | None = None,
+    *,
+    summary_only: bool = False,
 ) -> dict[str, object]:
     """Build an honest, portable quality corpus from explicit native-app feedback."""
     active_assets = [asset for asset in assets if not asset.get("no_longer_exists")]
@@ -244,6 +246,31 @@ def build_native_quality_evidence(
         and example.get("left_uuid") in project_ids
         and example.get("right_uuid") in project_ids
     ]
+    held_out = sum(pair["split"] == "held_out" for pair in pairs)
+    defect_labels = sum(bool(_quality_defect_codes(asset)) for asset in quality_labelled)
+    release_ready = (
+        50 <= len(quality_labelled) <= 100
+        and held_out >= MIN_HELD_OUT_PAIRS
+        and len(top_k) >= MIN_TOP_K
+        and bool(series_targets)
+    )
+    summary = {
+        "manual_labels": len(quality_labelled),
+        "preference_pairs": len(pairs),
+        "held_out_pairs": held_out,
+        "expected_top_k": len(top_k),
+        "human_duplicate_groups": len(complete_groups),
+        "budget_annotated_series": len(series_targets),
+        "defect_labels": defect_labels,
+        "incomplete_human_duplicate_groups": len(annotated_groups) - len(complete_groups),
+        "required_manual_labels_min": 50,
+        "required_manual_labels_max": 100,
+        "required_held_out_pairs": MIN_HELD_OUT_PAIRS,
+        "required_top_k": MIN_TOP_K,
+        "release_ready": release_ready,
+    }
+    if summary_only:
+        return summary
     manifest = {
         "schema_version": 3,
         "project_id": project_id,
@@ -342,35 +369,13 @@ def build_native_quality_evidence(
             "scores": apple_scores,
         },
     }
-    held_out = sum(pair["split"] == "held_out" for pair in pairs)
-    defect_labels = sum(bool(_quality_defect_codes(asset)) for asset in quality_labelled)
-    release_ready = (
-        50 <= len(quality_labelled) <= 100
-        and held_out >= MIN_HELD_OUT_PAIRS
-        and len(top_k) >= MIN_TOP_K
-        and bool(series_targets)
-    )
     return {
         "schema_version": 1,
         "project_id": project_id,
         "manifest": manifest,
         "score_snapshot": snapshot,
         "baseline_snapshots": baseline_snapshots,
-        "summary": {
-            "manual_labels": len(quality_labelled),
-            "preference_pairs": len(pairs),
-            "held_out_pairs": held_out,
-            "expected_top_k": len(top_k),
-            "human_duplicate_groups": len(complete_groups),
-            "budget_annotated_series": len(series_targets),
-            "defect_labels": defect_labels,
-            "incomplete_human_duplicate_groups": len(annotated_groups) - len(complete_groups),
-            "required_manual_labels_min": 50,
-            "required_manual_labels_max": 100,
-            "required_held_out_pairs": MIN_HELD_OUT_PAIRS,
-            "required_top_k": MIN_TOP_K,
-            "release_ready": release_ready,
-        },
+        "summary": summary,
     }
 
 

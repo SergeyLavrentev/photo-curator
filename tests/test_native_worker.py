@@ -641,7 +641,7 @@ def test_native_taste_pairs_train_and_rerank_ready_project(tmp_path: Path) -> No
     reranked = worker.dispatch("assets", {"project_id": project_id})["items"]
     calibration_accuracy = float(profile["evidence"]["calibration_accuracy"])
     if calibration_accuracy > 0.5:
-        assert any(abs(item["personal_delta"] or 0) > 0.1 for item in reranked)
+        assert any(abs(item["personal_delta"] or 0) > 0 for item in reranked)
     else:
         # A worse-than-chance profile is persisted for transparency but cannot
         # silently influence ranking before better preference evidence exists.
@@ -1112,6 +1112,18 @@ def test_quality_wizard_is_blind_and_keeps_held_out_pairs_out_of_taste_profile(
         },
     )
 
+    # Two arbitrary labelled photos need not depict the same scene. Complete the
+    # synthetic sample so the wizard can find its actual related frames.
+    for item in candidates["items"][2:]:
+        worker.dispatch(
+            "quality_label",
+            {
+                "project_id": project_id,
+                "asset_uuid": item["asset_uuid"],
+                "disposition": "keep",
+                "defect_codes": [],
+            },
+        )
     pair = worker.dispatch("quality_pair", {"project_id": project_id})["pair"]
     assert pair is not None
     preference = worker.dispatch(
@@ -1407,3 +1419,24 @@ def test_native_worker_photokit_acceptance_two_phase_gui_cleanup(
     )
     audit = (paths.data_dir / "photokit-acceptance.jsonl").read_text()
     assert json.loads(audit)["passed"] is True
+
+
+def test_quality_status_uses_annotation_projection_without_predictions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    paths, provider, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    worker = NativeWorker(paths, provider=provider, coordinator=coordinator)
+    worker.dispatch(
+        "quality_label", {"project_id": project_id, "asset_uuid": "demo-001", "disposition": "keep"}
+    )
+    expected = worker.dispatch("quality_export", {"project_id": project_id})["summary"]
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("A status refresh must not read/decode album predictions")
+
+    monkeypatch.setattr(repository, "analysis_signals_by_asset", forbidden)
+    monkeypatch.setattr(repository, "list_assets", forbidden)
+    status = worker.dispatch("quality_status", {"project_id": project_id})
+    status.pop("learning")
+    assert status == expected

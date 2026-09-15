@@ -41,32 +41,8 @@ struct RootView: View {
                 "Review‑копии фотографий будут отправлены в OpenAI через ваш локальный Codex. Прогон расходует лимиты подписки ChatGPT/Codex и может занять несколько часов. API key не используется. Исходный альбом Photos не изменяется."
             )
         }
-        .confirmationDialog(
-            "Best‑альбом не создан",
-            isPresented: $model.publishReanalysisPending,
-            titleVisibility: .visible
-        ) {
-            Button("Обновить анализ") { model.requestPublishReanalysis() }
-            Button("Позже", role: .cancel) { model.publishReanalysisPending = false }
-        } message: {
-            Text(
-                "Некоторые исходные фотографии изменились после анализа. Для безопасности Photo Curator остановил создание альбома. Обновите анализ, дождитесь его завершения и снова нажмите «Создать Best‑альбом». Исходный альбом и фотографии не изменяются."
-            )
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { model.publishPlan != nil },
-                set: { if !$0 { model.publishPlan = nil } }
-            )
-        ) {
-            if let plan = model.publishPlan {
-                PublishPreviewSheet(
-                    plan: plan,
-                    independentCopies: model.publishUsesIndependentCopies,
-                    confirm: model.applyPublish,
-                    cancel: { model.publishPlan = nil }
-                )
-            }
+        .sheet(item: $model.photoDeletionPlan) { plan in
+            PhotoDeletionSheet(plan: plan).environmentObject(model)
         }
         .confirmationDialog(
             "Остановить анализ?",
@@ -97,14 +73,14 @@ struct RootView: View {
             Button("Отмена", role: .cancel) { projectPendingDeletion = nil }
         } message: {
             Text(
-                "Исходный альбом Photos не изменится. Будут удалены только результаты этого анализа и его локальный кэш."
+                "Исходный альбом Photos не изменится. Будут удалены только результаты этого анализа и его локальный кэш. Ваши оценки сохранятся; для старого анализа может потребоваться отдельный архив с изображениями, который продолжит занимать место на диске."
             )
         }
         .sheet(item: $model.detailPhoto) { photo in
             PhotoDetailView(photo: photo, openGoodPhoto: model.openGoodPhoto)
         }
         .sheet(isPresented: $model.tasteEditorPresented) {
-            TasteProfileEditorView()
+            BlindTasteView()
                 .environmentObject(model)
         }
     }
@@ -247,16 +223,6 @@ struct RootView: View {
         }
     }
 
-    private var densityExplanation: String {
-        switch model.density {
-        case "compact":
-            return "Самый строгий вариант: в будущий Best‑альбом сервис предложит меньше фотографий — только самые уверенные результаты. Исходный альбом анализируется целиком."
-        case "broad":
-            return "Более широкий вариант: в будущий Best‑альбом сервис предложит больше хороших и пограничных кадров. Исходный альбом анализируется целиком."
-        default:
-            return "Рекомендуемый баланс: сервис предложит в будущий Best‑альбом лучшие кадры и оставит спорные для вашей проверки. Исходный альбом анализируется целиком."
-        }
-    }
 
     private var sourceSection: some View {
         StepCard(number: 2, title: "Выберите альбом", symbol: "photo.on.rectangle.angled") {
@@ -300,18 +266,10 @@ struct RootView: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-                Text("Размер итогового Best‑альбома")
-                    .font(.subheadline.weight(.semibold))
-                Picker("Размер итогового Best‑альбома", selection: $model.density) {
-                    Text("Компактная").tag("compact")
-                    Text("Сбалансированная").tag("balanced")
-                    Text("Широкая").tag("broad")
-                }
-                .pickerStyle(.segmented)
-                Text(densityExplanation)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
                 Divider()
+                Text("Исходный альбом анализируется целиком; размер подборки выбирать не нужно.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("Движок анализа")
                     .font(.subheadline.weight(.semibold))
                 Picker("Движок анализа", selection: $model.analysisMode) {
@@ -467,7 +425,7 @@ struct RootView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(model.isBusy || model.selectedAlbumID.isEmpty || model.project?.state == "running")
+                .disabled(model.isBusy || (model.selectedAlbumID.isEmpty && model.project?.state != "created") || model.project?.state == "running")
             }
             if model.project?.state == "running" {
                 Button(role: .destructive) {
@@ -514,19 +472,20 @@ struct RootView: View {
                         }
                     }
                     Spacer(minLength: 0)
-                    Button {
-                        model.preparePublish()
-                    } label: {
-                        Label(
-                            model.isBusy ? "Подождите…" : "Создать Best‑альбом",
-                            systemImage: "photo.badge.plus"
-                        )
+                    Group {
+                        Button { model.preparePhotoDeletion() } label: {
+                            Label(!model.selectedPhotoIDs.isEmpty ? "Удалить выбранные (\(model.selectedPhotoIDs.count))…" : model.selectionBucket == .reject ? "Проверить удаление \(model.cullingRejectedTotal) фото…" : "Удалить фото…", systemImage: "trash")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                        .disabled(model.isBusy || (model.selectedPhotoIDs.isEmpty && (model.selectionBucket == .reject ? model.cullingRejectedTotal == 0 : model.selectedPhotoID == nil)))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .disabled(model.isBusy || model.pickedTotal == 0)
+
                 }
 
+                Text(model.project?.sourceAlbumShared == true ? "Общий альбом: подтверждённое удаление публикаций затронет всех участников. Личные оригиналы и сохранённые копии останутся." : "К удалению — предложение для вашей проверки. Фотографии удаляются только после отдельного подтверждения.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if let message = model.deletionMessage { Text(message).foregroundStyle(.secondary) }
                 DisclosureGroup(isExpanded: $processingDetailsExpanded) {
                     VStack(alignment: .leading, spacing: 8) {
                         ProcessingStatRow(
@@ -614,7 +573,7 @@ struct RootView: View {
                         Button("Снять выбор") { model.clearPhotoSelection() }
                         Button(
                             model.selectionBucket == .reject
-                                ? "Вернуть в Best" : "Переместить в отклонённые"
+                                ? "Оставить" : "Пометить к удалению"
                         ) {
                             model.setSelectedPhotosDecision(
                                 model.selectionBucket == .reject ? "keep" : "reject"
@@ -687,7 +646,8 @@ struct RootView: View {
                                     guard let group = photo.duplicateGroup else { return }
                                     model.toggleSeriesExpansion(groupID: group)
                                 },
-                                rate: { model.setRating(photoID: photo.id, rating: $0) }
+                                rate: { model.setRating(photoID: photo.id, rating: $0) },
+                                deleteFromLibrary: { model.preparePhotoDeletion(assetIDs: [photo.id]) }
                             ) { disposition in
                                 model.setDecision(photoID: photo.id, disposition: disposition)
                             }
@@ -852,168 +812,6 @@ struct RootView: View {
     }
 }
 
-private struct TasteProfileEditorView: View {
-    @EnvironmentObject private var model: AppModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Вкус куратора")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text(
-                            model.tasteOnboardingComplete
-                                ? "Дополняйте профиль в любой момент: учитываются только кадры, которые вы явно отметили."
-                                : "Создайте профиль за три коротких раунда, прежде чем запускать первый анализ."
-                        )
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                    }
-
-                    if !model.tasteOnboardingComplete {
-                        HStack(spacing: 12) {
-                            ForEach(1...model.tasteRoundsTotal, id: \.self) { index in
-                                Label(
-                                    "Раунд \(index)",
-                                    systemImage: index <= model.tasteRoundsCompleted
-                                        ? "checkmark.circle.fill" : "circle"
-                                )
-                                .foregroundStyle(
-                                    index <= model.tasteRoundsCompleted ? Color.green : Color.secondary
-                                )
-                            }
-                        }
-                    } else {
-                        Label(
-                            "Профиль активен: \(model.tasteCalibrationExamples) обучающих и \(model.tasteHeldOutExamples) проверочных сравнений.",
-                            systemImage: "checkmark.circle.fill"
-                        )
-                        .foregroundStyle(.green)
-                    }
-
-                    GroupBox {
-                        if let round = model.tasteRound {
-                            activeRound(round)
-                        } else {
-                            sourcePicker
-                        }
-                    }
-
-                    if model.isTasteBusy {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ProgressView(
-                                value: Double(model.tasteProgressProcessed),
-                                total: Double(max(1, model.tasteProgressTotal))
-                            ) { Text("Подготавливаем фотографии локально…") }
-                            Text("\(model.tasteProgressProcessed) из \(max(10, model.tasteProgressTotal))")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if let message = model.tasteMessage {
-                        Label(message, systemImage: "heart.fill")
-                            .foregroundStyle(.pink)
-                    }
-                }
-                .padding(28)
-                .frame(maxWidth: 940, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .navigationTitle("Настроить вкус")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Готово") { dismiss() }
-                }
-            }
-        }
-        .frame(minWidth: 720, minHeight: 680)
-    }
-
-    private func activeRound(_ round: TasteRound) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(round.isAdjustment ? "Корректировка вкуса" : "Раунд \(round.roundNumber) из \(round.roundTotal)")
-                        .font(.headline)
-                    Text("Источник: \(round.albumName)")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Сменить альбом") { model.cancelTasteRound() }
-                    .disabled(model.isTasteBusy)
-            }
-            HStack(spacing: 16) {
-                Label(
-                    "Нравятся \(model.tasteSelectedIDs.count) из \(round.selectionLimit)",
-                    systemImage: "hand.thumbsup.fill"
-                )
-                .foregroundStyle(model.tasteSelectedIDs.count == round.selectionLimit ? .green : .secondary)
-                Label(
-                    "Не нравятся \(model.tasteRejectedIDs.count) из \(round.rejectionLimit)",
-                    systemImage: "hand.thumbsdown.fill"
-                )
-                .foregroundStyle(model.tasteRejectedIDs.count == round.rejectionLimit ? .red : .secondary)
-            }
-            Text("Отметьте три любимых и три явно не нравящихся кадра. Остальные останутся нейтральными и не станут отрицательными примерами.")
-                .foregroundStyle(.secondary)
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 150, maximum: 195), spacing: 12)],
-                spacing: 12
-            ) {
-                ForEach(round.photos) { photo in
-                    TasteGridCard(
-                        photo: photo,
-                        favorite: model.tasteSelectedIDs.contains(photo.id),
-                        rejected: model.tasteRejectedIDs.contains(photo.id),
-                        disabled: model.isTasteBusy,
-                        chooseFavorite: { model.toggleTasteSelection(photo.id) },
-                        chooseRejected: { model.toggleTasteRejection(photo.id) }
-                    )
-                }
-            }
-            HStack {
-                Spacer()
-                Button("Сохранить предпочтения") { model.submitTasteRound() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(
-                        model.tasteSelectedIDs.count != round.selectionLimit
-                            || model.tasteRejectedIDs.count != round.rejectionLimit
-                            || model.isTasteBusy
-                    )
-            }
-        }
-        .padding(8)
-    }
-
-    private var sourcePicker: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(model.tasteOnboardingComplete ? "Дополнить профиль" : "Первый раунд")
-                .font(.headline)
-            Text(
-                model.tasteOnboardingComplete
-                    ? "Добавьте ещё один набор явных предпочтений, чтобы скорректировать рекомендации будущих анализов."
-                    : "Выберите альбом с фотографиями, которые вам знакомы. Исходники не изменяются."
-            )
-            .foregroundStyle(.secondary)
-            Picker("Источник фотографий", selection: $model.tasteSourceAlbumID) {
-                ForEach((model.albums + model.sharedAlbums).filter { $0.photoCount >= 10 }) { album in
-                    Text("\(album.name) · \(album.photoCount) фото").tag(album.id)
-                }
-            }
-            .pickerStyle(.menu)
-            HStack {
-                Spacer()
-                Button("Показать 10 фотографий") { model.prepareTasteRound() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.tasteSourceAlbumID.isEmpty || model.isTasteBusy)
-            }
-        }
-        .padding(8)
-    }
-}
-
 private struct ProcessingStatRow: View {
     let title: String
     let detail: String
@@ -1120,29 +918,29 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 20) {
                 OnboardingPoint(
                     symbol: "heart.text.square",
-                    title: "1. Покажите свой вкус",
-                    detail: "В трёх коротких раундах выберите по три любимых кадра."
+                    title: "1. Выберите альбом",
+                    detail: "Начните с обычного или общего альбома — движок подготовит первый отбор."
                 )
                 OnboardingPoint(
                     symbol: "photo.on.rectangle.angled",
-                    title: "2. Выберите альбом",
-                    detail: "Персональный профиль применяется к обычному или общему альбому."
+                    title: "2. Покажите свой вкус",
+                    detail: "После анализа сравните до 12 пар. Равноценные кадры можно пропустить."
                 )
                 OnboardingPoint(
                     symbol: "sparkles",
-                    title: "3. Получите подборку",
-                    detail: "Проверьте хорошие и плохие кадры и создайте Best‑альбом."
+                    title: "3. Уберите неудачные кадры",
+                    detail: "Проверьте предложенные неудачные кадры и повторы. Удаление всегда подтверждаете вы."
                 )
             }
             .frame(maxWidth: 620, alignment: .leading)
             Button(action: continueAction) {
-                Label("Продолжить и настроить вкус", systemImage: "arrow.right")
+                Label("Выбрать альбом", systemImage: "arrow.right")
                     .frame(minWidth: 300)
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            Text("На следующем шаге macOS попросит доступ к Фото. Данные не отправляются в интернет.")
+            Text("Для чтения альбомов разрешите доступ к Фото. Локальный анализ не отправляет фотографии в интернет.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

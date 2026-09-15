@@ -113,6 +113,15 @@ final class NativeWorkerClient: @unchecked Sendable {
             responseCondition.unlock()
 
             if readLock.try() {
+                // Another reader may have routed our reply between the first check
+                // and acquiring readLock. Never block on the pipe with a ready reply.
+                responseCondition.lock()
+                let alreadyRouted = completedResponses[requestID] != nil || terminalError != nil
+                responseCondition.unlock()
+                if alreadyRouted {
+                    readLock.unlock()
+                    continue
+                }
                 let response: NativeWorkerResponseEnvelope
                 do {
                     response = try readResponse()
@@ -121,10 +130,11 @@ final class NativeWorkerClient: @unchecked Sendable {
                     let failure = recordTerminal(error)
                     throw failure
                 }
-                readLock.unlock()
                 do {
                     try route(response)
+                    readLock.unlock()
                 } catch {
+                    readLock.unlock()
                     throw recordTerminal(error)
                 }
             } else {

@@ -378,8 +378,8 @@ struct QualityWizardView: View {
                 model.qualityActiveRound?.split == "training"
                     ? "3. Обучающие A/B-сравнения" : "3. Замороженные A/B-сравнения",
                 model.qualityActiveRound?.split == "training"
-                    ? "Выберите более удачный кадр. Принятые human choices обучают только versioned локальный selection ranker."
-                    : "Выберите более удачный кадр в 10 независимых парах. Эти ответы locked и никогда не участвуют в fit."
+                    ? "Выберите более удачный кадр одной сцены. Ваши ответы обучают личный профиль."
+                    : "Сравнивайте кадры одной сцены. Эти проверочные ответы не участвуют в обучении."
             )
             Text("Готово: \(model.qualityPairCompleted) / 10+")
             if let pair = model.qualityPair {
@@ -400,7 +400,9 @@ struct QualityWizardView: View {
                     detail: "A/B-пары строятся только из вручную размеченной выборки шага 2."
                 )
             } else {
-                Button("Показать первую пару") { model.loadQualityPair() }
+                Text("Новых сопоставимых пар нет. Добавьте в разметку кадры одной серии или выберите другой альбом.")
+                    .foregroundStyle(.secondary)
+                Button("Проверить пары снова") { model.loadQualityPair() }
                     .buttonStyle(.borderedProminent)
             }
             Spacer()

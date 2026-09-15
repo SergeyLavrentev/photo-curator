@@ -1,5 +1,11 @@
 # Native macOS UI and UX
 
+> Актуальный основной сценарий с 05.09.2026: анализ → «К удалению / Оставить» → проверка
+> конкретного списка → отдельное подтверждение удаления из медиатеки. Best-альбом,
+> четыре категории и выбор размера подборки убраны из основного интерфейса. Старые описания
+> ниже относятся к историческому workflow; обязательны docs/01 и docs/04.
+
+
 ## Product surface
 
 The target interface is SwiftUI with focused AppKit components where measured performance or

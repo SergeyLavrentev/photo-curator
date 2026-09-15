@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import math
 from dataclasses import dataclass
 
@@ -9,7 +10,7 @@ import numpy as np
 from photo_curator.db import repository
 
 TASTE_PROFILE_SCHEMA_VERSION = 1
-TASTE_MODEL_VERSION = "pairwise-linear-v5-durable-quality-corpus"
+TASTE_MODEL_VERSION = "pairwise-linear-v6-album-separated"
 MIN_CALIBRATION_PAIRS = 3
 
 
@@ -119,7 +120,22 @@ def capture_preference_vectors(
 
 def train_taste_profile(connection, profile_id: str = "default") -> dict[str, object]:
     repository.ensure_taste_profile(connection, profile_id)
+    was_paused = repository.get_taste_profile(connection, profile_id).get("status") == "paused"
     examples = repository.list_preference_examples(connection, profile_id)
+    for example in examples:
+        if example.get("source_album_id") or example.get("project_id"):
+            continue
+        rows = connection.execute(
+            "SELECT album_id FROM taste_assets WHERE asset_uuid IN (?, ?)",
+            (example["left_uuid"], example["right_uuid"]),
+        ).fetchall()
+        if len(rows) == 2 and len({row[0] for row in rows}) == 1:
+            example["source_album_id"] = str(rows[0][0])
+            example["source_episode_key"] = "album-wide"
+            connection.execute(
+                "UPDATE preference_examples SET source_album_id=?, source_episode_key=? WHERE id=?",
+                (example["source_album_id"], "album-wide", example["id"]),
+            )
     calibration = [example for example in examples if example["split"] == "calibration"]
     if len(calibration) < MIN_CALIBRATION_PAIRS:
         raise TasteProfileError(f"Нужно минимум {MIN_CALIBRATION_PAIRS} calibration comparisons")
@@ -130,12 +146,17 @@ def train_taste_profile(connection, profile_id: str = "default") -> dict[str, ob
     calibration_contexts = {
         context for example in calibration if (context := _preference_context(example)) is not None
     }
+    training_albums = {_album_identity(context[0]) for context in calibration_contexts}
+    training_assets = {
+        str(example[key]) for example in calibration for key in ("left_uuid", "right_uuid")
+    }
     raw_held_out = [example for example in examples if example["split"] == "held_out"]
     held_out = [
         example
         for example in raw_held_out
         if (context := _preference_context(example)) is not None
-        and context not in calibration_contexts
+        and _album_identity(context[0]) not in training_albums
+        and not {str(example["left_uuid"]), str(example["right_uuid"])} & training_assets
     ]
     accepted_ids = {str(example["id"]) for example in calibration + held_out}
     accepted_examples = [example for example in examples if str(example["id"]) in accepted_ids]
@@ -148,11 +169,12 @@ def train_taste_profile(connection, profile_id: str = "default") -> dict[str, ob
     learning_rate = 0.12
     regularization = 0.015
     calibration_vectors = [item for item in decoded if item[3] == "calibration"]
+    differences = [
+        (_unit(left) - _unit(right)) * (1.0 if preferred_left else -1.0)
+        for left, right, preferred_left, _ in calibration_vectors
+    ]
     for _ in range(160):
-        for left, right, preferred_left, _ in calibration_vectors:
-            difference = _unit(left) - _unit(right)
-            if not preferred_left:
-                difference = -difference
+        for difference in differences:
             logit = float(np.dot(weights, difference))
             probability = 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, logit))))
             gradient = (probability - 1.0) * difference + regularization * weights
@@ -170,9 +192,13 @@ def train_taste_profile(connection, profile_id: str = "default") -> dict[str, ob
         "held_out_pairs": len(held_out_vectors),
         "held_out_accuracy": held_out_accuracy,
         "held_out_excluded_unverified_or_correlated": len(raw_held_out) - len(held_out),
-        "calibration_independent_contexts": len(calibration_contexts),
+        "calibration_independent_contexts": len(training_albums),
         "held_out_independent_contexts": len(
-            {context for value in held_out if (context := _preference_context(value)) is not None}
+            {
+                _album_identity(context[0])
+                for value in held_out
+                if (context := _preference_context(value)) is not None
+            }
         ),
         "calibration_unique_assets": len(
             {str(value[key]) for value in calibration for key in ("left_uuid", "right_uuid")}
@@ -192,6 +218,8 @@ def train_taste_profile(connection, profile_id: str = "default") -> dict[str, ob
         training_examples=len(calibration_vectors),
         evidence=evidence,
     )
+    if was_paused:
+        repository.set_taste_profile_paused(connection, True, profile_id)
     return repository.get_taste_profile(connection, profile_id)
 
 
@@ -214,7 +242,7 @@ def load_taste_model(connection, profile_id: str = "default") -> TasteModel | No
         weights = np.frombuffer(base64.b64decode(str(raw), validate=True), dtype="<f4").copy()
     except (ValueError, TypeError) as error:
         raise TasteProfileError("Taste profile weights повреждены") from error
-    if weights.size != int(dimension):
+    if weights.size != int(dimension) or not np.all(np.isfinite(weights)):
         raise TasteProfileError("Taste profile dimension не совпадает")
     return TasteModel(
         feature_schema=str(schema),
@@ -256,12 +284,15 @@ def independent_preference_split(
     source_album_id: str,
     source_episode_key: str | None,
 ) -> str:
-    """Keep one album/episode context entirely in calibration or held-out."""
+    """Keep one album entirely in calibration or held-out, across all episodes."""
     if not source_episode_key:
         return "calibration"
-    context = (source_album_id, source_episode_key)
+    album = _album_identity(source_album_id)
     existing_splits = {
-        str(example["split"]) for example in examples if _preference_context(example) == context
+        str(example["split"])
+        for example in examples
+        if (context := _preference_context(example)) is not None
+        and _album_identity(context[0]) == album
     }
     if existing_splits:
         return "held_out" if existing_splits == {"held_out"} else "calibration"
@@ -269,18 +300,25 @@ def independent_preference_split(
     if calibration_count < MIN_CALIBRATION_PAIRS:
         return "calibration"
     calibration_contexts = {
-        value
+        _album_identity(value[0])
         for example in examples
         if example["split"] == "calibration"
         if (value := _preference_context(example)) is not None
     }
     held_out_contexts = {
-        value
+        _album_identity(value[0])
         for example in examples
         if example["split"] == "held_out"
         if (value := _preference_context(example)) is not None
     }
     return "held_out" if len(held_out_contexts) < len(calibration_contexts) else "calibration"
+
+
+def _album_identity(value: str) -> str:
+    # Durable corpus pseudonyms and legacy PhotoKit album IDs share one split boundary.
+    if len(value) == 64 and all(char in "0123456789abcdef" for char in value):
+        return value
+    return hashlib.sha256(("album\0" + value).encode()).hexdigest()
 
 
 def _preference_context(example: dict[str, object]) -> tuple[str, str] | None:

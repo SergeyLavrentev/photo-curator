@@ -388,8 +388,7 @@ def _technical_penalty(asset: dict[str, object], duplicate: dict[str, object] | 
         and float(dynamic_range) < 0.25
     ):
         penalty += 8.0
-    if duplicate and not duplicate.get("is_leader"):
-        penalty += 45.0 if duplicate.get("kind") == "exact" else 18.0
+    # Redundancy controls Best membership, not the technical quality of a frame.
     return min(65.0, penalty)
 
 

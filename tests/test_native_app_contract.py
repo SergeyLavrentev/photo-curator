@@ -13,6 +13,8 @@ APP_SOURCES = (
     "PhotoCuratorSettingsView.swift",
     "PhotoCuratorQualityWizardView.swift",
     "PhotoCuratorQualityModel.swift",
+    "PhotoCuratorBlindTasteView.swift",
+    "PhotoCuratorDeletion.swift",
 )
 
 
@@ -85,11 +87,12 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert '"taste_round_submit"' in app
     assert 'fromStage: "decisions"' in app
     assert "Настроить вкус" in app
-    assert "Остальные останутся нейтральными" in app
+    assert "Равноценны / пропустить" in app
     assert "TasteGridCard" in app
     assert "tasteRejectedIDs" in app
     assert "rejectedUUIDs: rejected" in app
-    assert "прежде чем запускать первый анализ" in app
+    assert "blind_taste_prepare" in app
+    assert "blind_taste_answer" in app
     assert "QuickLookController.shared.show" in app
     assert "openSelectedPhotoDetails" in app
     assert '.keyboardShortcut("p", modifiers: [])' in app
@@ -106,7 +109,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "Удалить анализ и его локальный кэш" in app
     assert 'let retainedProjectDefaultsKey = "retainedProjectID"' in app
     assert 'DisclosureGroup("Детали этапов", isExpanded: $analysisDetailsExpanded)' in app
-    assert "Размер итогового Best‑альбома" in app
+    assert "Размер итогового Best‑альбома" not in app
     assert "Исходный альбом анализируется целиком" in app
     assert "анализ можно запустить и без него" in app
     workflow_step = app.split("enum WorkflowStep", 1)[1].split("enum SelectionBucket", 1)[0]
@@ -127,8 +130,8 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "togglePhotoSelection" in app
     assert "setSelectedPhotosDecision" in app
     assert '"decisions_batch"' in app
-    assert "Переместить в отклонённые" in app
-    assert "Вернуть в Best" in app
+    assert "К удалению" in app
+    assert "Пометить к удалению" in app
     assert 'title: "Отбор фотографий"' not in app
     assert "Проверьте две готовые подборки" not in app
     assert "Выбрать видимые" not in app
@@ -155,10 +158,10 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert "if multiSelected || isHovering" in app
     assert "systemImage: bucket.symbol" in app
     assert '"binary_decisions"' in app
-    assert "selection: selectionBucket.rawValue" in app
+    assert 'selection: selectionBucket == .reject ? "cull_reject" : "cull_keep"' in app
     assert "SelectionBucket.allCases" in app
-    assert '("keep", "Добавить в Best", "flag.fill", Color.green)' in app
-    assert '("reject", "Отклонить", "xmark", Color.red)' in app
+    assert '("keep", "Оставить", "checkmark", Color.green)' in app
+    assert '("reject", "К удалению", "trash", Color.red)' in app
     assert 'let active = value == "keep" ? selection == "pick" : selection == value' in app
     assert '.accessibilityValue(active ? "Выбрано" : "")' in app
     assert 'autoSelection = value["auto_selection"]?.stringValue' in models
@@ -166,7 +169,7 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert '"Решение пользователя"' in app
     assert '"Рекомендация движка"' in app
     assert r"решение: \(decisionTitle)" in app
-    assert "currentDecisionModelVersion = 6" in app
+    assert "currentDecisionModelVersion = 8" in app
     assert "Codex Vision · экспериментальный" in app
     assert "API key не используется" in app
     assert '"codex_status"' in app
@@ -189,15 +192,15 @@ def test_native_app_uses_swiftui_jsonl_worker_without_browser_or_localhost() -> 
     assert 'LabeledContent("Top-K разметки"' in app
     assert '"Вы отмечали этот кадр как лучший"' in app
     assert 'LabeledContent("Ручная серия"' in app
-    assert "Создать Best‑альбом" in app
+    assert "Проверить удаление" in app
     assert '"delete_project"' in app
     assert "Отменить новый анализ" in app
     assert "ForEach(model.projects)" in app
     assert "ToolbarItemGroup(placement: .primaryAction)" in app
-    assert "TasteProfileEditorView" in app
+    assert "BlindTasteView" in app
     assert '"cleanup_abandoned_projects"' not in app
     assert '"taste_round_cancel"' in app
-    assert "Сменить альбом" in app
+    assert "Готовый анализ" in app
     assert "UserDefaults.standard" in app
     assert '"taste_export"' in app
     assert '"quality_export"' in app
@@ -298,8 +301,8 @@ def test_native_app_explains_first_run_before_requesting_photos_permission() -> 
     assert "import Photos" in app
     assert "didCompleteOnboardingV1" in app
     assert "OnboardingView" in app
-    assert "Продолжить и настроить вкус" in app
-    assert "На следующем шаге macOS попросит доступ к Фото" in app
+    assert "Выбрать альбом" in app
+    assert "Для чтения альбомов разрешите доступ к Фото" in app
     assert "guard hasCompletedOnboarding" in app
     assert "requestPhotoLibraryAccess" in app
     assert "requestPhotoLibraryAccessFromUI" in app
@@ -380,7 +383,7 @@ def test_native_workflow_keeps_publish_behind_dry_run_and_confirmation() -> None
     assert "publishReanalysisPending" in app
     assert 'fromStage: "inventory"' in app
     assert 'workerError.workerType == "PublishSourceChangedError"' in app
-    assert 'Button("Обновить анализ")' in app
+    assert "PhotoDeletionSheet" in app
     assert "let type: String?" in ipc
     assert "var workerType: String?" in client
 
@@ -680,14 +683,14 @@ def test_gallery_paging_keeps_navigation_and_mutations_in_the_current_page_conte
     assert "galleryRequestGeneration == mutationGalleryGeneration" in app_model
 
 
-def test_workspace_supports_alternatives_six_frame_survey_and_focus_safe_shortcuts() -> None:
+def test_workspace_supports_two_culling_actions_six_frame_survey_and_focus_safe_shortcuts() -> None:
     app = (ROOT / "packaging/macos/PhotoCuratorApp.swift").read_text()
     app_model = (ROOT / "packaging/macos/PhotoCuratorAppModel.swift").read_text()
     gallery = (ROOT / "packaging/macos/PhotoCuratorGalleryViews.swift").read_text()
     root = (ROOT / "packaging/macos/PhotoCuratorRootView.swift").read_text()
 
     assert 'model.setSelection(photoID: photoID, selection: "alternative")' in root
-    assert '("alternative", "Оставить как альтернативу"' in gallery
+    assert '("alternative", "Оставить как альтернативу"' not in gallery
     assert "displayed.count > 4 ? 3" in gallery
     assert "responder is NSTextView || responder is NSTextField" in app_model
     assert "performGalleryShortcut" in app
@@ -700,3 +703,29 @@ def test_album_picker_supports_shared_only_sources_and_reports_job_warnings() ->
     assert "if !model.albums.isEmpty {" in root
     assert 'parts.append("предупреждений: \\(job.warnings)")' in root
     assert 'parts.append("ошибок: \\(job.errors)")' in root
+
+
+def test_photo_deletion_is_explicit_host_only_and_revalidates_exact_assets():
+    source = (ROOT / "packaging/macos/PhotoCuratorDeletion.swift").read_text()
+    root = (ROOT / "packaging/macos/PhotoCuratorRootView.swift").read_text()
+    assert "model.preparePublish()" not in root
+    assert ".sheet(item: $model.photoDeletionPlan)" in root
+    assert "static let allCases: [SelectionBucket] = [.reject, .pick]" in native_app_source()
+    assert "sourceRevision(asset) == item.sourceRevision" in source
+    assert "Set(ids).isSubset(of: membership)" in source
+    assert "asset.canPerform(.delete)" in source
+    assert ".disabled(!confirmed || model.isBusy)" in source
+    assert "PHAssetChangeRequest.deleteAssets(assets as NSArray)" in source
+    assert "delete_photos_begin" in source and "confirmed: true" in source
+    assert "всех её альбомов" in source
+
+
+def test_shared_deletion_never_falls_back_to_personal_asset_deletion():
+    source = (ROOT / "packaging/macos/PhotoCuratorDeletion.swift").read_text()
+    branch = source.split("switch plan.scope {", 1)[1].split("case .library:", 1)[0]
+    assert "request.removeAssets(assets as NSArray)" in branch
+    assert "deleteAssets" not in branch
+    assert "album.canPerform(.removeContent)" in source
+    assert "success && submitted" in source
+    assert "PHAsset.fetchAssets(in: album, options: nil)" in source
+    assert "plan.scope.destination" in source

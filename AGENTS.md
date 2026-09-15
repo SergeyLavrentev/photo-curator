@@ -8,10 +8,13 @@
 
 ## Неприкосновенная граница Photos
 
-- Original Apple Photos library, assets, metadata, albums и `Photos.sqlite`
-  никогда не редактировать и не удалять напрямую.
-- Product output — предложение, immutable dry run и новый album после явного
-  подтверждения. Source album и source assets должны сохраниться.
+- `Photos.sqlite` и original files никогда не редактировать и не удалять напрямую.
+- Анализ read-only. По явному уточнению продукта 05.09.2026 UI может предложить удаление
+  assets через публичный PhotoKit API, но только после отдельного подтверждения пользователем
+  точного immutable списка и source revalidation; автоматического retry нет.
+- Основной product output — «Оставить / К удалению» с объяснениями. Предложение
+  не является разрешением на удаление. Legacy publish API создаёт только новый album.
+  Во всех тестовых прогонах пользовательские source assets должны сохраниться.
 - Реальный PhotoKit acceptance разрешён только как отдельная явно согласованная
   проверка с уникальным disposable output album, source revalidation и cleanup,
   который удаляет только созданный test container.

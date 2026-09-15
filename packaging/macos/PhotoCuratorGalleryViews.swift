@@ -52,7 +52,7 @@ struct PublishPreviewSheet: View {
                 Spacer()
                 Button("Отмена", action: cancel)
                 Button(
-                    independentCopies ? "Импортировать копии" : "Добавить в Best",
+                    independentCopies ? "Импортировать копии" : "Оставить",
                     action: confirm
                 )
                 .buttonStyle(.borderedProminent)
@@ -64,6 +64,7 @@ struct PublishPreviewSheet: View {
 }
 
 struct WorkspaceCanvas: View {
+    @EnvironmentObject private var model: AppModel
     let mode: WorkspaceMode
     let photos: [PhotoItem]
     let selectedID: String?
@@ -159,7 +160,7 @@ struct WorkspaceCanvas: View {
                                         Text(photo.filename).lineLimit(1)
                                         Spacer()
                                         DecisionPicker(
-                                            selection: photo.selection ?? "alternative",
+                                            selection: photo.cullingSelection,
                                             decide: { decide(photo.id, $0) },
                                             markAlternative: { markAlternative(photo.id) }
                                         )
@@ -194,37 +195,20 @@ struct WorkspaceCanvas: View {
                             if selected.manualSelection != nil {
                                 LabeledContent(
                                     "Решение пользователя",
-                                    value: selectionTitle(selected.selection)
+                                    value: selectionTitle(selected.cullingSelection)
                                 )
                                 LabeledContent(
                                     "Рекомендация движка",
-                                    value: selectionTitle(selected.autoSelection)
+                                    value: selected.autoCulling == "reject" ? "К удалению" : "Оставить"
                                 )
                             } else {
                                 LabeledContent(
                                     "Рекомендация движка",
-                                    value: selectionTitle(selected.autoSelection ?? selected.selection)
+                                    value: selected.autoCulling == "reject" ? "К удалению" : "Оставить"
                                 )
                             }
-                            LabeledContent("Безопасность", value: dispositionTitle(selected.disposition))
-                            if let score = selected.swipeScore {
-                                LabeledContent("Swipe Score", value: "\(score)")
-                            }
-                            LabeledContent(
-                                "Ваша оценка",
-                                value: selected.manualRating.map { "\($0) ★" } ?? "—"
-                            )
-                            HStack(spacing: 5) {
-                                ForEach(1...5, id: \.self) { value in
-                                    Button {
-                                        rate(selected.id, selected.manualRating == value ? nil : value)
-                                    } label: {
-                                        Image(systemName: value <= (selected.manualRating ?? 0) ? "star.fill" : "star")
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("Оценка \(value)")
-                                }
-                            }
+                            Text(cullingReasonTitle(selected.cullingReason)).foregroundStyle(.secondary)
+                            if model.developerToolsEnabled {
                             if selected.confidenceCalibrated, let confidence = selected.confidence {
                                 LabeledContent(
                                     "Вероятность корректности",
@@ -245,6 +229,7 @@ struct WorkspaceCanvas: View {
                             }
                             if let group = selected.duplicateGroup {
                                 LabeledContent("Серия", value: group)
+                            }
                             }
                             Divider()
                             Text("Причины рекомендации").font(.headline)
@@ -317,6 +302,7 @@ struct PhotoCard: View, Equatable {
     let stackCount: Int
     let toggleStack: () -> Void
     let rate: (Int?) -> Void
+    var deleteFromLibrary: () -> Void = {}
     let decide: (String?) -> Void
     @State private var isHovering = false
 
@@ -331,7 +317,7 @@ struct PhotoCard: View, Equatable {
     }
 
     private var decisionTitle: String {
-        selectionTitle(photo.selection)
+        selectionTitle(photo.cullingSelection)
     }
 
     private var previewSide: CGFloat {
@@ -363,18 +349,21 @@ struct PhotoCard: View, Equatable {
                 Button("Быстрый просмотр", action: preview)
                 Button("Открыть детали", action: openDetails)
                 Divider()
-                Button("Добавить в Best") { decide("keep") }
-                    .disabled(photo.selection == "pick")
-                Button("Отклонить") { decide("reject") }
-                    .disabled(photo.selection == "reject")
+                Button("Оставить") { decide("keep") }
+                    .disabled(photo.cullingCategory == "keep")
+                Button("К удалению") { decide("reject") }
+                    .disabled(photo.cullingCategory == "reject")
                 Button("Снять ручное решение") { decide(nil) }
                     .disabled(photo.manualSelection == nil)
+                Button("Удалить фото…", role: .destructive, action: deleteFromLibrary)
                 Divider()
+                if developerToolsEnabled {
                 ForEach(1...5, id: \.self) { value in
                     Button("\(value) ★") { rate(value) }
                 }
                 if photo.manualRating != nil {
                     Button("Снять оценку") { rate(nil) }
+                }
                 }
                 if developerToolsEnabled {
                     Divider()
@@ -465,8 +454,8 @@ struct PhotoCard: View, Equatable {
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(photo.filename), решение: \(decisionTitle)")
-        .accessibilityValue(selectionTitle(photo.selection))
-        .accessibilityHint("P добавляет в Best, X отклоняет; пробел открывает детали")
+        .accessibilityValue(selectionTitle(photo.cullingSelection))
+        .accessibilityHint("P оставляет, X помечает к удалению; пробел открывает детали")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .onHover { isHovering = $0 }
     }
@@ -478,7 +467,7 @@ struct PhotoDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var recommendationTitle: String {
-        selectionTitle(photo.selection)
+        selectionTitle(photo.cullingSelection)
     }
 
     var body: some View {
@@ -506,7 +495,7 @@ struct PhotoDetailView: View {
                     }
                     LabeledContent("Категория", value: recommendationTitle)
                         .font(.headline)
-                    LabeledContent("Безопасность", value: dispositionTitle(photo.disposition))
+                    Text(cullingReasonTitle(photo.cullingReason)).foregroundStyle(.secondary)
                     if let rating = photo.manualRating {
                         LabeledContent("Ваша оценка", value: "\(rating) из 5")
                     }
@@ -699,9 +688,8 @@ private struct DecisionPicker: View {
     let markAlternative: () -> Void
 
     private let options = [
-        ("keep", "Добавить в Best", "flag.fill", Color.green),
-        ("alternative", "Оставить как альтернативу", "square.stack.3d.up", Color.blue),
-        ("reject", "Отклонить", "xmark", Color.red),
+        ("keep", "Оставить", "checkmark", Color.green),
+        ("reject", "К удалению", "trash", Color.red),
     ]
 
     var body: some View {
@@ -789,16 +777,16 @@ struct TasteGridCard: View {
 }
 
 func dispositionTitle(_ disposition: String?) -> String {
-    ["keep": "Не удалять", "review": "Проверить", "reject": "Можно отклонить"][disposition ?? ""]
+    ["keep": "Не удалять", "review": "Оставить", "reject": "Можно отклонить"][disposition ?? ""]
         ?? "Без решения"
 }
 
 func selectionTitle(_ selection: String?) -> String {
     [
-        "pick": "Best",
-        "alternative": "Альтернатива",
-        "review": "Проверить",
-        "reject": "Отклонено",
+        "pick": "Оставить",
+        "alternative": "Оставить",
+        "review": "Оставить",
+        "reject": "К удалению",
     ][selection ?? ""] ?? "Без отбора"
 }
 
@@ -831,5 +819,17 @@ func jobStatusColor(_ status: String) -> Color {
     case "error": return .red
     case "running": return .accentColor
     default: return .secondary
+    }
+}
+
+func cullingReasonTitle(_ reason: String?) -> String {
+    switch reason {
+    case "series_representative": return "Оставленный представитель серии похожих снимков."
+    case "redundant_frame": return "Повтор похожего кадра. Сравните с оставленным снимком серии."
+    case "visible_blur_candidate": return "Вероятное размытие объекта. Проверьте резкость перед удалением."
+    case "exposure_detail_loss": return "Сильная потеря деталей из-за экспозиции."
+    case "confirmed_duplicate_or_defect": return "Обнаружен дубль или подтверждённый дефект."
+    case "protected_or_uncertain": return "Кадр защищён или данных недостаточно для рекомендации удаления."
+    default: return "Явной причины для удаления не найдено."
     }
 }

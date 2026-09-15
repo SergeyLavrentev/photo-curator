@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
 import platform
 import random
 import resource
+import struct
 import sys
 import tempfile
 from datetime import UTC, datetime, timedelta
@@ -11,8 +13,9 @@ from pathlib import Path
 from statistics import median
 from time import perf_counter
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageEnhance
 
+from photo_curator.analysis.hashes import color_histogram, dhash, phash, render_equivalence_hash
 from photo_curator.analysis.swipe_score import (
     apple_score_percentiles,
     calculate_swipe_score,
@@ -23,7 +26,7 @@ from photo_curator.db.migrations import migrate
 from photo_curator.native_worker import _asset_payload, _next_taste_pair
 from photo_curator.pipeline.duplicates import _candidate_pairs
 
-RELEASE_BENCHMARK_SCHEMA_VERSION = 2
+RELEASE_BENCHMARK_SCHEMA_VERSION = 3
 DEFAULT_COUNTS = (100, 2_000, 5_000)
 TOTAL_BUDGET_SECONDS = {100: 0.25, 2_000: 2.0, 5_000: 5.0}
 
@@ -248,11 +251,15 @@ def _benchmark_count(count: int) -> dict[str, object]:
         )
     scoring_seconds = perf_counter() - started
 
-    started = perf_counter()
-    pair, _ = _next_taste_pair(assets, signals, {}, [])
-    taste_pair_seconds = perf_counter() - started
-    if pair is None:
-        raise RuntimeError("Synthetic benchmark produced no taste pair")
+    # Matching now requires actual evidence; fictitious /benchmark paths and empty
+    # feature payloads must never manufacture a pair. Fixture setup is not timed.
+    with tempfile.TemporaryDirectory(prefix="photo-curator-pair-benchmark-") as temporary:
+        _materialize_taste_pair(assets, signals, Path(temporary))
+        started = perf_counter()
+        pair, _ = _next_taste_pair(assets, signals, {}, [])
+        taste_pair_seconds = perf_counter() - started
+        if pair is None:
+            raise RuntimeError("Synthetic scene fixture produced no taste pair")
 
     started = perf_counter()
     payload = json.dumps([_asset_payload(asset) for asset in assets], separators=(",", ":"))
@@ -289,6 +296,9 @@ def _synthetic_assets(
             "review_path": f"/benchmark/{asset_uuid}.jpg",
             "thumbnail_path": f"/benchmark/{asset_uuid}-thumb.jpg",
             "cache_state": "ready",
+            "media_type": "image",
+            "dhash": f"{phash_value:016x}",
+            "histogram": [],
             "final_disposition": "keep" if index % 4 == 0 else "review",
             "favorite": False,
             "width": 4_032,
@@ -322,10 +332,40 @@ def _synthetic_assets(
                 "engine_name": "benchmark",
                 "engine_version": "1",
                 "request_revision": 1,
-                "value": {},
+                "value": {
+                    "revision": 2,
+                    "element_type": 1,
+                    "element_count": 4,
+                    "data_base64": base64.b64encode(
+                        struct.pack("<ffff", *(randomizer.random() for _ in range(4)))
+                    ).decode(),
+                },
             },
         }
     return assets, signals
+
+
+def _materialize_taste_pair(assets, signals, root: Path) -> None:
+    image = Image.new("RGB", (240, 180), (110, 170, 230))
+    drawing = ImageDraw.Draw(image)
+    drawing.polygon([(0, 180), (115, 30), (240, 180)], fill=(55, 80, 30))
+    drawing.rectangle((160, 100, 180, 125), fill=(220, 180, 150))
+    vector = signals[str(assets[0]["asset_uuid"])]["feature_print"]["value"]
+    for index, asset in enumerate(assets[:2]):
+        frame = ImageEnhance.Brightness(image).enhance(1 + index * 0.02)
+        path = root / f"frame-{index}.png"
+        frame.save(path)
+        asset.update(
+            {
+                "review_path": str(path),
+                "thumbnail_path": str(path),
+                "phash": phash(frame),
+                "dhash": dhash(frame),
+                "histogram": color_histogram(frame),
+                "normalized_pixel_hash": render_equivalence_hash(frame),
+            }
+        )
+        signals[str(asset["asset_uuid"])]["feature_print"]["value"] = dict(vector)
 
 
 def _peak_rss_bytes() -> int:

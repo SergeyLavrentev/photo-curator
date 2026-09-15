@@ -47,7 +47,7 @@ extension AppModel {
                 "assets",
                 GalleryPageParams(
                     projectID: projectID,
-                    selection: selectionBucket.rawValue,
+                    selection: selectionBucket == .reject ? "cull_reject" : "cull_keep",
                     limit: galleryPageSize,
                     focusAssetUUID: focusPhotoID ?? "",
                     cursor: append ? galleryCursor : nil
@@ -81,7 +81,6 @@ extension AppModel {
                 UserDefaults.standard.set(projectID, forKey: retainedProjectDefaultsKey)
                 selectedPhotoIDs.removeAll()
                 currentStep = .selection
-                await loadQualityStatus(projectID: projectID)
             }
         } catch {
             guard requestGeneration == galleryRequestGeneration,
@@ -137,6 +136,14 @@ extension AppModel {
         guard requestGeneration == galleryRequestGeneration,
               project?.id == projectID else { return }
         unavailablePreviewFiles = max(unavailablePreviewFiles, unavailable)
+    }
+
+    func refreshCullingSummary(projectID: String) async {
+        do {
+            let response: ProjectSummaryEnvelopeDTO = try await callDTO("project", ProjectIDParams(projectID: projectID), as: ProjectSummaryEnvelopeDTO.self)
+            guard project?.id == projectID else { return }
+            applyProjectSummary(response.summary)
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func showSelection(_ bucket: SelectionBucket) {

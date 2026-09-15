@@ -38,13 +38,14 @@ enum SelectionBucket: String, CaseIterable, Identifiable {
     case review
     case reject
 
+    static let allCases: [SelectionBucket] = [.reject, .pick]
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .pick: return "Best"
+        case .pick: return "Оставить"
         case .alternative: return "Альтернативы"
         case .review: return "Проверить"
-        case .reject: return "Отклонённые"
+        case .reject: return "К удалению"
         }
     }
 
@@ -120,7 +121,7 @@ final class AppModel: ObservableObject {
     @Published var jobs: [JobItem] = []
     @Published var photos: [PhotoItem] = []
     @Published var photosTotal = 0
-    @Published var selectionBucket: SelectionBucket = .pick
+    @Published var selectionBucket: SelectionBucket = .reject
     @Published var workspaceMode: WorkspaceMode = .grid {
         didSet {
             if workspaceMode != oldValue { refreshSelectedSeriesContext() }
@@ -145,6 +146,10 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isBusy = false
     @Published var operationMessage: String?
+    @Published var cullingKeptTotal = 0
+    @Published var cullingRejectedTotal = 0
+    @Published var photoDeletionPlan: PhotoDeletionPlan?
+    @Published var deletionMessage: String?
     @Published var publishPlan: PublishPlan?
     @Published var publishMessage: String?
     @Published var publishReanalysisPending = false
@@ -241,13 +246,13 @@ final class AppModel: ObservableObject {
     private var hasStarted = false
     let galleryPageSize = 36
     var galleryShortcutsAllowed: Bool {
-        guard !qualityWizardActive else { return false }
+        guard !qualityWizardActive, !tasteEditorPresented, photoDeletionPlan == nil, detailPhoto == nil, !isBusy else { return false }
         let responder = NSApp.keyWindow?.firstResponder
         return !(responder is NSTextView || responder is NSTextField)
     }
     let retainedProjectDefaultsKey = "retainedProjectID"
     private let pendingPhotoKitAcceptanceDefaultsKey = "pendingPhotoKitAcceptanceV1"
-    private let currentDecisionModelVersion = 6
+    private let currentDecisionModelVersion = 8
 
     init() {
         selectedAlbumID = UserDefaults.standard.string(forKey: "selectedAlbumID") ?? ""
@@ -362,9 +367,13 @@ final class AppModel: ObservableObject {
                     photoAccessCanRequest = true
                     photoAccessNeedsAction = true
                     workerStatus = "Разрешите доступ к Apple Photos"
+                    await bootstrap(includeAlbums: false)
                     return
                 }
-                guard await requestPhotoLibraryAccess() else { return }
+                guard await requestPhotoLibraryAccess() else {
+                    await bootstrap(includeAlbums: false)
+                    return
+                }
             }
             await bootstrap()
         }
@@ -670,7 +679,7 @@ final class AppModel: ObservableObject {
         jobs = []
         photos = []
         resetSeriesContexts()
-        selectionBucket = .pick
+        selectionBucket = .reject
         keptTotal = 0
         pickedTotal = 0
         alternativeTotal = 0
@@ -913,7 +922,7 @@ final class AppModel: ObservableObject {
     }
 
     func setDecision(photoID: String, disposition: String?, recordUndo: Bool = true) {
-        guard let project, let previousPhoto = photoItem(photoID: photoID) else { return }
+        guard !isBusy, let project, let previousPhoto = photoItem(photoID: photoID) else { return }
         let projectID = project.id
         let mutationBucket = selectionBucket
         let mutationGalleryGeneration = galleryRequestGeneration
@@ -924,6 +933,7 @@ final class AppModel: ObservableObject {
         decisionGenerations[photoID] = generation
         let previousManual = previousPhoto.manualDisposition
         let previousSelection = previousPhoto.selection
+        let previousCulling = previousPhoto.cullingSelection
         let updatedSelection = disposition.flatMap {
             ["keep": "pick", "review": "review", "reject": "reject"][$0]
         }
@@ -932,7 +942,7 @@ final class AppModel: ObservableObject {
                   galleryRequestGeneration == mutationGalleryGeneration
             else { return }
             let wasInBucket = priorSelection == mutationBucket.rawValue
-            let isInBucket = updated.selection == mutationBucket.rawValue
+            let isInBucket = updated.cullingSelection == mutationBucket.rawValue
             if wasInBucket != isInBucket {
                 photosTotal = max(0, photosTotal + (isInBucket ? 1 : -1))
             }
@@ -953,14 +963,15 @@ final class AppModel: ObservableObject {
             adjustDecisionCounts(from: previousPhoto.disposition, to: disposition)
             adjustSelectionCounts(from: previousSelection, to: updatedSelection)
             var optimistic = previousPhoto
+            optimistic.cullingCategory = disposition == "reject" ? "reject" : "keep"
             optimistic.disposition = disposition
             optimistic.manualDisposition = disposition
             optimistic.selection = updatedSelection
             optimistic.manualSelection = updatedSelection
             optimisticPhoto = optimistic
             updateCachedPhoto(optimistic)
-            reconcilePage(optimistic, from: previousSelection)
-            if optimistic.selection != selectionBucket.rawValue,
+            reconcilePage(optimistic, from: previousCulling)
+            if optimistic.cullingSelection != selectionBucket.rawValue,
                !seriesContexts.values.contains(where: { members in
                    members.contains(where: { $0.id == photoID })
                }) {
@@ -994,7 +1005,7 @@ final class AppModel: ObservableObject {
                     let pageContextMatches = selectionBucket == mutationBucket
                         && galleryRequestGeneration == mutationGalleryGeneration
                     updateCachedPhoto(updated, updateGallery: pageContextMatches)
-                    reconcilePage(updated, from: optimisticPhoto?.selection ?? previousSelection)
+                    reconcilePage(updated, from: optimisticPhoto?.cullingSelection ?? previousCulling)
                     if recordUndo && previousManual != disposition {
                         decisionHistory.append(
                             .disposition(
@@ -1013,7 +1024,7 @@ final class AppModel: ObservableObject {
                 {
                     await loadPhotos(projectID: projectID)
                 }
-                await loadQualityStatus(projectID: projectID)
+                await refreshCullingSummary(projectID: projectID)
             } catch {
                 guard decisionGenerations[photoID] == generation else { return }
                 if let disposition {
@@ -1024,13 +1035,14 @@ final class AppModel: ObservableObject {
                     let pageContextMatches = selectionBucket == mutationBucket
                         && galleryRequestGeneration == mutationGalleryGeneration
                     updateCachedPhoto(previousPhoto, updateGallery: pageContextMatches)
-                    reconcilePage(previousPhoto, from: optimisticPhoto.selection)
+                    reconcilePage(previousPhoto, from: optimisticPhoto.cullingSelection)
                 }
                 if selectionBucket != mutationBucket
                     || galleryRequestGeneration != mutationGalleryGeneration
                 {
                     await loadPhotos(projectID: projectID)
                 }
+                await refreshCullingSummary(projectID: projectID)
                 errorMessage = error.localizedDescription
             }
         }
@@ -1183,6 +1195,7 @@ final class AppModel: ObservableObject {
                     )
                 }
                 await loadPhotos(projectID: project.id)
+                await refreshCullingSummary(projectID: project.id)
                 selectedPhotoID = photos.contains(where: { $0.id == restored.id })
                     ? restored.id : photos.first?.id
             } catch {
@@ -1200,7 +1213,7 @@ final class AppModel: ObservableObject {
         photos = []
         resetSeriesContexts()
         galleryCursor = nil
-        photosTotal = pickedTotal
+        photosTotal = cullingKeptTotal
         selectedPhotoID = photoID
         selectedPhotoIDs.removeAll()
         Task { await loadPhotos(projectID: project.id, focusPhotoID: photoID) }
@@ -1494,7 +1507,7 @@ final class AppModel: ObservableObject {
         Task {
             defer { isBusy = false }
             do {
-                _ = try await callDTO(
+                let result = try await callDTO(
                     "delete_project",
                     ConfirmedProjectDeletionParams(projectID: target.id),
                     as: WorkerOperationDTO.self
@@ -1515,13 +1528,14 @@ final class AppModel: ObservableObject {
                         currentStep = .album
                     }
                 }
+                if let notice = result.notice { errorMessage = notice }
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
     }
 
-    private func bootstrap() async {
+    private func bootstrap(includeAlbums: Bool = true) async {
         do {
             let status: WorkerStatusDTO = try await callDTO(
                 "status", EmptyWorkerParams(), as: WorkerStatusDTO.self
@@ -1530,9 +1544,9 @@ final class AppModel: ObservableObject {
                 throw NativeWorkerClientError.invalidResponse
             }
             workerStatus = "Локальный движок готов"
-            let groups: AlbumGroupsDTO = try await callDTOWithRetry(
-                "albums", as: AlbumGroupsDTO.self, attempts: 3
-            )
+            let groups: AlbumGroupsDTO = includeAlbums
+                ? try await callDTOWithRetry("albums", as: AlbumGroupsDTO.self, attempts: 3)
+                : AlbumGroupsDTO(regular: [], shared: [])
             let taste: TasteProfileDTO = try await callDTO(
                 "taste_profile", EmptyWorkerParams(), as: TasteProfileDTO.self
             )
@@ -1580,7 +1594,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func requestPhotoLibraryAccess() async -> Bool {
+    func requestPhotoLibraryAccess() async -> Bool {
         workerStatus = "Запрашиваем доступ к Apple Photos…"
         photoAccessNeedsAction = false
         photoAccessCanRequest = false
@@ -1715,7 +1729,7 @@ final class AppModel: ObservableObject {
         galleryCursor = nil
         photosTotal = 0
         unavailablePreviewFiles = 0
-        selectionBucket = .pick
+        selectionBucket = .reject
         keptTotal = 0
         pickedTotal = 0
         alternativeTotal = 0
@@ -1739,6 +1753,8 @@ final class AppModel: ObservableObject {
 
     func applyProjectSummary(_ summary: ProjectSummaryDTO?) {
         guard let summary else { return }
+        cullingKeptTotal = summary.cullingKeep ?? summary.keep ?? 0
+        cullingRejectedTotal = summary.cullingReject ?? summary.reject ?? 0
         keptTotal = summary.keep ?? keptTotal
         pickedTotal = summary.pick ?? pickedTotal
         alternativeTotal = summary.alternative ?? alternativeTotal
@@ -1769,10 +1785,10 @@ final class AppModel: ObservableObject {
 
     func count(for bucket: SelectionBucket) -> Int {
         switch bucket {
-        case .pick: return pickedTotal
+        case .pick: return cullingKeptTotal
         case .alternative: return alternativeTotal
         case .review: return selectionReviewTotal
-        case .reject: return rejectedTotal
+        case .reject: return cullingRejectedTotal
         }
     }
 
@@ -1808,6 +1824,7 @@ final class AppModel: ObservableObject {
                 ProjectIDParams(projectID: projectID),
                 as: QualityStatusDTO.self
             )
+            guard project?.id == projectID else { return }
             qualityManualLabels = value.manualLabels
             qualityHeldOutPairs = value.heldOutPairs
             qualityTopKCount = value.expectedTopK

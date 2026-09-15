@@ -11,7 +11,7 @@ from photo_curator.release_benchmark import run_release_benchmark
 def test_release_benchmark_covers_rank_pair_and_payload_hot_paths() -> None:
     report = run_release_benchmark(counts=(100, 250), iterations=1, gallery_count=1_000)
 
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert report["passed"]
     assert report["gallery"]["asset_count"] == 1_000
     assert report["gallery"]["sql_page_p95_ms"] < 100
@@ -36,4 +36,4 @@ def test_release_benchmark_cli_writes_versioned_report(tmp_path: Path) -> None:
     )
 
     assert result == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 3

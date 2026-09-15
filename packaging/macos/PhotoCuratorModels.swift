@@ -44,6 +44,7 @@ struct ProjectItem: Identifiable, Equatable, JSONDictionaryDTO {
     let state: String
     let albumID: String
     let albumName: String
+    let sourceAlbumShared: Bool
     let decisionModelVersion: Int
     let analysisMode: String
     let createdAt: String
@@ -62,6 +63,7 @@ struct ProjectItem: Identifiable, Equatable, JSONDictionaryDTO {
         self.albumID = albumID
         self.albumName = albumName
         let settings = value["settings"]?.objectValue
+        sourceAlbumShared = settings?["source_album_shared"]?.boolValue ?? false
         decisionModelVersion = settings?["decision_model_version"]?.intValue ?? 0
         analysisMode = settings?["analysis_mode"]?.stringValue ?? "local"
         createdAt = value["created_at"]?.stringValue ?? ""
@@ -134,6 +136,10 @@ struct PhotoItem: Identifiable, Equatable, JSONDictionaryDTO {
     let modelCount: Int
     let modelDisagreement: Double?
     let reasons: [DecisionReason]
+    var cullingCategory: String
+    let autoCulling: String
+    let cullingReason: String?
+    var cullingSelection: String { cullingCategory == "reject" ? "reject" : "pick" }
     var disposition: String?
     var manualDisposition: String?
     let autoSelection: String?
@@ -173,6 +179,9 @@ struct PhotoItem: Identifiable, Equatable, JSONDictionaryDTO {
         evidenceCoverage = value["evidence_coverage"]?.doubleValue
         modelCount = value["model_count"]?.intValue ?? 0
         modelDisagreement = value["model_disagreement"]?.doubleValue
+        cullingCategory = value["culling_category"]?.stringValue ?? (value["final_disposition"]?.stringValue == "reject" ? "reject" : "keep")
+        autoCulling = value["auto_culling"]?.stringValue ?? cullingCategory
+        cullingReason = value["culling_reason"]?.stringValue
         disposition = value["final_disposition"]?.stringValue
         manualDisposition = value["manual_disposition"]?.stringValue
         autoSelection = value["auto_selection"]?.stringValue

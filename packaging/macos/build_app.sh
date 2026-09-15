@@ -121,6 +121,8 @@ xcrun swiftc \
   "$SCRIPT_DIR/PhotoCuratorImagePipeline.swift" \
   "$SCRIPT_DIR/PhotoCuratorSettingsView.swift" \
   "$SCRIPT_DIR/PhotoCuratorQualityWizardView.swift" \
+  "$SCRIPT_DIR/PhotoCuratorBlindTasteView.swift" \
+  "$SCRIPT_DIR/PhotoCuratorDeletion.swift" \
   "$SCRIPT_DIR/PhotoCuratorQualityModel.swift" \
   "$SCRIPT_DIR/PhotoCuratorAppModel.swift" \
   "$SCRIPT_DIR/PhotoCuratorGalleryModel.swift" \

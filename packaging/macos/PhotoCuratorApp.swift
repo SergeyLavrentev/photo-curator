@@ -92,7 +92,7 @@ struct PhotoCuratorApplication: App {
                     .keyboardShortcut(.space, modifiers: [])
                     .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
                 Divider()
-                Button("Добавить в Best") {
+                Button("Оставить") {
                     model.performGalleryShortcut { model.decideSelected("keep") }
                 }
                     .keyboardShortcut("p", modifiers: [])
@@ -102,12 +102,13 @@ struct PhotoCuratorApplication: App {
                 }
                     .keyboardShortcut("u", modifiers: [])
                     .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
-                Button("Отклонить") {
+                Button("К удалению") {
                     model.performGalleryShortcut { model.decideSelected("reject") }
                 }
                     .keyboardShortcut("x", modifiers: [])
                     .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
                 Divider()
+                if model.developerToolsEnabled {
                 ForEach(1...5, id: \.self) { rating in
                     Button("Оценка \(rating) ★") {
                         model.performGalleryShortcut { model.rateSelected(rating) }
@@ -120,6 +121,7 @@ struct PhotoCuratorApplication: App {
                 }
                     .keyboardShortcut("0", modifiers: [])
                     .disabled(!model.galleryShortcutsAllowed || model.selectedPhotoID == nil)
+                }
                 Divider()
                 Button("Отменить решение") {
                     model.performGalleryShortcut { model.undoLastDecision() }

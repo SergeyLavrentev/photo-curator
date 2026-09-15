@@ -5,7 +5,7 @@ from pathlib import Path
 
 from photo_curator.db.connection import create_database_backup
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 31
 
 MIGRATION_1 = """
 CREATE TABLE projects (
@@ -760,6 +760,41 @@ MIGRATION_28 = """
 ALTER TABLE learning_assets ADD COLUMN human_note TEXT;
 """
 
+MIGRATION_29 = """
+CREATE TABLE blind_taste_sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    round_id TEXT NOT NULL REFERENCES learning_rounds(id) ON DELETE CASCADE,
+    pairs_json TEXT NOT NULL,
+    answers_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX blind_taste_sessions_project ON blind_taste_sessions(project_id, round_id);
+"""
+
+MIGRATION_30 = """
+ALTER TABLE decisions ADD COLUMN auto_culling TEXT NOT NULL DEFAULT 'keep';
+ALTER TABLE decisions ADD COLUMN culling_reason TEXT;
+UPDATE decisions SET auto_culling=CASE WHEN auto_disposition='reject' THEN 'reject' ELSE 'keep' END;
+CREATE TABLE photo_deletion_plans (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'prepared',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    error_text TEXT
+);
+"""
+
+MIGRATION_31 = """
+CREATE TABLE learning_pair_exclusions (
+    id TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    evidence_json TEXT NOT NULL
+);
+"""
+
 MIGRATION_19_BACKFILL = """
 UPDATE quality_asset_labels
 SET expected_disposition = (
@@ -801,6 +836,9 @@ MIGRATIONS = (
     MIGRATION_26,
     MIGRATION_27,
     MIGRATION_28,
+    MIGRATION_29,
+    MIGRATION_30,
+    MIGRATION_31,
 )
 
 _TABLES_BY_VERSION = {
@@ -835,6 +873,9 @@ _TABLES_BY_VERSION = {
         "learning_series",
         "learning_migration_audit",
     },
+    29: {"blind_taste_sessions"},
+    30: {"photo_deletion_plans"},
+    31: {"learning_pair_exclusions"},
 }
 
 _COLUMNS_BY_VERSION = {
@@ -1016,7 +1057,30 @@ _COLUMNS_BY_VERSION = {
             "counts_json",
         },
     },
+    31: {"learning_pair_exclusions": {"id", "reason", "evidence_json"}},
+    30: {
+        "decisions": {"auto_culling", "culling_reason"},
+        "photo_deletion_plans": {
+            "id",
+            "project_id",
+            "payload_json",
+            "status",
+            "created_at",
+            "updated_at",
+            "error_text",
+        },
+    },
     28: {"learning_assets": {"human_note"}},
+    29: {
+        "blind_taste_sessions": {
+            "id",
+            "project_id",
+            "round_id",
+            "pairs_json",
+            "answers_json",
+            "created_at",
+        }
+    },
 }
 
 
@@ -1117,6 +1181,10 @@ def migrate(connection: sqlite3.Connection) -> None:
         return
     try:
         connection.executescript(_migration_script(version))
+        if version < 31:
+            from photo_curator.db.blind_learning_migration import exclude_legacy_blind_answers
+
+            exclude_legacy_blind_answers(connection)
         verify_schema(connection, SCHEMA_VERSION)
     except Exception:
         if connection.in_transaction:

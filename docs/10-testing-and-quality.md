@@ -2,6 +2,10 @@
 
 ## Unit fixtures
 
+Legacy deletion regressions verify missing-snapshot archiving, exact retained labels and
+image hashes, no synthetic training provenance, and preservation of the project when backup,
+image copying, or symlink validation fails. Other feature-provenance drift remains blocked.
+
 Генерировать через Pillow:
 
 - sharp image;
@@ -18,6 +22,10 @@
 - higher-resolution original;
 - lower-resolution shared-like copy;
 - EXIF-rotated image.
+
+Blind A/B scene matching and legacy-session migration are described in
+[`24-blind-series-comparisons.md`](24-blind-series-comparisons.md). Unrelated categories,
+locations, temporal neighbours and transitive groups must not become unverified questions.
 
 ## Unit coverage
 
@@ -171,6 +179,15 @@ Regression minimum для durable learning:
 
 ## Production gallery benchmark
 
+The September 5 review adds regression coverage for blind session resume, idempotent answers,
+skips, immutable feature drift, retained corpus after project deletion, paused-profile
+retraining, album-separated evaluation, advisory leader selection and quality/status parity.
+`bash packaging/macos/test_native_ipc.sh` exercises 640 concurrent/out-of-order worker requests.
+It checks completion under load; it does not by itself prove a timing race existed in a prior build.
+The full `make test` suite and `make lint` remain required; packaging uses `make app` and
+`make verify-app`. Real-photo visual observations by an assistant are exploratory evidence and
+must never be inserted as user preference labels or human acceptance.
+
 `make gallery-benchmark` компилирует production `PhotoCard`, `CachedThumbnail` и тот же SwiftUI
 код приложения с флагом, отключающим только application `@main`. Harness создаёт отдельные
 реальные JPEG, отображает production-страницу из 36 карточек и измеряет page-local DTO creation,
@@ -261,3 +278,25 @@ Decision confidence fail-closed: полнота сигналов и cross-model 
 album-percentile шкале и уменьшает raw reliability, но не называется вероятностью. Вероятность
 корректности появляется только после валидации Platt calibrator на непересекающихся calibration и
 held-out albums; смена raw-confidence contract инвалидирует модели предыдущей версии.
+
+
+## Two-bucket culling и подтверждённое удаление (05.09.2026)
+
+`tests/test_culling_and_deletion.py` проверяет разницу между low rank и техническим дефектом,
+сохранение представителя серии и отдельных моментов, protected/uncertain случаи, согласованность
+paging/count/summary после manual override и undo. На синтетической БД проверяются immutable
+план, explicit confirmation, source/decision drift, запрет replay, cancellation, partial result,
+сохранение review files и отказ удалять оригиналы по local-copy identity.
+Отдельные regression cases проверяют явное удаление из «Оставить», Favorite/edited,
+сохранение прежнего решения при отмене и блокировку устаревшего массового списка.
+
+Native host проверяет exact UUID membership/revision и разрешение Photos перед единственным
+`deleteAssets` вызовом. Автоматические тесты и повседневный UI smoke никогда не вызывают
+реальное удаление Photos assets. Компиляция и mocks не заменяют явно согласованную ручную
+проверку PhotoKit на специально созданных одноразовых assets.
+
+Shared Album regression: immutable scope не меняется после preview; подтверждённый removal
+скрывает только запись исходного shared-контекста, сохраняя personal и другой shared album.
+Source/UI контракт разделяет removeAssets и deleteAssets. Реальная доступность Shared Album
+mutation через PhotoKit требует отдельного недеструктивного capability preflight, а успешное
+удаление — отдельного согласованного прогона на одноразовых публикациях.

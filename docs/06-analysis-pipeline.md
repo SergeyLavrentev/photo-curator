@@ -1,5 +1,13 @@
 # Swipe Score analysis pipeline
 
+> Уточнение продукта 05.09.2026: основной UI показывает только «Оставить / К удалению».
+> Decision model v8 дополнительно сохраняет `auto_culling` и причину: повтор подтверждённой
+> серии либо конкретный технический дефект. Низкий score сам по себе не основание для culling.
+> Ручное решение имеет приоритет. Представитель серии, разные моменты, Favorite/edits,
+> неоднозначный и недоступный анализ защищены. Ниже Best/Alternative описывают сохраняемый
+> исторический ranking contract, который больше не является основным пользовательским потоком.
+
+
 > Production Apple Vision выполняется только отдельным Swift helper. Старый PyObjC
 > compatibility path не запускается coordinator-ом: framework hang не должен блокировать
 > проект. Его прямой диагностический вызов изолирован в subprocess с жёстким timeout.
@@ -38,7 +46,7 @@ metadata-only source inventory
   → best-in-series comparison
   → Personal Taste adjustment
   → album-relative selection cutoff
-  → diverse Good / Bad buckets
+  → separate Best / Alternative selection and defect review
   → approved publish plan
 ```
 
@@ -124,24 +132,28 @@ step, so twenty near-identical sunset frames cannot dominate the result.
 The score ranks this corpus; it is not a probability or a universal beauty judgement.
 Missing components are not treated as zero. Weights and calibration are versioned.
 
-## Binary defect policy
+## Selection and defect policy
 
-The engine always produces two user-facing categories: Good and Bad, but Bad is not the bottom
-part of an album ranking. Automatic Bad is limited to exact duplicate losers and highly
-confident near-duplicate losers captured within 15 seconds that have a confirmed visual match,
-a material quality gap and a concrete technical defect. A low album-relative score is ranking
-evidence only. Aesthetics and personal taste can make an absolute low outlier Bad only when
-confidence is high and at least two independent signals agree. Scene-diversity limits also rank
-candidates but never make a photo Bad.
+Best, Alternative and Review describe selection membership separately from Keep/Reject.
+An ordinary low-ranked photo remains Keep and may become Alternative. Exact duplicate losers
+can become Reject; near-duplicate defects require the validated defect auto-reject gate,
+otherwise they remain available for review. Favorites, edits and unavailable analyses retain
+their existing protection. Aesthetics and personal taste alone never authorize Reject.
+
+Decision model v7 removes the fake technical penalty for losing a duplicate comparison and the
+25-point aesthetic penalty for scene redundancy. Redundancy demotes selection membership;
+it is not a defect in the photograph. Within an established series, an extra Pick requires a
+feature-print cosine distance of at least 0.06 from the leader, alongside the existing evidence
+checks. This threshold is a heuristic, not human-accepted calibration. Advisory NIMA,
+MobileCLIP and Codex scores do not bypass their validation boundary through leader selection.
 
 Generic Vision aesthetics is counted once. Missing detailed composition/content/moment scores
 stay neutral instead of duplicating that baseline. Personal Taste influence is multiplied by a
 reliability factor derived from sample count and held-out accuracy; calibration-only accuracy is
 explicitly discounted.
 
-Compact, balanced and broad remain ranking cutoffs for diagnostics and future Best-candidate
-presentation, not defect labels. If the product needs a fixed-size Best subset, that membership
-must be represented separately instead of reusing Good/Bad disposition.
+Compact, balanced and broad control the album-relative Best shortlist. Series coherence and
+diversity can reduce its size; these are not exact-count promises or defect labels.
 
 Decision confidence is calibrated from the distance to that album's cutoff and the reliability
 of the available signals. It is not copied from the Swipe Score confidence. Explanations are
@@ -152,11 +164,19 @@ user-facing explanation.
 
 ## Personal Taste Profile
 
-The initial profile is a lightweight local pairwise ranker over stable native/Core ML features.
-Onboarding collects three Top-3-of-10 rounds. Each chosen photo is paired against every unchosen
-photo in its round, producing 54 calibration and 9 held-out comparisons. The source album may
-change between rounds, and the sampled photos are not modified. Later training data can also come
-from explicit corrections. Safety and integrity rules are never training targets.
+The profile is a lightweight local pairwise ranker over immutable feature snapshots. The native
+"Ваш вкус" flow offers up to 12 blind comparisons from an already analyzed album: adjacent
+capture moments mixed with album-wide pairs, sampled without automatic scores or groups.
+One explicit winner creates one training preference. Skip creates none. The session resumes
+after closing or restarting; each accepted choice enters the durable learning corpus.
+
+The v6 ranker separates training and evaluation by album, including legacy/raw and durable/hashed
+album identities, and excludes overlapping assets. Another episode from the same album is not
+an independent test. The old forced Top-3 rounds remain readable as history; correlated held-out
+examples are excluded from accuracy. Retraining preserves a paused profile. Changed feature or
+album snapshots block acceptance rather than replacing previously accepted evidence.
+Legacy analyses without an immutable album snapshot require a new analysis for this flow.
+Safety and integrity rules are never training targets.
 
 The profile stores feature schema, training examples, model parameters, quality evidence and
 updated time. It supports pause, reset, export and deletion. Ranking explanations show the

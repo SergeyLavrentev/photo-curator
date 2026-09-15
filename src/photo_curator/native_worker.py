@@ -15,7 +15,12 @@ from pathlib import Path
 from threading import Lock, local
 from typing import TextIO
 
-from photo_curator.acceptance import build_database_quality_evidence, evaluate_acceptance
+from photo_curator.acceptance import (
+    build_database_quality_evidence,
+    build_native_quality_evidence,
+    evaluate_acceptance,
+)
+from photo_curator.analysis.blind_pairs import scene_pairs
 from photo_curator.analysis.codex_vision import codex_status
 from photo_curator.analysis.local_models import LocalModelEngine
 from photo_curator.analysis.native_vision import NativeVisionEngine
@@ -182,6 +187,68 @@ class NativeWorker:
         _append_photokit_acceptance_audit(self.paths, result)
         return result
 
+    def _handle_delete_photos_prepare(self, params: dict[str, object]) -> dict[str, object]:
+        from photo_curator.photos.deletion import prepare_deletion
+
+        project_id = _required_string(params, "project_id")
+        ids = params.get("asset_uuids")
+        if ids is not None and (
+            not isinstance(ids, list) or any(not isinstance(i, str) for i in ids)
+        ):
+            raise NativeWorkerError("asset_uuids must be a list")
+        with (
+            self.coordinator.project_operation(project_id),
+            database_connection(self.paths.database) as connection,
+        ):
+            return prepare_deletion(connection, project_id, ids)
+
+    def _handle_delete_photos_begin(self, params: dict[str, object]) -> dict[str, object]:
+        from photo_curator.photos.deletion import begin_deletion, get_plan
+
+        if params.get("confirmed") is not True:
+            raise NativeWorkerError("Photo deletion requires confirmed=true")
+        plan_id = _required_string(params, "plan_id")
+        with database_connection(self.paths.database) as connection:
+            _, plan = get_plan(connection, plan_id)
+        with self.coordinator.project_operation(plan["project_id"]):
+            backup = create_database_backup(
+                self.paths.database, self.paths.data_dir / "backups", reason="before-photo-deletion"
+            )
+            with database_connection(self.paths.database) as connection:
+                plan = begin_deletion(connection, plan_id, confirmed=True)
+            _append_destructive_audit(
+                self.paths,
+                action="delete_photos",
+                status="requested",
+                project_id=plan["project_id"],
+                backup_path=str(backup),
+            )
+            return plan
+
+    def _handle_delete_photos_finish(self, params: dict[str, object]) -> dict[str, object]:
+        from photo_curator.photos.deletion import finish_deletion, get_plan
+
+        plan_id = _required_string(params, "plan_id")
+        ids = params.get("deleted_ids")
+        if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+            raise NativeWorkerError("deleted_ids must be a list")
+        with database_connection(self.paths.database) as connection:
+            _, plan = get_plan(connection, plan_id)
+        with (
+            self.coordinator.project_operation(plan["project_id"]),
+            database_connection(self.paths.database) as connection,
+        ):
+            result = finish_deletion(
+                connection, plan_id, ids, str(params.get("error") or "")[:2000] or None
+            )
+        _append_destructive_audit(
+            self.paths,
+            action="delete_photos",
+            status=result["status"],
+            project_id=plan["project_id"],
+        )
+        return result
+
     def _handle_delete_project(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         if params.get("confirmed") is not True:
@@ -193,17 +260,34 @@ class NativeWorker:
                 project = repository.get_project(connection, project_id)
                 if project["state"] == "running":
                     raise NativeWorkerError("Сначала остановите выполняющийся анализ")
-            learning = self._migrate_learning_or_raise(project_id)
+            with database_connection(self.paths.database) as connection:
+                learning = migrate_project_learning(connection, project_id)
+                legacy_snapshot_missing = (
+                    repository.latest_album_snapshot(connection, project_id) is None
+                )
+            if learning["status"] != "completed":
+                if not legacy_snapshot_missing:
+                    raise NativeWorkerError(
+                        "Durable learning migration blocked the operation: "
+                        + str(learning.get("error") or "unknown provenance error")
+                    )
+                from photo_curator.legacy_learning_archive import archive_legacy_learning
+
+                learning = archive_legacy_learning(self.paths, project_id)
             _append_destructive_audit(
                 self.paths,
                 action="delete_project",
                 status="requested",
                 project_id=project_id,
             )
-            backup = create_database_backup(
-                self.paths.database,
-                self.paths.data_dir / "backups",
-                reason=f"before-delete-{project_id}",
+            backup = (
+                Path(learning["backup_path"])
+                if learning["status"] == "archived_not_trainable"
+                else create_database_backup(
+                    self.paths.database,
+                    self.paths.data_dir / "backups",
+                    reason=f"before-delete-{project_id}",
+                )
             )
             with database_connection(self.paths.database) as connection:
                 repository.delete_project(connection, project_id)
@@ -220,6 +304,13 @@ class NativeWorker:
             "project_id": project_id,
             "backup_path": str(backup),
             "learning_migration": learning,
+            "notice": (
+                "Анализ удалён. Старые оценки и изображения сохранены в отдельном архиве: "
+                + str(Path(learning["manifest_path"]).parent)
+                + ". Архив не используется для обучения без данных о составе альбома."
+                if learning["status"] == "archived_not_trainable"
+                else None
+            ),
         }
 
     def _migrate_learning_or_raise(
@@ -332,7 +423,14 @@ class NativeWorker:
             project = repository.get_project(connection, project_id)
             summary = repository.project_summary(connection, project_id)
             jobs = repository.latest_jobs(connection, project_id)
-            assets = repository.list_assets(connection, project_id)
+            assets = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT cache_state, review_path, thumbnail_path FROM assets "
+                    "WHERE project_id=? AND no_longer_exists=0 AND media_type='image'",
+                    (project_id,),
+                )
+            ]
         summary["unavailable_preview_files"] = _unavailable_preview_files(assets)
         return {
             "project": _project_payload(project),
@@ -378,7 +476,14 @@ class NativeWorker:
         if disposition is not None and disposition not in {"keep", "review", "reject"}:
             raise NativeWorkerError("Unknown disposition filter")
         selection = params.get("selection")
-        if selection is not None and selection not in {"pick", "alternative", "review", "reject"}:
+        if selection is not None and selection not in {
+            "pick",
+            "alternative",
+            "review",
+            "reject",
+            "cull_keep",
+            "cull_reject",
+        }:
             raise NativeWorkerError("Unknown selection filter")
         with database_connection(self.paths.database) as connection:
             total = repository.count_assets(
@@ -405,7 +510,14 @@ class NativeWorker:
                     focused = None
                 if focused and (
                     (disposition is None or focused.get("final_disposition") == disposition)
-                    and (selection is None or focused.get("final_selection") == selection)
+                    and (
+                        selection is None
+                        or focused.get("final_selection") == selection
+                        or (
+                            str(selection).startswith("cull_")
+                            and _asset_payload(focused)["culling_category"] == str(selection)[5:]
+                        )
+                    )
                     and not any(str(asset["asset_uuid"]) == focus_asset_uuid for asset in page)
                 ):
                     page = [focused, *page[: limit - 1]]
@@ -602,6 +714,35 @@ class NativeWorker:
             "updated": len(asset_uuids),
             "summary": summary,
         }
+
+    def _handle_blind_taste_prepare(self, params: dict[str, object]) -> dict[str, object]:
+        from photo_curator.blind_taste import prepare_session
+
+        project_id = _required_string(params, "project_id")
+        with (
+            self.coordinator.project_operation(project_id),
+            database_connection(self.paths.database) as connection,
+        ):
+            return prepare_session(connection, project_id)
+
+    def _handle_blind_taste_answer(self, params: dict[str, object]) -> dict[str, object]:
+        from photo_curator.blind_taste import answer_session
+
+        session_id = _required_string(params, "session_id")
+        index = _optional_int(params, "index")
+        if index is None:
+            raise NativeWorkerError("index required")
+        with database_connection(self.paths.database) as connection:
+            row = connection.execute(
+                "SELECT project_id FROM blind_taste_sessions WHERE id=?", (session_id,)
+            ).fetchone()
+        if row is None:
+            raise NativeWorkerError("Сравнение больше недоступно")
+        with (
+            self.coordinator.project_operation(str(row[0])),
+            database_connection(self.paths.database) as connection,
+        ):
+            return answer_session(connection, session_id, index, _required_string(params, "choice"))
 
     def _handle_taste_profile(self, params: dict[str, object]) -> dict[str, object]:
         del params
@@ -898,6 +1039,7 @@ class NativeWorker:
         left_uuid = _required_string(params, "left_uuid")
         right_uuid = _required_string(params, "right_uuid")
         with database_connection(self.paths.database) as connection:
+            _require_same_scene(connection, project_id, left_uuid, right_uuid)
             examples = repository.list_preference_examples(connection)
             album_id, episode_key = repository.preference_source_provenance(
                 connection, project_id, left_uuid, right_uuid
@@ -1019,10 +1161,14 @@ class NativeWorker:
         return {"status": "deleted", "backup_path": str(backup), "learning": status}
 
     def _handle_quality_status(self, params: dict[str, object]) -> dict[str, object]:
-        evidence = self._handle_quality_export(params)
-        status = dict(evidence["summary"])
         project_id = _required_string(params, "project_id")
         with database_connection(self.paths.database) as connection:
+            status = build_native_quality_evidence(
+                project_id,
+                repository.list_quality_status_assets(connection, project_id),
+                repository.list_quality_preference_examples(connection, project_id),
+                summary_only=True,
+            )
             status["learning"] = learning_status(connection, project_id)
         return status
 
@@ -1042,10 +1188,8 @@ class NativeWorker:
             assets = repository.list_assets(connection, project_id)
             groups = repository.list_duplicate_groups(connection, project_id)
         series = _quality_series_candidate(project_id, assets, groups, max_members=raw_limit)
-        reserved = (
-            {str(asset["asset_uuid"]) for asset in series.get("assets", [])} if series else set()
-        )
-        candidates = _quality_candidates(project_id, assets, raw_limit, reserved_uuids=reserved)
+        # The blind sample must not depend on automatic series predictions.
+        candidates = _quality_candidates(project_id, assets, raw_limit)
         labelled = sum(
             candidate.get("quality_expected_disposition") in {"keep", "review", "reject"}
             for candidate in candidates
@@ -1111,13 +1255,14 @@ class NativeWorker:
                 raise NativeWorkerError("Мастер доступен после завершения анализа")
             assets = repository.list_assets(connection, project_id)
             examples = repository.list_quality_preference_examples(connection, project_id)
+            signals = repository.analysis_signals_by_asset(connection, project_id)
         candidates = [
             asset
             for asset in _quality_candidates(project_id, assets, 100)
             if bool(asset.get("quality_lab_sampled"))
             and asset.get("quality_expected_disposition") in {"keep", "review", "reject"}
         ]
-        pair, remaining = _next_quality_pair(project_id, candidates, examples)
+        pair, remaining = _next_quality_pair(project_id, candidates, examples, signals)
         return {
             "pair": (
                 {
@@ -1135,6 +1280,12 @@ class NativeWorker:
     def _handle_quality_preference(self, params: dict[str, object]) -> dict[str, object]:
         project_id = _required_string(params, "project_id")
         with database_connection(self.paths.database) as connection:
+            _require_same_scene(
+                connection,
+                project_id,
+                _required_string(params, "left_uuid"),
+                _required_string(params, "right_uuid"),
+            )
             active = learning_status(connection, project_id).get("active_round")
             split = str(active["split"]) if isinstance(active, dict) else "held_out"
             example_id = repository.add_quality_preference_example(
@@ -1621,30 +1772,37 @@ def _quality_asset_payload(asset: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _require_same_scene(connection, project_id, left_uuid, right_uuid):
+    if repository.get_project(connection, project_id)["state"] != "ready":
+        raise NativeWorkerError("Сначала завершите анализ")
+    assets = repository.assets_by_uuid(connection, project_id, {left_uuid, right_uuid})
+    signals = {
+        uuid: {
+            item["signal_kind"]: item
+            for item in repository.list_analysis_signals(connection, project_id, uuid)
+        }
+        for uuid in assets
+    }
+    if not scene_pairs(list(assets.values()), signals):
+        raise NativeWorkerError("Эти кадры не подтверждены как одна сцена. Запросите новую пару.")
+
+
 def _next_quality_pair(
     project_id: str,
     candidates: list[dict[str, object]],
     examples: list[dict[str, object]],
+    signals: dict[str, dict[str, dict[str, object]]],
 ) -> tuple[tuple[dict[str, object], dict[str, object]] | None, int]:
-    seen = {
-        tuple(sorted((str(example["left_uuid"]), str(example["right_uuid"]))))
-        for example in examples
-    }
-    pairs: list[tuple[str, dict[str, object], dict[str, object]]] = []
-    for index, left in enumerate(candidates):
-        for right in candidates[index + 1 : index + 7]:
-            key = tuple(sorted((str(left["asset_uuid"]), str(right["asset_uuid"]))))
-            if key in seen:
-                continue
-            digest = hashlib.sha256(
-                f"quality-pair-v1|{project_id}|{key[0]}|{key[1]}".encode()
-            ).hexdigest()
-            pairs.append((digest, left, right))
+    seen = {frozenset((str(item["left_uuid"]), str(item["right_uuid"]))) for item in examples}
+    pairs = [pair for pair, _ in scene_pairs(candidates, signals) if frozenset(pair) not in seen]
     if not pairs:
         return None, 0
-    pairs.sort(key=lambda value: value[0])
-    _, left, right = pairs[0]
-    return (left, right), len(pairs)
+    pairs.sort(
+        key=lambda pair: hashlib.sha256(f"scene-pair-v2|{project_id}|{pair}".encode()).hexdigest()
+    )
+    assets = {str(asset["asset_uuid"]): asset for asset in candidates}
+    left, right = pairs[0]
+    return (assets[left], assets[right]), len(pairs)
 
 
 def _next_taste_pair(
@@ -1653,55 +1811,15 @@ def _next_taste_pair(
     duplicate_context: dict[str, dict[str, object]],
     examples: list[dict[str, object]],
 ) -> tuple[tuple[dict[str, object], dict[str, object]] | None, int]:
-    seen = {
-        tuple(sorted((str(example["left_uuid"]), str(example["right_uuid"]))))
-        for example in examples
-    }
+    del duplicate_context
     candidates = [
         asset
         for asset in assets
         if asset.get("cache_state") == "ready"
         and asset.get("review_path")
-        and asset.get("final_disposition") in {"keep", "review"}
-        and signals.get(str(asset["asset_uuid"]), {}).get("feature_print", {}).get("status")
-        == "ready"
+        and not asset.get("no_longer_exists")
     ]
-    candidates.sort(
-        key=lambda asset: (
-            -float(asset.get("swipe_score") or 0),
-            str(asset["asset_uuid"]),
-        )
-    )
-
-    ranked_pairs: list[tuple[float, float, str, str, dict[str, object], dict[str, object]]] = []
-    for index, left in enumerate(candidates):
-        left_uuid = str(left["asset_uuid"])
-        left_group = duplicate_context.get(left_uuid, {}).get("group_id")
-        for right in candidates[index + 1 : index + 9]:
-            right_uuid = str(right["asset_uuid"])
-            right_group = duplicate_context.get(right_uuid, {}).get("group_id")
-            if left_group and left_group == right_group:
-                continue
-            key = tuple(sorted((left_uuid, right_uuid)))
-            if key in seen:
-                continue
-            left_score = float(left.get("swipe_score") or 0)
-            right_score = float(right.get("swipe_score") or 0)
-            ranked_pairs.append(
-                (
-                    abs(left_score - right_score),
-                    -max(left_score, right_score),
-                    key[0],
-                    key[1],
-                    left,
-                    right,
-                )
-            )
-    if not ranked_pairs:
-        return None, 0
-    ranked_pairs.sort(key=lambda pair: pair[:4])
-    best = ranked_pairs[0]
-    return (best[4], best[5]), len(ranked_pairs)
+    return _next_quality_pair("taste", candidates, examples, signals)
 
 
 def _taste_payload(

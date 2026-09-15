@@ -1226,6 +1226,7 @@ def add_preference_example(
         """
         UPDATE taste_profiles
         SET status=CASE
+                WHEN status='paused' THEN status
                 WHEN ?='held_out' AND weights_base64 IS NOT NULL THEN status
                 WHEN weights_base64 IS NULL THEN 'collecting'
                 ELSE 'stale'
@@ -1244,7 +1245,8 @@ def list_preference_examples(
     rows = connection.execute(
         """
         SELECT * FROM preference_examples
-        WHERE profile_id=? ORDER BY created_at, id
+        WHERE profile_id=? AND id NOT IN (SELECT id FROM learning_pair_exclusions)
+        ORDER BY created_at, id
         """,
         (profile_id,),
     ).fetchall()
@@ -1654,11 +1656,47 @@ def mark_taste_profile_stale(
     return get_taste_profile(connection, profile_id)
 
 
+def list_quality_status_assets(
+    connection: sqlite3.Connection, project_id: str
+) -> list[dict[str, object]]:
+    """Read human annotations without decoding any per-photo prediction payloads."""
+    rows = connection.execute(
+        """
+        SELECT a.asset_uuid, a.no_longer_exists,
+            q.top_k_rank AS quality_top_k_rank,
+            q.duplicate_group AS quality_duplicate_group,
+            q.expected_leader AS quality_expected_leader,
+            q.expected_disposition AS quality_expected_disposition,
+            q.defect_codes_json AS quality_defect_codes_json,
+            q.defect_severity AS quality_defect_severity,
+            q.defect_confidence AS quality_defect_confidence,
+            q.quality_note AS quality_note
+            , q.lab_sampled AS quality_lab_sampled,
+            qs.source_snapshot_id AS quality_series_source_snapshot_id,
+            qs.source_kind AS quality_series_source_kind,
+            qs.coherence_status AS quality_series_coherence_status,
+            qs.member_fingerprint AS quality_series_member_fingerprint,
+            qs.target_budget AS quality_series_target_budget,
+            qs.essential_member_uuids_json AS quality_series_essential_member_uuids_json,
+            qs.redundant_good_member_uuids_json AS quality_series_redundant_good_member_uuids_json,
+            qs.leader_reason_codes_json AS quality_series_leader_reason_codes_json
+        FROM assets a
+        LEFT JOIN quality_asset_labels q USING (project_id, asset_uuid)
+        LEFT JOIN quality_series_labels qs
+          ON qs.project_id=q.project_id AND qs.group_id=q.duplicate_group
+        WHERE a.project_id=?
+        """,
+        (project_id,),
+    ).fetchall()
+    return [_decode_asset_row(dict(row)) for row in rows]
+
+
 def list_assets(connection: sqlite3.Connection, project_id: str) -> list[dict[str, object]]:
     rows = connection.execute(
         """
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
             d.auto_selection, d.manual_selection, d.final_selection,
+            d.auto_culling, d.culling_reason,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
             d.manual_note, d.manual_rating, d.manual_mutation_generation,
             d.reviewed, s.score AS swipe_score,
@@ -1747,6 +1785,7 @@ def assets_by_uuid(
         f"""
         SELECT a.*, m.*, d.auto_disposition, d.manual_disposition, d.final_disposition,
             d.auto_selection, d.manual_selection, d.final_selection,
+            d.auto_culling, d.culling_reason,
             d.confidence, d.flags_json, d.reasons_json, d.manual_override,
             d.manual_note, d.manual_rating, d.manual_mutation_generation,
             d.reviewed, s.score AS swipe_score,
@@ -2315,6 +2354,7 @@ def upsert_decision(
     confidence: float,
     flags: list[str],
     reasons: list[dict[str, object]],
+    culling: tuple[str, str] | None = None,
 ) -> None:
     if disposition not in {"keep", "review", "reject"}:
         raise ValueError("Invalid disposition")
@@ -2352,6 +2392,12 @@ def upsert_decision(
             json.dumps(reasons),
             utc_now(),
         ),
+    )
+
+    category, reason = culling or ("reject" if disposition == "reject" else "keep", "legacy")
+    connection.execute(
+        "UPDATE decisions SET auto_culling=?, culling_reason=? WHERE project_id=? AND asset_uuid=?",
+        (category, reason, project_id, asset_uuid),
     )
 
 
@@ -2721,6 +2767,19 @@ def project_summary(connection: sqlite3.Connection, project_id: str) -> dict[str
     ).fetchone()
     settings = json.loads(settings_row[0] or "{}") if settings_row else {}
     result["videos_skipped"] = int(settings.get("video_count") or 0)
+    from photo_curator.analysis.culling import effective_culling_sql
+
+    result["culling_keep"] = 0
+    result["culling_reject"] = 0
+
+    for row in connection.execute(
+        f"""SELECT {effective_culling_sql()} AS category, COUNT(*) AS n
+        FROM assets a JOIN decisions d USING(project_id,asset_uuid)
+        WHERE a.project_id=? AND a.no_longer_exists=0 AND a.media_type='image'
+        GROUP BY category""",
+        (project_id,),
+    ):
+        result["culling_" + row["category"]] = row["n"]
     return result
 
 

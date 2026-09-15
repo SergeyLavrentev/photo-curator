@@ -60,7 +60,7 @@ def test_training_round_updates_versioned_ranker_and_survives_project_delete(
     )
     assert started["attempt_index"] == 1
     candidates = worker.dispatch("quality_candidates", {"project_id": project_id, "limit": 12})
-    for item in candidates["items"][:6]:
+    for item in candidates["items"]:
         _label(worker, project_id, item["asset_uuid"])
     _training_pairs(worker, project_id)
 
@@ -83,7 +83,7 @@ def test_training_round_updates_versioned_ranker_and_survives_project_delete(
 def test_legacy_quality_lab_is_locked_held_out_and_never_trains(tmp_path: Path) -> None:
     worker, project_id = _worker(tmp_path)
     candidates = worker.dispatch("quality_candidates", {"project_id": project_id, "limit": 12})
-    for item in candidates["items"][:4]:
+    for item in candidates["items"]:
         _label(worker, project_id, item["asset_uuid"])
     _training_pairs(worker, project_id, count=1)
 
@@ -207,7 +207,7 @@ def test_export_import_round_trip_restores_training_without_prediction_truth(
     worker, project_id = _worker(tmp_path)
     worker.dispatch("quality_round_start", {"project_id": project_id, "split": "training"})
     candidates = worker.dispatch("quality_candidates", {"project_id": project_id, "limit": 12})
-    for item in candidates["items"][:6]:
+    for item in candidates["items"]:
         _label(worker, project_id, item["asset_uuid"])
     _training_pairs(worker, project_id)
     corpus = worker.dispatch("quality_learning_export", {})
@@ -221,3 +221,23 @@ def test_export_import_round_trip_restores_training_without_prediction_truth(
     assert imported["learning"]["training_examples"] >= 3
     with database_connection(worker.paths.database) as connection:
         assert load_taste_model(connection) is not None
+
+
+def test_accepted_feature_snapshot_is_not_replaced_by_reanalysis(tmp_path: Path) -> None:
+    from photo_curator.blind_taste import answer_session, prepare_session
+
+    paths, _, coordinator, project_id = build_pipeline(tmp_path)
+    coordinator.run(project_id)
+    with database_connection(paths.database) as connection:
+        session = prepare_session(connection, project_id)
+        answer_session(connection, session["id"], 0, "left")
+        before = export_learning_corpus(connection)
+        connection.execute(
+            "UPDATE analysis_signals SET engine_version='changed' WHERE project_id=?", (project_id,)
+        )
+        result = migrate_project_learning(connection, project_id)
+        assert result["status"] == "failed"
+        assert "snapshot changed" in result["error"]
+        after = export_learning_corpus(connection)
+        assert after["learning_assets"] == before["learning_assets"]
+        assert after["learning_preferences"] == before["learning_preferences"]
